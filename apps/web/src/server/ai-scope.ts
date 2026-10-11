@@ -19,7 +19,7 @@ export function isDay(value: unknown): value is string {
 }
 
 /** Require an explicit filter snapshot; malformed scopes must never fall back to all trades. */
-export function readAiRequest(value: unknown, field: "question" | "date") {
+export async function readAiRequest(value: unknown, field: "question" | "date") {
   requireValue(value && typeof value === "object" && !Array.isArray(value), "Invalid AI request");
   const body = value as Record<string, unknown>;
   requireValue(
@@ -80,15 +80,14 @@ export function readAiRequest(value: unknown, field: "question" | "date") {
       `Invalid ${key} range`,
     );
   }
-  const timeZone = getTimeZone();
+  const timeZone = await getTimeZone();
   requireValue(
     body.timeZone === undefined || body.timeZone === timeZone,
     "Journal timezone changed. Refresh and try again.",
   );
-  const allAccounts = db
+  const allAccounts = await db
     .select({ id: accounts.id, name: accounts.name, currency: accounts.currency })
-    .from(accounts)
-    .all();
+    .from(accounts);
   const ids = filters.accounts?.split(",").map((id) => id.trim());
   requireValue(
     !ids || ids.every((id) => allAccounts.some((a) => a.id === id)),
@@ -96,7 +95,7 @@ export function readAiRequest(value: unknown, field: "question" | "date") {
   );
   if (ids) filters.accounts = [...new Set(ids)].join(",");
   const selectedAccounts = ids ? allAccounts.filter((a) => ids.includes(a.id)) : allAccounts;
-  const strategies = db.select({ id: playbooks.id, name: playbooks.name }).from(playbooks).all();
+  const strategies = await db.select({ id: playbooks.id, name: playbooks.name }).from(playbooks);
   const date = field === "date" ? body.date : undefined;
   if (field === "date") requireValue(isDay(date), "date (YYYY-MM-DD) is required");
   if (field === "question")
@@ -126,7 +125,10 @@ export function readAiRequest(value: unknown, field: "question" | "date") {
   };
 }
 
-export function accountContext(trades: AnnotatedTrade[], scope: ReturnType<typeof readAiRequest>) {
+export function accountContext(
+  trades: AnnotatedTrade[],
+  scope: Awaited<ReturnType<typeof readAiRequest>>,
+) {
   return (
     "By account (amounts in each account's currency; no currency conversion):\n" +
     scope.accounts

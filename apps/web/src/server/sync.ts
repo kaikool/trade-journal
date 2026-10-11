@@ -4,7 +4,7 @@ import type { ImportedExecution } from "@luxalgo/journal-importers";
 import { accounts, db } from "@/db";
 import { decryptJson, encryptJson } from "./crypto";
 import { nowIso } from "./ids";
-import { insertExecutions, type InsertResult } from "./executions";
+import { insertExecutionsInTransaction, type InsertResult } from "./executions";
 import { getImportTimeZone } from "./settings";
 import { requireValue } from "./api";
 import {
@@ -24,16 +24,16 @@ export interface SyncOutcome extends InsertResult {
 }
 
 export const syncAccount = async (accountId: string): Promise<SyncOutcome> => {
-  const account = db.select().from(accounts).where(eq(accounts.id, accountId)).get();
+  const [account] = await db.select().from(accounts).where(eq(accounts.id, accountId)).limit(1);
   if (!account) throw new Error("Account not found");
   if (account.kind !== "sync" || !account.credentialsEnc) {
     throw new Error("Account is not broker-connected");
   }
 
   const statementTimeZone = isIbkrSyncAccount(account)
-    ? canonicalImportTimeZone(getImportTimeZone())
+    ? canonicalImportTimeZone(await getImportTimeZone())
     : undefined;
-  if (statementTimeZone !== undefined) assertIbkrSyncTimeZone(account, statementTimeZone);
+  if (statementTimeZone !== undefined) await assertIbkrSyncTimeZone(account, statementTimeZone);
 
   const credentials = decryptJson<Record<string, string>>(account.credentialsEnc);
   const connection = connect({
@@ -41,11 +41,11 @@ export const syncAccount = async (accountId: string): Promise<SyncOutcome> => {
     credentials,
     ...(statementTimeZone !== undefined ? { statementTimeZone } : {}),
     // Some brokers rotate tokens on every fetch (Questrade): persist or die.
-    onCredentialsRotated: (next: Record<string, string>) => {
-      db.update(accounts)
+    onCredentialsRotated: async (next: Record<string, string>) => {
+      await db
+        .update(accounts)
         .set({ credentialsEnc: encryptJson(next) })
-        .where(eq(accounts.id, accountId))
-        .run();
+        .where(eq(accounts.id, accountId));
     },
   } as Parameters<typeof connect>[0]);
 
@@ -69,34 +69,31 @@ export const syncAccount = async (accountId: string): Promise<SyncOutcome> => {
 
   const equity = snapshot.accounts.reduce((total, a) => total + a.equity, 0);
   const positions = snapshot.accounts.flatMap((a) => a.positions);
-  const result = db.transaction(
-    () => {
-      if (statementTimeZone !== undefined) {
-        const current = db.select().from(accounts).where(eq(accounts.id, accountId)).get();
-        requireValue(
-          current &&
-            isIbkrSyncAccount(current) &&
-            current.credentialsEnc === account.credentialsEnc,
-          "The IBKR connection changed during sync. Try again.",
-        );
-        assertIbkrSyncTimeZone(current, statementTimeZone);
-      }
-      // Validation, history provenance, deduplication and sync status commit together.
-      const inserted = insertExecutions(accountId, timed, "sync");
-      db.update(accounts)
-        .set({
-          lastSyncAt: syncedAt,
-          snapshotJson: JSON.stringify({ equity, positions, fetchedAt: snapshot.fetchedAt }),
-          ...(statementTimeZone !== undefined && inserted.inserted > 0
-            ? { ibkrSyncTimeZone: statementTimeZone }
-            : {}),
-        })
-        .where(eq(accounts.id, accountId))
-        .run();
-      return inserted;
-    },
-    { behavior: "immediate" },
-  );
+  const result = await db.transaction(async (tx) => {
+    if (statementTimeZone !== undefined) {
+      const [current] = await tx.select().from(accounts).where(eq(accounts.id, accountId)).limit(1);
+      requireValue(
+        current &&
+          isIbkrSyncAccount(current) &&
+          current.credentialsEnc === account.credentialsEnc,
+        "The IBKR connection changed during sync. Try again.",
+      );
+      await assertIbkrSyncTimeZone(current, statementTimeZone, tx);
+    }
+    // Validation, history provenance, deduplication and sync status commit together.
+    const inserted = await insertExecutionsInTransaction(tx, accountId, timed, "sync");
+    await tx
+      .update(accounts)
+      .set({
+        lastSyncAt: syncedAt,
+        snapshotJson: JSON.stringify({ equity, positions, fetchedAt: snapshot.fetchedAt }),
+        ...(statementTimeZone !== undefined && inserted.inserted > 0
+          ? { ibkrSyncTimeZone: statementTimeZone }
+          : {}),
+      })
+      .where(eq(accounts.id, accountId));
+    return inserted;
+  });
   if (untimed > 0) {
     result.skipped += untimed;
     if (result.skippedReasons.length < 5)

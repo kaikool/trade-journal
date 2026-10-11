@@ -20,7 +20,8 @@
     "test:watch": "vitest",
     "typecheck": "pnpm -r --parallel typecheck",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "migrate:supabase": "node --experimental-strip-types scripts/migrate-to-supabase.ts"
   },
   "devDependencies": {
     "jsdom": "^26.1.0",

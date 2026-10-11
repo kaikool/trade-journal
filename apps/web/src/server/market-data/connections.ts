@@ -8,6 +8,7 @@ import { binance, coinbase } from "./public-crypto";
 import { oanda } from "./oanda";
 import { csvDatasets, marketCsv } from "./csv";
 import { MarketDataError, type MarketDataProvider } from "./provider";
+
 const providers: MarketDataProvider[] = [
   londonStrategicEdge,
   alpaca,
@@ -16,12 +17,15 @@ const providers: MarketDataProvider[] = [
   oanda,
   marketCsv,
 ].sort((a, b) => a.name.localeCompare(b.name));
+
 export const providerFor = (id: string) => {
   const provider = providers.find((entry) => entry.id === id);
   if (!provider) throw new MarketDataError("Choose an available market data provider.");
   return provider;
 };
+
 const settingKey = (id: string) => `marketData:${id}:keyEnc`;
+
 const environment = (id: string) => {
   const fields = providerInfo(id)!.fields;
   const managed = fields.some((field) => process.env[field.environmentKey]?.trim());
@@ -33,46 +37,54 @@ const environment = (id: string) => {
   );
   return { managed, values, complete: fields.every((field) => Boolean(values[field.key])) };
 };
-export const connections = (): MarketConnection[] =>
-  providers.map((provider) => {
+
+export const connections = async (): Promise<MarketConnection[]> => {
+  const datasets = await csvDatasets();
+  const list: MarketConnection[] = [];
+  for (const provider of providers) {
     const info = providerInfo(provider.id)!;
     if (info.mode === "csv") {
-      const configured = csvDatasets().length > 0;
-      return {
+      const configured = datasets.length > 0;
+      list.push({
         id: provider.id,
         name: provider.name,
         configured,
         source: configured ? "uploaded" : null,
-      };
+      });
+      continue;
     }
     if (info.mode === "public") {
-      const configured = getSetting(settingKey(provider.id)) === "enabled";
-      return {
+      const configured = (await getSetting(settingKey(provider.id))) === "enabled";
+      list.push({
         id: provider.id,
         name: provider.name,
         configured,
         source: configured ? "public" : null,
-      };
+      });
+      continue;
     }
     const env = environment(provider.id);
     const source = env.managed
       ? "environment"
-      : getSetting(settingKey(provider.id))
+      : (await getSetting(settingKey(provider.id)))
         ? "saved"
         : null;
-    return {
+    list.push({
       id: provider.id,
       name: provider.name,
       configured: env.managed ? env.complete : source !== null,
       source,
-    };
-  });
-export function connectionKey(id: string): string {
+    });
+  }
+  return list;
+};
+
+export async function connectionKey(id: string): Promise<string> {
   providerFor(id);
   const info = providerInfo(id)!;
   if (info.mode === "csv") return "";
   if (info.mode === "public") {
-    if (getSetting(settingKey(id)) !== "enabled")
+    if ((await getSetting(settingKey(id))) !== "enabled")
       throw new MarketDataError("Enable this public market data source in Settings first.");
     return "";
   }
@@ -82,7 +94,7 @@ export function connectionKey(id: string): string {
       throw new MarketDataError("Complete all market data credentials in the server environment.");
     return id === "london-strategic-edge" ? env.values.apiKey! : JSON.stringify(env.values);
   }
-  const saved = getSetting(settingKey(id));
+  const saved = await getSetting(settingKey(id));
   if (!saved) throw new MarketDataError("Add a market data API key in Settings first.");
   try {
     return decryptJson<string>(saved);
@@ -92,7 +104,8 @@ export function connectionKey(id: string): string {
     );
   }
 }
-export function saveConnection(id: string, key: string | null) {
+
+export async function saveConnection(id: string, key: string | null): Promise<void> {
   providerFor(id);
   const info = providerInfo(id)!;
   if (info.mode === "csv")
@@ -101,9 +114,10 @@ export function saveConnection(id: string, key: string | null) {
     throw new MarketDataError(
       "This connection is managed by the server environment. Update it there.",
     );
-  if (key === null) deleteSetting(settingKey(id));
-  else setSetting(settingKey(id), info.mode === "public" ? "enabled" : encryptJson(key));
+  if (key === null) await deleteSetting(settingKey(id));
+  else await setSetting(settingKey(id), info.mode === "public" ? "enabled" : encryptJson(key));
 }
+
 export function validateCredentials(id: string, input: unknown): string {
   const info = providerInfo(id)!;
   if (!input || typeof input !== "object" || Array.isArray(input))

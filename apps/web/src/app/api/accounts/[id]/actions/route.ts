@@ -16,22 +16,22 @@ interface ActionBody {
 
 export const POST = handler(async (request: Request, { params }: Params) => {
   const { id } = await params;
-  const account = db.select().from(accounts).where(eq(accounts.id, id)).get();
+  const [account] = await db.select().from(accounts).where(eq(accounts.id, id)).limit(1);
   if (!account) return bad("Account not found", 404);
   const body = (await request.json()) as ActionBody;
 
   switch (body.action) {
     case "archive":
-      db.update(accounts).set({ archivedAt: nowIso() }).where(eq(accounts.id, id)).run();
+      await db.update(accounts).set({ archivedAt: nowIso() }).where(eq(accounts.id, id));
       return ok({ archived: true });
     case "unarchive":
-      db.update(accounts).set({ archivedAt: null }).where(eq(accounts.id, id)).run();
+      await db.update(accounts).set({ archivedAt: null }).where(eq(accounts.id, id));
       return ok({ archived: false });
     case "clear":
-      db.transaction((tx) => {
-        tx.delete(trades).where(eq(trades.accountId, id)).run();
-        tx.delete(executions).where(eq(executions.accountId, id)).run();
-        tx.update(accounts).set({ ibkrSyncTimeZone: null }).where(eq(accounts.id, id)).run();
+      await db.transaction(async (tx) => {
+        await tx.delete(trades).where(eq(trades.accountId, id));
+        await tx.delete(executions).where(eq(executions.accountId, id));
+        await tx.update(accounts).set({ ibkrSyncTimeZone: null }).where(eq(accounts.id, id));
       });
       return ok({ cleared: true });
     case "sync":
@@ -40,38 +40,39 @@ export const POST = handler(async (request: Request, { params }: Params) => {
       if (!body.toAccountId) return bad("toAccountId is required");
       const destinationId = body.toAccountId;
       requireValue(destinationId !== id, "Choose a different destination account.");
-      const destination = db.select().from(accounts).where(eq(accounts.id, destinationId)).get();
+      const [destination] = await db
+        .select()
+        .from(accounts)
+        .where(eq(accounts.id, destinationId))
+        .limit(1);
       if (!destination) return bad("Destination account not found", 404);
 
       // Remember annotations before the move; trade keys are account-prefixed,
       // so after the rebuild they re-anchor under the destination's prefix.
-      const sourceTrades = db.select().from(trades).where(eq(trades.accountId, id)).all();
-      db.transaction(
-        (tx) => {
-          const currentSource = tx.select().from(accounts).where(eq(accounts.id, id)).get();
-          const currentDestination = tx
-            .select()
-            .from(accounts)
-            .where(eq(accounts.id, destinationId))
-            .get();
-          requireValue(currentSource && currentDestination, "Account not found.");
-          const timeZone = ibkrTransferTimeZone(currentSource, currentDestination);
-          if (timeZone !== undefined) {
-            tx.update(accounts)
-              .set({ ibkrSyncTimeZone: timeZone })
-              .where(eq(accounts.id, destinationId))
-              .run();
-          }
-          tx.update(executions)
-            .set({ accountId: destinationId })
-            .where(eq(executions.accountId, id))
-            .run();
-          tx.delete(trades).where(eq(trades.accountId, id)).run();
-          tx.update(accounts).set({ ibkrSyncTimeZone: null }).where(eq(accounts.id, id)).run();
-        },
-        { behavior: "immediate" },
-      );
-      rebuildAccount(destinationId);
+      const sourceTrades = await db.select().from(trades).where(eq(trades.accountId, id));
+      await db.transaction(async (tx) => {
+        const [currentSource] = await tx.select().from(accounts).where(eq(accounts.id, id)).limit(1);
+        const [currentDestination] = await tx
+          .select()
+          .from(accounts)
+          .where(eq(accounts.id, destinationId))
+          .limit(1);
+        requireValue(currentSource && currentDestination, "Account not found.");
+        const timeZone = await ibkrTransferTimeZone(currentSource, currentDestination, tx);
+        if (timeZone !== undefined) {
+          await tx
+            .update(accounts)
+            .set({ ibkrSyncTimeZone: timeZone })
+            .where(eq(accounts.id, destinationId));
+        }
+        await tx
+          .update(executions)
+          .set({ accountId: destinationId })
+          .where(eq(executions.accountId, id));
+        await tx.delete(trades).where(eq(trades.accountId, id));
+        await tx.update(accounts).set({ ibkrSyncTimeZone: null }).where(eq(accounts.id, id));
+      });
+      await rebuildAccount(destinationId);
 
       for (const source of sourceTrades) {
         const hasAnnotations =
@@ -85,7 +86,8 @@ export const POST = handler(async (request: Request, { params }: Params) => {
           source.reviewedAt;
         if (!hasAnnotations) continue;
         const newKey = destinationId + source.key.slice(id.length);
-        db.update(trades)
+        await db
+          .update(trades)
           .set({
             notes: source.notes,
             tagsJson: source.tagsJson,
@@ -96,8 +98,7 @@ export const POST = handler(async (request: Request, { params }: Params) => {
             profitTarget: source.profitTarget,
             reviewedAt: source.reviewedAt,
           })
-          .where(eq(trades.key, newKey))
-          .run();
+          .where(eq(trades.key, newKey));
       }
       return ok({ transferred: true });
     }

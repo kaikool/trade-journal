@@ -1,4 +1,4 @@
-import { asc, desc, eq, isNull } from "drizzle-orm";
+import { asc, eq, isNull } from "drizzle-orm";
 import { db, folders, notes } from "@/db";
 import { bad, handler, ok } from "@/server/api";
 import { newId, nowIso } from "@/server/ids";
@@ -12,8 +12,8 @@ export const GET = handler(async (request: Request) => {
 
   let rows =
     folderId && folderId !== "all"
-      ? db.select().from(notes).where(eq(notes.folderId, folderId)).all()
-      : db.select().from(notes).all();
+      ? await db.select().from(notes).where(eq(notes.folderId, folderId))
+      : await db.select().from(notes);
 
   if (search) {
     rows = rows.filter(
@@ -38,12 +38,11 @@ export const GET = handler(async (request: Request) => {
         : b.updatedAt.localeCompare(a.updatedAt),
   );
 
-  const folderRows = db
+  const folderRows = await db
     .select()
     .from(folders)
     .where(isNull(folders.deletedAt))
-    .orderBy(asc(folders.createdAt))
-    .all();
+    .orderBy(asc(folders.createdAt));
   return ok({ notes: rows, folders: folderRows });
 });
 
@@ -59,22 +58,20 @@ interface CreateNoteBody {
 export const POST = handler(async (request: Request) => {
   const body = (await request.json()) as CreateNoteBody;
   const folderId = body.folderId ?? "my-notes";
-  const folder = db.select().from(folders).where(eq(folders.id, folderId)).get();
+  const [folder] = await db.select().from(folders).where(eq(folders.id, folderId)).limit(1);
   if (!folder || folder.deletedAt || folderId === "all") return bad("Folder not found", 404);
   const id = newId();
   const now = nowIso();
-  db.insert(notes)
-    .values({
-      id,
-      folderId,
-      title: body.title ?? "",
-      content: body.content ?? "",
-      tagsJson: body.tags ? JSON.stringify(body.tags) : null,
-      tradeKey: body.tradeKey ?? null,
-      dayDate: body.dayDate ?? null,
-      createdAt: now,
-      updatedAt: now,
-    })
-    .run();
+  await db.insert(notes).values({
+    id,
+    folderId,
+    title: body.title ?? "",
+    content: body.content ?? "",
+    tagsJson: body.tags ? JSON.stringify(body.tags) : null,
+    tradeKey: body.tradeKey ?? null,
+    dayDate: body.dayDate ?? null,
+    createdAt: now,
+    updatedAt: now,
+  });
   return ok({ id });
 });

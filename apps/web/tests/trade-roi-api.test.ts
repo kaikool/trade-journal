@@ -1,59 +1,51 @@
 import { afterAll, beforeEach, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { netReturnOnEntry } from "@luxalgo/journal-core";
+import { createTestDatabase } from "./helpers/postgres";
 
-const originalDir = process.env.JOURNAL_DATA_DIR;
-const scratch = mkdtempSync(join(tmpdir(), "journal-trade-roi-"));
-process.env.JOURNAL_DATA_DIR = scratch;
+const testDatabase = await createTestDatabase();
+(globalThis as { __journalTestDb?: unknown }).__journalTestDb = testDatabase.db;
+vi.resetModules();
+
 const { db, accounts, trades, settings } = await import("../src/db");
 const { setSetting } = await import("../src/server/settings");
 const { GET } = await import("../src/app/api/trades/route");
 const { GET: detail } = await import("../src/app/api/trades/[key]/route");
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.stubEnv("JOURNAL_PASSWORD", "");
-  db.delete(trades).run();
-  db.delete(accounts).run();
-  db.delete(settings).run();
-  db.insert(accounts)
-    .values({ id: "a", name: "Test", kind: "manual", createdAt: "2026-01-01" })
-    .run();
-  setSetting("multipliers", JSON.stringify({ MNQ: 2, SPREAD: 100 }));
+  await db.delete(trades);
+  await db.delete(accounts);
+  await db.delete(settings);
+  await db.insert(accounts).values({ id: "a", name: "Test", kind: "manual", createdAt: "2026-01-01" });
+  await setSetting("multipliers", JSON.stringify({ MNQ: 2, SPREAD: 100 }));
   const fixtures = [
     { symbol: "MNQ", assetClass: "futures", avgEntry: 31157.25, quantity: 4, netPnl: 283 },
     { symbol: "SPREAD", assetClass: "option", avgEntry: -2.47, quantity: 1, netPnl: -1.3 },
     { symbol: "UNKNOWN", assetClass: "futures", avgEntry: 100, quantity: 1, netPnl: 10 },
     { symbol: "STOCK", assetClass: "equity", avgEntry: 100, quantity: 1, netPnl: 10 },
   ];
-  db.insert(trades)
-    .values(
-      fixtures.map((trade, index) => ({
-        key: trade.symbol,
-        accountId: "a",
-        direction: "long" as const,
-        status: "win" as const,
-        openedAt: `2026-10-0${index + 1}T10:00:00Z`,
-        closedAt: `2026-10-0${index + 1}T11:00:00Z`,
-        openQuantity: 0,
-        grossPnl: trade.netPnl + 1.3,
-        fees: 1.3,
-        executionCount: 2,
-        executionIdsJson: "[]",
-        exitsJson: "[]",
-        ...trade,
-      })),
-    )
-    .run();
+  await db.insert(trades).values(
+    fixtures.map((trade, index) => ({
+      key: trade.symbol,
+      accountId: "a",
+      direction: "long" as const,
+      status: "win" as const,
+      openedAt: `2026-10-0${index + 1}T10:00:00Z`,
+      closedAt: `2026-10-0${index + 1}T11:00:00Z`,
+      openQuantity: 0,
+      grossPnl: trade.netPnl + 1.3,
+      fees: 1.3,
+      executionCount: 2,
+      executionIdsJson: "[]",
+      exitsJson: "[]",
+      ...trade,
+    })),
+  );
 });
 
-afterAll(() => {
-  db.$client.close();
+afterAll(async () => {
+  await testDatabase.close();
   vi.unstubAllEnvs();
-  if (originalDir === undefined) delete process.env.JOURNAL_DATA_DIR;
-  else process.env.JOURNAL_DATA_DIR = originalDir;
-  rmSync(scratch, { recursive: true, force: true });
 });
 
 it.each(["", "view=list"])(

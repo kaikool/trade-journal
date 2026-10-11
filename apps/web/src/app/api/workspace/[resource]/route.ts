@@ -16,14 +16,12 @@ import { scheduledRules } from "@/lib/progress";
 import { parseJournalDefaults } from "@/lib/journal-defaults";
 
 type Context = { params: Promise<{ resource: string }> };
-const today = () => dayKeyOf(nowIso(), getTimeZone());
-const rules = () =>
-  db
-    .select()
-    .from(progressRules)
-    .orderBy(asc(progressRules.createdAt))
-    .all()
-    .map((r) => ({ ...r, weekdays: JSON.parse(r.weekdaysJson) as number[] }));
+const today = async () => dayKeyOf(nowIso(), await getTimeZone());
+const rules = async () =>
+  (await db.select().from(progressRules).orderBy(asc(progressRules.createdAt))).map((r) => ({
+    ...r,
+    weekdays: JSON.parse(r.weekdaysJson) as number[],
+  }));
 const validDate = (s: unknown): s is string =>
   typeof s === "string" &&
   /^\d{4}-\d{2}-\d{2}$/.test(s) &&
@@ -34,14 +32,18 @@ const finite = (n: unknown) => typeof n === "number" && Number.isFinite(n);
 
 export const GET = handler(async (_request: Request, { params }: Context) => {
   const { resource } = await params;
-  if (resource === "templates") return ok({ templates: db.select().from(noteTemplates).all() });
+  if (resource === "templates") return ok({ templates: await db.select().from(noteTemplates) });
   if (resource === "progress")
-    return ok({ rules: rules(), checks: db.select().from(progressChecks).all(), today: today() });
+    return ok({
+      rules: await rules(),
+      checks: await db.select().from(progressChecks),
+      today: await today(),
+    });
   if (resource === "missed")
     return ok({
-      trades: db.select().from(missedTrades).orderBy(desc(missedTrades.observedAt)).all(),
+      trades: await db.select().from(missedTrades).orderBy(desc(missedTrades.observedAt)),
     });
-  if (resource === "defaults") return ok(getJournalDefaults());
+  if (resource === "defaults") return ok(await getJournalDefaults());
   return bad("Unknown resource", 404);
 });
 
@@ -54,24 +56,25 @@ export const POST = handler(async (request: Request, { params }: Context) => {
       "A template needs a name and content (up to 100,000 characters).",
     );
     const id = newId();
-    db.insert(noteTemplates).values({ id, name: b.name.trim(), content: b.content }).run();
+    await db.insert(noteTemplates).values({ id, name: b.name.trim(), content: b.content });
     return ok({ id });
   }
   if (resource === "progress") {
     if (b.ruleId) {
+      const currentToday = await today();
       requireValue(
-        validDate(b.date) && b.date <= today() && typeof b.done === "boolean",
+        validDate(b.date) && b.date <= currentToday && typeof b.done === "boolean",
         "Choose a valid date up to today.",
       );
       requireValue(
-        scheduledRules(rules(), b.date).some((r) => r.id === b.ruleId),
+        scheduledRules(await rules(), b.date).some((r) => r.id === b.ruleId),
         "This routine is not scheduled on that date.",
       );
       const id = `${b.ruleId}:${b.date}`;
-      db.insert(progressChecks)
+      await db
+        .insert(progressChecks)
         .values({ id, ruleId: b.ruleId, date: b.date, done: b.done })
-        .onConflictDoUpdate({ target: progressChecks.id, set: { done: b.done } })
-        .run();
+        .onConflictDoUpdate({ target: progressChecks.id, set: { done: b.done } });
       return ok({ saved: true });
     }
     requireValue(
@@ -87,15 +90,13 @@ export const POST = handler(async (request: Request, { params }: Context) => {
       "Select at least one weekday.",
     );
     const id = newId();
-    db.insert(progressRules)
-      .values({
-        id,
-        title: b.title.trim(),
-        stage: b.stage,
-        weekdaysJson: JSON.stringify([...new Set(b.weekdays)]),
-        createdAt: today(),
-      })
-      .run();
+    await db.insert(progressRules).values({
+      id,
+      title: b.title.trim(),
+      stage: b.stage,
+      weekdaysJson: JSON.stringify([...new Set(b.weekdays)]),
+      createdAt: await today(),
+    });
     return ok({ id });
   }
   if (resource === "missed") {
@@ -111,7 +112,8 @@ export const POST = handler(async (request: Request, { params }: Context) => {
     for (const key of ["entry", "stop", "target"])
       requireValue(b[key] == null || finite(b[key]), `Invalid ${key} price.`);
     requireValue(
-      !b.playbookId || db.select().from(playbooks).where(eq(playbooks.id, b.playbookId)).get(),
+      !b.playbookId ||
+        (await db.select().from(playbooks).where(eq(playbooks.id, b.playbookId)).limit(1))[0],
       "Strategy not found.",
     );
     const values = {
@@ -126,29 +128,21 @@ export const POST = handler(async (request: Request, { params }: Context) => {
     };
     if (b.id) {
       requireValue(
-        db.select().from(missedTrades).where(eq(missedTrades.id, b.id)).get(),
+        (await db.select().from(missedTrades).where(eq(missedTrades.id, b.id)).limit(1))[0],
         "Missed trade not found.",
       );
-      db.update(missedTrades).set(values).where(eq(missedTrades.id, b.id)).run();
+      await db.update(missedTrades).set(values).where(eq(missedTrades.id, b.id));
       return ok({ id: b.id });
     }
     const id = newId();
-    db.insert(missedTrades)
-      .values({ id, ...values, createdAt: nowIso() })
-      .run();
+    await db.insert(missedTrades).values({ id, ...values, createdAt: nowIso() });
     return ok({ id });
   }
   if (resource === "defaults") {
-    const known = new Set(
-      db
-        .select({ id: accounts.id })
-        .from(accounts)
-        .all()
-        .map((a) => a.id),
-    );
+    const known = new Set((await db.select({ id: accounts.id }).from(accounts)).map((a) => a.id));
     const parsed = parseJournalDefaults(b, (id) => known.has(id));
     if (parsed.error !== undefined) return bad(parsed.error);
-    setSetting("journalDefaults", JSON.stringify(parsed.defaults));
+    await setSetting("journalDefaults", JSON.stringify(parsed.defaults));
     return ok({ saved: true });
   }
   return bad("Unknown resource", 404);
@@ -158,14 +152,17 @@ export const DELETE = handler(async (request: Request, { params }: Context) => {
   const { resource } = await params;
   const b = await request.json();
   requireValue(text(b.id, 200), "Invalid id.");
-  if (resource === "templates") db.delete(noteTemplates).where(eq(noteTemplates.id, b.id)).run();
+  if (resource === "templates") await db.delete(noteTemplates).where(eq(noteTemplates.id, b.id));
   else if (resource === "progress")
-    db.update(progressRules).set({ archivedAt: today() }).where(eq(progressRules.id, b.id)).run();
+    await db
+      .update(progressRules)
+      .set({ archivedAt: await today() })
+      .where(eq(progressRules.id, b.id));
   else if (resource === "missed")
-    db.update(missedTrades)
+    await db
+      .update(missedTrades)
       .set({ archivedAt: b.restore ? null : nowIso() })
-      .where(eq(missedTrades.id, b.id))
-      .run();
+      .where(eq(missedTrades.id, b.id));
   else return bad("Unknown resource", 404);
   return ok({ saved: true });
 });

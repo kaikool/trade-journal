@@ -1,5 +1,6 @@
 import { handler, ok, requireValue } from "@/server/api";
 import { importPropCsv } from "@/server/prop-csv";
+
 export const POST = handler(async (request: Request) => {
   const reader = request.body?.getReader();
   requireValue(reader, "Choose a CSV file.");
@@ -25,5 +26,5 @@ export const POST = handler(async (request: Request) => {
     body && typeof body.content === "string" && ["preview", "import"].includes(body.action),
     "Choose preview or import.",
   );
-  return ok(importPropCsv(body.content, body.action === "preview"));
+  return ok(await importPropCsv(body.content, body.action === "preview"));
 });

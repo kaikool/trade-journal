@@ -7,17 +7,14 @@ import { queryTrades } from "@/server/trades-query";
 
 import { savedEstimates } from "@/server/market-data/estimates";
 
-export const GET = handler((request: Request) => {
-  const { trades } = queryTrades(readFilters(new URL(request.url).searchParams));
-  const timeZone = getTimeZone();
-  const currencies = new Map(
-    db
-      .select({ id: accounts.id, currency: accounts.currency })
-      .from(accounts)
-      .all()
-      .map((account) => [account.id, account.currency]),
-  );
-  const estimates = savedEstimates(trades);
+export const GET = handler(async (request: Request) => {
+  const [{ trades }, timeZone, accountRows] = await Promise.all([
+    queryTrades(readFilters(new URL(request.url).searchParams)),
+    getTimeZone(),
+    db.select({ id: accounts.id, currency: accounts.currency }).from(accounts),
+  ]);
+  const currencies = new Map(accountRows.map((account) => [account.id, account.currency]));
+  const estimates = await savedEstimates(trades);
   return ok({
     points: tradeExplorerPoints(trades, timeZone).map((point) => ({
       ...point,

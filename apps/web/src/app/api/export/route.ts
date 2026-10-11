@@ -47,7 +47,8 @@ export const GET = handler(async (request: Request) => {
       const text = value === null || value === undefined ? "" : String(value);
       return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
     };
-    const lines = queryTrades(readFilters(url.searchParams)).rows.map((row) =>
+    const { rows } = await queryTrades(readFilters(url.searchParams));
+    const lines = rows.map((row) =>
       [
         row.key,
         row.accountId,
@@ -76,40 +77,56 @@ export const GET = handler(async (request: Request) => {
     });
   }
 
-  return ok({
-    exportedAt: new Date().toISOString(),
-    note: EXPORT_ATTACHMENTS_NOTE,
-    accounts: db
-      .select()
-      .from(accounts)
-      .all()
-      .map(({ credentialsEnc: _omitted, ...safe }) => safe),
-    executions: db.select().from(executions).all(),
-    importSources: db.select().from(importSources).all(),
-    importSourceAliases: db.select().from(importSourceAliases).all(),
-    importBatches: db.select().from(importBatches).all(),
-    trades: db.select().from(trades).all(),
-    journalDays: db.select().from(journalDays).all(),
-    notes: db.select().from(notes).all(),
-    folders: db.select().from(folders).all(),
-    playbooks: db.select().from(playbooks).all(),
-    noteTemplates: db.select().from(noteTemplates).all(),
-    tradeRuleChecks: db.select().from(tradeRuleChecks).all(),
-    progressRules: db.select().from(progressRules).all(),
-    progressChecks: db.select().from(progressChecks).all(),
-    missedTrades: db.select().from(missedTrades).all(),
-    propAccounts: db.select().from(propAccounts).all(),
-    propEntries: db.select().from(propEntries).all(),
-    propReceipts: db.select().from(propReceipts).all(),
-    propAudit: db.select().from(propAudit).all(),
-    journalDefaults: getJournalDefaults(),
-    settings: {
-      timeZone: getTimeZone(),
-      importTimeZone: getImportTimeZone(),
-      multipliers: getMultipliers(),
-    },
-    // Metadata only: attachment binaries stay in the data directory.
-    attachments: db
+  const [
+    accountsRows,
+    executionsRows,
+    importSourcesRows,
+    importSourceAliasesRows,
+    importBatchesRows,
+    tradesRows,
+    journalDaysRows,
+    notesRows,
+    foldersRows,
+    playbooksRows,
+    noteTemplatesRows,
+    tradeRuleChecksRows,
+    progressRulesRows,
+    progressChecksRows,
+    missedTradesRows,
+    propAccountsRows,
+    propEntriesRows,
+    propReceiptsRows,
+    propAuditRows,
+    journalDefaults,
+    timeZone,
+    importTimeZone,
+    multipliers,
+    attachmentsRows,
+  ] = await Promise.all([
+    db.select().from(accounts),
+    db.select().from(executions),
+    db.select().from(importSources),
+    db.select().from(importSourceAliases),
+    db.select().from(importBatches),
+    db.select().from(trades),
+    db.select().from(journalDays),
+    db.select().from(notes),
+    db.select().from(folders),
+    db.select().from(playbooks),
+    db.select().from(noteTemplates),
+    db.select().from(tradeRuleChecks),
+    db.select().from(progressRules),
+    db.select().from(progressChecks),
+    db.select().from(missedTrades),
+    db.select().from(propAccounts),
+    db.select().from(propEntries),
+    db.select().from(propReceipts),
+    db.select().from(propAudit),
+    getJournalDefaults(),
+    getTimeZone(),
+    getImportTimeZone(),
+    getMultipliers(),
+    db
       .select({
         id: attachments.id,
         ownerType: attachments.ownerType,
@@ -119,8 +136,38 @@ export const GET = handler(async (request: Request) => {
         size: attachments.size,
         createdAt: attachments.createdAt,
       })
-      .from(attachments)
-      .all()
-      .map(attachmentExportRecord),
+      .from(attachments),
+  ]);
+
+  return ok({
+    exportedAt: new Date().toISOString(),
+    note: EXPORT_ATTACHMENTS_NOTE,
+    accounts: accountsRows.map(({ credentialsEnc: _omitted, ...safe }) => safe),
+    executions: executionsRows,
+    importSources: importSourcesRows,
+    importSourceAliases: importSourceAliasesRows,
+    importBatches: importBatchesRows,
+    trades: tradesRows,
+    journalDays: journalDaysRows,
+    notes: notesRows,
+    folders: foldersRows,
+    playbooks: playbooksRows,
+    noteTemplates: noteTemplatesRows,
+    tradeRuleChecks: tradeRuleChecksRows,
+    progressRules: progressRulesRows,
+    progressChecks: progressChecksRows,
+    missedTrades: missedTradesRows,
+    propAccounts: propAccountsRows,
+    propEntries: propEntriesRows,
+    propReceipts: propReceiptsRows,
+    propAudit: propAuditRows,
+    journalDefaults,
+    settings: {
+      timeZone,
+      importTimeZone,
+      multipliers,
+    },
+    // Metadata only: attachment binaries stay in storage.
+    attachments: attachmentsRows.map(attachmentExportRecord),
   });
 });

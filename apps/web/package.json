@@ -7,7 +7,11 @@
     "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
-    "typecheck": "next typegen && tsc --noEmit"
+    "typecheck": "next typegen && tsc --noEmit",
+    "db:generate": "drizzle-kit generate --config=drizzle.config.ts",
+    "db:migrate": "drizzle-kit migrate --config=drizzle.config.ts",
+    "db:check": "drizzle-kit check --config=drizzle.config.ts",
+    "migrate:supabase": "node --experimental-strip-types ../../scripts/migrate-to-supabase.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.41",
@@ -28,6 +32,7 @@
     "@radix-ui/react-slot": "^1.3.3",
     "@radix-ui/react-tabs": "^1.1.21",
     "@radix-ui/react-tooltip": "^1.2.16",
+    "@supabase/supabase-js": "^2.117.3",
     "@tanstack/react-table": "^9.1.2",
     "ai": "^7.0.77",
     "better-sqlite3": "^12.2.0",
@@ -38,6 +43,7 @@
     "lucide-react": "^1.34.0",
     "next": "^15.5.0",
     "pdf-lib": "^1.17.1",
+    "postgres": "^3.4.9",
     "react": "^19.1.0",
     "react-day-picker": "^9.14.0",
     "react-dom": "^19.1.0",
@@ -47,11 +53,13 @@
     "tailwind-merge": "^3.6.0"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "@tailwindcss/postcss": "^4.3.3",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.15.0",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
+    "drizzle-kit": "^0.31.11",
     "postcss": "^8.5.26",
     "tailwindcss": "^4.3.3",
     "tw-animate-css": "^1.4.0"

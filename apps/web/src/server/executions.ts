@@ -1,8 +1,9 @@
 import { and, eq, inArray } from "drizzle-orm";
 import { positionFillProblem, type ImportedExecution } from "@luxalgo/journal-importers";
 import { db, executions, accounts, trades } from "@/db";
+import type { JournalExecutor } from "@/db/postgres";
 import { executionHash, newId, nowIso } from "./ids";
-import { rebuildAccount } from "./rebuild";
+import { rebuildAccountInTransaction } from "./rebuild";
 import { getJournalDefaults } from "./settings";
 import { defaultFee } from "@/lib/journal-defaults";
 import { requireValue } from "./api";
@@ -95,22 +96,25 @@ export const partitionExecutions = (
 };
 
 /** Insert fills, rebuild trades, and attach optional manual notes in one transaction. */
-export const insertExecutions = (
+export const insertExecutionsInTransaction = async (
+  tx: JournalExecutor,
   accountId: string,
   rows: ImportedExecution[],
   source: ExecutionSource,
   manualNotes?: string,
   options: { preserveFees?: boolean } = {},
-): InsertResult => {
+): Promise<InsertResult> => {
   requireValue(
     manualNotes === undefined ||
       (source === "manual" && typeof manualNotes === "string" && manualNotes.length <= 100000),
     "Manual trade notes must be at most 100,000 characters.",
   );
-  requireValue(
-    db.select({ id: accounts.id }).from(accounts).where(eq(accounts.id, accountId)).get(),
-    "Account not found.",
-  );
+  const [account] = await tx
+    .select({ id: accounts.id })
+    .from(accounts)
+    .where(eq(accounts.id, accountId))
+    .for("update");
+  requireValue(account, "Account not found.");
   const { usable, skipped, skippedReasons } = partitionExecutions(rows, source);
   requireValue(
     !usable.some((row) => row.ninjaTrader || row.importMetadata?.group?.startsWith("ninjatrader")),
@@ -119,123 +123,138 @@ export const insertExecutions = (
   let inserted = 0;
   let duplicates = 0;
   const createdAt = nowIso();
-  const defaults = getJournalDefaults();
+  const defaults = await getJournalDefaults(tx);
   const note = manualNotes?.trim() ? manualNotes : undefined;
 
-  db.transaction((tx) => {
-    const positionErrors = positionImportErrors(accountId, usable);
-    requireValue(positionErrors.length === 0, positionErrors.join(" "));
-    if (source === "import") {
-      const existingHashes = new Set(
-        tx
+  const positionErrors = await positionImportErrors(accountId, usable, tx);
+  requireValue(positionErrors.length === 0, positionErrors.join(" "));
+  if (source === "import") {
+    const existingHashes = new Set(
+      (
+        await tx
           .select({ hash: executions.contentHash })
           .from(executions)
           .where(and(eq(executions.accountId, accountId), eq(executions.source, "import")))
-          .all()
-          .map((row) => row.hash),
-      );
-      for (const row of usable) {
-        if (existingHashes.has(executionHash(row))) continue;
-        const candidates = [row.legacyExecutedAt, row.executedAt.replace(/\.\d{3}Z$/, ".000Z")];
-        requireValue(
-          !candidates.some(
-            (executedAt) =>
-              executedAt &&
-              executedAt !== row.executedAt &&
-              existingHashes.has(executionHash({ ...row, executedAt })),
-          ),
-          "Matching imported fills have timestamps from an older parser or indistinguishable whole-second executions. Import the complete corrected history into a new journal account and compare it before retiring the old account; nothing was saved.",
-        );
-      }
-    }
-    const noteExecutionIds = new Set<string>();
+      ).map((row) => row.hash),
+    );
     for (const row of usable) {
-      const id = newId();
-      const contentHash = executionHash(row);
-      const result = tx
-        .insert(executions)
-        .values({
-          id,
-          accountId,
-          symbol: row.symbol,
-          side: row.side,
-          quantity: row.quantity,
-          price: row.price,
-          fee:
-            row.importMetadata?.preserveFee || options.preserveFees
-              ? row.fee
-              : defaultFee(row.fee, row.quantity, accountId, row.symbol, defaults),
-          executedAt: row.executedAt,
-          assetClass: row.assetClass ?? null,
-          source,
-          importMetadataJson: row.importMetadata ? JSON.stringify(row.importMetadata) : null,
-          contentHash,
-          createdAt,
-        })
-        .onConflictDoNothing()
-        .run();
-      if (result.changes > 0) {
-        inserted++;
-        if (note) noteExecutionIds.add(id);
-      } else {
-        duplicates++;
-        if (note) {
-          const existing = tx
-            .select({ id: executions.id })
-            .from(executions)
-            .where(
-              and(eq(executions.accountId, accountId), eq(executions.contentHash, contentHash)),
-            )
-            .get();
-          if (existing) noteExecutionIds.add(existing.id);
-        }
+      if (existingHashes.has(executionHash(row))) continue;
+      const candidates = [row.legacyExecutedAt, row.executedAt.replace(/\.\d{3}Z$/, ".000Z")];
+      requireValue(
+        !candidates.some(
+          (executedAt) =>
+            executedAt &&
+            executedAt !== row.executedAt &&
+            existingHashes.has(executionHash({ ...row, executedAt })),
+        ),
+        "Matching imported fills have timestamps from an older parser or indistinguishable whole-second executions. Import the complete corrected history into a new journal account and compare it before retiring the old account; nothing was saved.",
+      );
+    }
+  }
+  const noteExecutionIds = new Set<string>();
+  for (const row of usable) {
+    const id = newId();
+    const contentHash = executionHash(row);
+    const result = await tx
+      .insert(executions)
+      .values({
+        id,
+        accountId,
+        symbol: row.symbol,
+        side: row.side,
+        quantity: row.quantity,
+        price: row.price,
+        fee:
+          row.importMetadata?.preserveFee || options.preserveFees
+            ? row.fee
+            : defaultFee(row.fee, row.quantity, accountId, row.symbol, defaults),
+        executedAt: row.executedAt,
+        assetClass: row.assetClass ?? null,
+        source,
+        importMetadataJson: row.importMetadata ? JSON.stringify(row.importMetadata) : null,
+        contentHash,
+        createdAt,
+      })
+      .onConflictDoNothing({ target: [executions.accountId, executions.contentHash] })
+      .returning({ id: executions.id });
+    if (result.length > 0) {
+      inserted++;
+      if (note) noteExecutionIds.add(id);
+    } else {
+      duplicates++;
+      if (note) {
+        const [existing] = await tx
+          .select({ id: executions.id })
+          .from(executions)
+          .where(and(eq(executions.accountId, accountId), eq(executions.contentHash, contentHash)))
+          .limit(1);
+        if (existing) noteExecutionIds.add(existing.id);
       }
     }
-    if (inserted > 0) rebuildAccount(accountId);
-    if (note) {
-      const affected = tx
-        .select({
-          key: trades.key,
-          notes: trades.notes,
-          executionIdsJson: trades.executionIdsJson,
-        })
-        .from(trades)
-        .where(eq(trades.accountId, accountId))
-        .all();
-      for (const trade of affected) {
-        const ids = JSON.parse(trade.executionIdsJson) as string[];
-        if (!ids.some((id) => noteExecutionIds.has(id))) continue;
-        // Keep prior annotations when these fills extend or close an existing position.
-        // Retrying the same submission must not append the note a second time.
-        if (trade.notes === note || trade.notes?.endsWith(`\n\n${note}`)) continue;
-        const notes = trade.notes?.trim() ? `${trade.notes}\n\n${note}` : note;
-        requireValue(
-          notes.length <= 100000,
-          "Combined trade notes must be at most 100,000 characters.",
-        );
-        tx.update(trades).set({ notes }).where(eq(trades.key, trade.key)).run();
-      }
+  }
+  if (inserted > 0) await rebuildAccountInTransaction(accountId, tx);
+  if (note) {
+    const affected = await tx
+      .select({
+        key: trades.key,
+        notes: trades.notes,
+        executionIdsJson: trades.executionIdsJson,
+      })
+      .from(trades)
+      .where(eq(trades.accountId, accountId));
+    for (const trade of affected) {
+      const ids = JSON.parse(trade.executionIdsJson) as string[];
+      if (!ids.some((id) => noteExecutionIds.has(id))) continue;
+      // Keep prior annotations when these fills extend or close an existing position.
+      // Retrying the same submission must not append the note a second time.
+      if (trade.notes === note || trade.notes?.endsWith(`\n\n${note}`)) continue;
+      const notes = trade.notes?.trim() ? `${trade.notes}\n\n${note}` : note;
+      requireValue(
+        notes.length <= 100000,
+        "Combined trade notes must be at most 100,000 characters.",
+      );
+      await tx.update(trades).set({ notes }).where(eq(trades.key, trade.key));
     }
-  });
-
+  }
   return { inserted, duplicates, skipped, skippedReasons };
 };
 
-export const deleteExecutionsForTrades = (accountId: string, executionIds: string[]): void => {
+export const insertExecutions = async (
+  accountId: string,
+  rows: ImportedExecution[],
+  source: ExecutionSource,
+  manualNotes?: string,
+  options: { preserveFees?: boolean } = {},
+): Promise<InsertResult> =>
+  db.transaction(async (tx) =>
+    insertExecutionsInTransaction(tx, accountId, rows, source, manualNotes, options),
+  );
+
+export const deleteExecutionsForTrades = async (
+  accountId: string,
+  executionIds: string[],
+): Promise<void> => {
   if (executionIds.length === 0) return;
-  db.delete(executions)
-    .where(and(eq(executions.accountId, accountId), inArray(executions.id, executionIds)))
-    .run();
-  rebuildAccount(accountId);
+  await db.transaction(async (tx) => {
+    const [account] = await tx
+      .select({ id: accounts.id })
+      .from(accounts)
+      .where(eq(accounts.id, accountId))
+      .for("update");
+    requireValue(account, "Account not found.");
+    await tx
+      .delete(executions)
+      .where(and(eq(executions.accountId, accountId), inArray(executions.id, executionIds)));
+    await rebuildAccountInTransaction(accountId, tx);
+  });
 };
 
-export const listExecutions = (accountId: string, ids?: string[]) => {
+export const listExecutions = async (accountId: string, ids?: string[]) => {
   if (ids && ids.length > 0) {
     return db
       .select()
       .from(executions)
-      .where(and(eq(executions.accountId, accountId), inArray(executions.id, ids)))
-      .all();
+      .where(and(eq(executions.accountId, accountId), inArray(executions.id, ids)));
   }
-  return db.select().from(executions).where(eq(executions.accountId, accountId)).all();
+  return db.select().from(executions).where(eq(executions.accountId, accountId));
 };

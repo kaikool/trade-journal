@@ -1,5 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import { accounts, db, executions } from "@/db";
+import type { JournalExecutor } from "@/db/postgres";
 import { isTimeZone } from "@/lib/timezone";
 import { requireValue } from "./api";
 
@@ -16,22 +17,28 @@ export const canonicalImportTimeZone = (value: unknown): string => {
   return new Intl.DateTimeFormat("en-US", { timeZone: value }).resolvedOptions().timeZone;
 };
 
-export const hasSyncedExecutions = (accountId: string): boolean =>
-  Boolean(
-    db
-      .select({ id: executions.id })
-      .from(executions)
-      .where(and(eq(executions.accountId, accountId), eq(executions.source, "sync")))
-      .limit(1)
-      .get(),
-  );
+export const hasSyncedExecutions = async (
+  accountId: string,
+  executor: JournalExecutor = db,
+): Promise<boolean> => {
+  const [row] = await executor
+    .select({ id: executions.id })
+    .from(executions)
+    .where(and(eq(executions.accountId, accountId), eq(executions.source, "sync")))
+    .limit(1);
+  return Boolean(row);
+};
 
 const RECOVERY =
   "Back up your data, verify Default import timezone in Settings → Journal, and connect a separate IBKR account. Compare the corrected history using the account filter; keep the original account and its notes.";
 
 /** Call again inside the insertion transaction: another sync may have finished during fetch. */
-export const assertIbkrSyncTimeZone = (account: Account, timeZone: string): void => {
-  if (!hasSyncedExecutions(account.id)) return;
+export const assertIbkrSyncTimeZone = async (
+  account: Account,
+  timeZone: string,
+  executor: JournalExecutor = db,
+): Promise<void> => {
+  if (!(await hasSyncedExecutions(account.id, executor))) return;
   requireValue(
     account.ibkrSyncTimeZone !== null,
     `This IBKR account has history from before timezone-aware sync. ${RECOVERY}`,
@@ -43,13 +50,17 @@ export const assertIbkrSyncTimeZone = (account: Account, timeZone: string): void
 };
 
 /** Keep provenance with transferred history, including moves through a manual/import account. */
-export const ibkrTransferTimeZone = (source: Account, destination: Account): string | undefined => {
+export const ibkrTransferTimeZone = async (
+  source: Account,
+  destination: Account,
+  executor: JournalExecutor = db,
+): Promise<string | undefined> => {
   const relevant =
     isIbkrSyncAccount(source) ||
     isIbkrSyncAccount(destination) ||
     source.ibkrSyncTimeZone !== null ||
     destination.ibkrSyncTimeZone !== null;
-  if (!relevant || !hasSyncedExecutions(source.id)) return undefined;
+  if (!relevant || !(await hasSyncedExecutions(source.id, executor))) return undefined;
   requireValue(
     source.ibkrSyncTimeZone !== null,
     `Cannot transfer synced history with an unknown IBKR statement timezone. ${RECOVERY}`,
@@ -59,7 +70,7 @@ export const ibkrTransferTimeZone = (source: Account, destination: Account): str
     "Cannot transfer IBKR synced history into another broker connection. Use a separate manual account to preserve its timezone provenance.",
   );
   const sourceZone = canonicalImportTimeZone(source.ibkrSyncTimeZone);
-  if (hasSyncedExecutions(destination.id)) {
+  if (await hasSyncedExecutions(destination.id, executor)) {
     requireValue(
       destination.ibkrSyncTimeZone !== null &&
         canonicalImportTimeZone(destination.ibkrSyncTimeZone) === sourceZone,

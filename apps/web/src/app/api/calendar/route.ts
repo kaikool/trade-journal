@@ -9,7 +9,7 @@ import { calendarInsights, calendarRunningPnl, calendarScope } from "@/lib/calen
 /** Only compute the visible month, not every dashboard/report breakdown. */
 export const GET = handler(async (request: Request) => {
   const params = new URL(request.url).searchParams;
-  const timeZone = getTimeZone();
+  const timeZone = await getTimeZone();
   const today = dayKeyOf(new Date().toISOString(), timeZone);
   const year = Number(params.get("calYear") ?? today.slice(0, 4));
   const month = Number(params.get("calMonth") ?? today.slice(5, 7));
@@ -23,17 +23,19 @@ export const GET = handler(async (request: Request) => {
     "Choose a valid calendar month.",
   );
   const scope = calendarScope(readFilters(params), year, month);
-  const { trades: originalTrades } = queryTrades(scope);
+  const [{ trades: originalTrades }, allAccounts, conversion] = await Promise.all([
+    queryTrades(scope),
+    db.select().from(accounts),
+    getCurrencyConversion(),
+  ]);
   const selectedIds = scope.accounts?.split(",").map((id) => id.trim());
-  const accountRows = db
-    .select()
-    .from(accounts)
-    .all()
-    .filter((account) => !selectedIds || selectedIds.includes(account.id));
+  const accountRows = allAccounts.filter(
+    (account) => !selectedIds || selectedIds.includes(account.id),
+  );
   const { trades, scope: currencyScope } = currencyProjection(
     originalTrades,
     accountRows,
-    getCurrencyConversion(),
+    conversion,
   );
   const calendar = calendarMonthFromDays(dailyStats(trades, timeZone), year, month);
   const currencies = currencyScope.monetary

@@ -8,8 +8,10 @@ const filtersFrom = (url: URL): TradeFilters => readFilters(url.searchParams);
 
 export const GET = handler(async (request: Request) => {
   const url = new URL(request.url);
-  const { rows, trades } = queryTrades(filtersFrom(url));
-  const timeZone = getTimeZone();
+  const [{ rows, trades }, timeZone] = await Promise.all([
+    queryTrades(filtersFrom(url)),
+    getTimeZone(),
+  ]);
   const metrics = computeMetrics(trades, { timeZone });
   const listView = url.searchParams.get("view") === "list";
   return ok({

@@ -2,18 +2,22 @@ import { createHash } from "node:crypto";
 import { and, eq } from "drizzle-orm";
 import { parseCsv } from "@luxalgo/journal-importers";
 import { db, propEntries, propAudit } from "@/db";
-import { mutateProp } from "./prop-firms";
+import { mutatePropInTransaction } from "./prop-firms";
 import { requireValue, RequestError } from "./api";
 import { newId, nowIso } from "./ids";
+
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+
 class PreviewRollback extends Error {
   constructor(public result: ImportResult) {
     super("Preview");
   }
 }
+
 type ImportResult = { imported: number; skipped: number; sample: Record<string, string>[] };
+
 /** Deliberately a generic settled-cash format; bank/firm CSVs need explicit mapping. */
-export function importPropCsv(content: string, preview: boolean): ImportResult {
+export async function importPropCsv(content: string, preview: boolean): Promise<ImportResult> {
   requireValue(Buffer.byteLength(content) <= 2 * 1024 * 1024, "CSV must be 2 MB or smaller.");
   requireValue(
     (content.match(/"/g)?.length ?? 0) % 2 === 0,
@@ -57,7 +61,7 @@ export function importPropCsv(content: string, preview: boolean): ImportResult {
     seen.add(row.id!);
   }
   try {
-    return db.transaction(() => {
+    return await db.transaction(async (tx) => {
       let imported = 0,
         skipped = 0;
       for (const [index, row] of records.entries()) {
@@ -68,18 +72,28 @@ export function importPropCsv(content: string, preview: boolean): ImportResult {
           );
           const id = `csv-${hash(row.id!)}`,
             fingerprint = `CSV import ${hash(JSON.stringify(row))}`;
-          const old = db.select().from(propEntries).where(eq(propEntries.id, id)).get();
+          const [old] = await tx.select().from(propEntries).where(eq(propEntries.id, id)).limit(1);
           if (old) {
+            const [matchedAudit] = await tx
+              .select({ id: propAudit.id })
+              .from(propAudit)
+              .where(and(eq(propAudit.entityId, id), eq(propAudit.reason, fingerprint)))
+              .limit(1);
             requireValue(
-              db
-                .select({ id: propAudit.id })
-                .from(propAudit)
-                .where(and(eq(propAudit.entityId, id), eq(propAudit.reason, fingerprint)))
-                .get(),
+              matchedAudit,
               "This CSV ID was already imported with different data. Edit the existing record or use a new ID for a separate transaction.",
             );
             skipped++;
             continue;
+          }
+          let parentIdValue: string | null = null;
+          if (row.expense_id) {
+            const [parentRow] = await tx
+              .select({ id: propEntries.id })
+              .from(propEntries)
+              .where(eq(propEntries.id, row.expense_id))
+              .limit(1);
+            parentIdValue = parentRow ? row.expense_id : `csv-${hash(row.expense_id)}`;
           }
           const command = {
             action: "entry.save",
@@ -92,24 +106,16 @@ export function importPropCsv(content: string, preview: boolean): ImportResult {
             occurredOn: row.date,
             amount: row.amount,
             category: row.category,
-            parentId: row.expense_id
-              ? db
-                  .select({ id: propEntries.id })
-                  .from(propEntries)
-                  .where(eq(propEntries.id, row.expense_id))
-                  .get()
-                ? row.expense_id
-                : `csv-${hash(row.expense_id)}`
-              : null,
+            parentId: parentIdValue,
             reference: row.reference,
             notes: row.notes,
             splitPercent: "100",
             fee: "0",
             status: "requested",
           };
-          mutateProp(command);
+          await mutatePropInTransaction(tx, command);
           if (row.kind === "payout") {
-            mutateProp({
+            await mutatePropInTransaction(tx, {
               action: "receipt.add",
               id: `${id}-cash`,
               payoutId: id,
@@ -120,14 +126,15 @@ export function importPropCsv(content: string, preview: boolean): ImportResult {
               reference: row.reference,
               notes: row.notes,
             });
-            mutateProp({
+            await mutatePropInTransaction(tx, {
               ...command,
               revision: 2,
               status: "completed",
               reason: "Imported settled payout",
             });
           }
-          db.insert(propAudit)
+          await tx
+            .insert(propAudit)
             .values({
               id: newId(),
               entityType: "entry",
@@ -136,8 +143,7 @@ export function importPropCsv(content: string, preview: boolean): ImportResult {
               afterJson: JSON.stringify(row),
               reason: fingerprint,
               createdAt: nowIso(),
-            })
-            .run();
+            });
           imported++;
         } catch (error) {
           throw new RequestError(`Row ${index + 2}: ${(error as Error).message}`);

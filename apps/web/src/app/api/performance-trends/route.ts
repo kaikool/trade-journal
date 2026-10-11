@@ -5,15 +5,13 @@ import { handler, ok } from "@/server/api";
 import { getTimeZone } from "@/server/settings";
 import { queryTrades } from "@/server/trades-query";
 
-export const GET = handler((request: Request) => {
-  const { trades } = queryTrades(readFilters(new URL(request.url).searchParams));
-  const currencies = new Map(
-    db
-      .select({ id: accounts.id, currency: accounts.currency })
-      .from(accounts)
-      .all()
-      .map((account) => [account.id, account.currency]),
-  );
+export const GET = handler(async (request: Request) => {
+  const [{ trades }, accountRows, timeZone] = await Promise.all([
+    queryTrades(readFilters(new URL(request.url).searchParams)),
+    db.select({ id: accounts.id, currency: accounts.currency }).from(accounts),
+    getTimeZone(),
+  ]);
+  const currencies = new Map(accountRows.map((account) => [account.id, account.currency]));
   return ok({
     trends: performanceTrends(trades),
     currencies: [
@@ -23,6 +21,6 @@ export const GET = handler((request: Request) => {
           .map((trade) => currencies.get(trade.accountId) ?? "USD"),
       ),
     ],
-    timeZone: getTimeZone(),
+    timeZone,
   });
 });

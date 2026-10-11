@@ -5,22 +5,20 @@ import { encryptJson } from "@/server/crypto";
 import { newId, nowIso } from "@/server/ids";
 import { syncAccount } from "@/server/sync";
 
-export const GET = handler((request: Request) => {
+export const GET = handler(async (request: Request) => {
   if (new URL(request.url).searchParams.get("summary") === "1") {
-    return ok({
-      accounts: db
-        .select({
-          id: accounts.id,
-          name: accounts.name,
-          broker: accounts.broker,
-          archivedAt: accounts.archivedAt,
-        })
-        .from(accounts)
-        .orderBy(asc(accounts.createdAt))
-        .all(),
-    });
+    const list = await db
+      .select({
+        id: accounts.id,
+        name: accounts.name,
+        broker: accounts.broker,
+        archivedAt: accounts.archivedAt,
+      })
+      .from(accounts)
+      .orderBy(asc(accounts.createdAt));
+    return ok({ accounts: list });
   }
-  const rows = db.select().from(accounts).orderBy(asc(accounts.createdAt)).all();
+  const rows = await db.select().from(accounts).orderBy(asc(accounts.createdAt));
   return ok({
     accounts: rows.map(({ credentialsEnc, ...safe }) => ({
       ...safe,
@@ -49,7 +47,8 @@ export const POST = handler(async (request: Request) => {
   }
 
   const id = newId();
-  db.insert(accounts)
+  await db
+    .insert(accounts)
     .values({
       id,
       name: body.name,
@@ -61,8 +60,7 @@ export const POST = handler(async (request: Request) => {
       credentialsEnc: body.kind === "sync" ? encryptJson(body.credentials) : null,
       autoSync: body.autoSync ?? body.kind === "sync",
       createdAt: nowIso(),
-    })
-    .run();
+    });
 
   // First sync happens right away so the account isn't born empty.
   let sync = null;
@@ -71,7 +69,7 @@ export const POST = handler(async (request: Request) => {
       sync = await syncAccount(id);
     } catch (error) {
       // Bad credentials shouldn't strand a half-created account.
-      db.delete(accounts).where(eq(accounts.id, id)).run();
+      await db.delete(accounts).where(eq(accounts.id, id));
       return bad(error instanceof Error ? error.message : "Broker connection failed", 502);
     }
   }

@@ -17,15 +17,22 @@ import { AI_PROVIDERS, AI_PROVIDER_NAMES, isAiProvider, type AiProvider } from "
 import { isTimeZone } from "@/lib/timezone";
 import { parseCurrencyConversion, type CurrencyConversion } from "@/lib/currencies";
 
-export const GET = handler(() =>
-  ok({
-    timeZone: getTimeZone(),
-    importTimeZone: getImportTimeZone(),
-    multipliers: getMultipliers(),
-    currencyConversion: getCurrencyConversion(),
-    ...getAiSettings(),
-  }),
-);
+export const GET = handler(async () => {
+  const [timeZone, importTimeZone, multipliers, currencyConversion, aiSettings] = await Promise.all([
+    getTimeZone(),
+    getImportTimeZone(),
+    getMultipliers(),
+    getCurrencyConversion(),
+    getAiSettings(),
+  ]);
+  return ok({
+    timeZone,
+    importTimeZone,
+    multipliers,
+    currencyConversion,
+    ...aiSettings,
+  });
+});
 
 interface SettingsBody {
   timeZone?: string;
@@ -50,14 +57,11 @@ export const PATCH = handler(async (request: Request) => {
       requireValue(false, error instanceof Error ? error.message : "Enter valid conversion rates.");
     }
     if (conversion.enabled) {
+      const accountsList = await db
+        .select({ currency: accounts.currency })
+        .from(accounts);
       const missing = [
-        ...new Set(
-          db
-            .select({ currency: accounts.currency })
-            .from(accounts)
-            .all()
-            .map((account) => account.currency),
-        ),
+        ...new Set(accountsList.map((account) => account.currency)),
       ].filter(
         (currency) => currency !== conversion!.reportingCurrency && !conversion!.rates[currency],
       );
@@ -69,7 +73,7 @@ export const PATCH = handler(async (request: Request) => {
   }
   if (body.aiProvider !== undefined)
     requireValue(isAiProvider(body.aiProvider), "Choose Anthropic or OpenAI.");
-  const provider = body.aiProvider ?? getAiProvider();
+  const provider = body.aiProvider ?? (await getAiProvider());
   if (body.aiModel !== undefined)
     requireValue(
       typeof body.aiModel === "string" &&
@@ -107,26 +111,27 @@ export const PATCH = handler(async (request: Request) => {
         ),
       "Contract multipliers must be positive numbers.",
     );
-  db.transaction(() => {
-    // A display-only change must not silently alter the legacy import default.
-    if (conversion) setSetting("currencyConversion", JSON.stringify(conversion));
-    if (body.timeZone !== undefined || body.importTimeZone !== undefined)
-      setSetting("importTimeZone", body.importTimeZone ?? getImportTimeZone());
-    if (body.timeZone !== undefined) setSetting("timeZone", body.timeZone);
-  });
-  if (body.multipliers !== undefined)
-    db.transaction(() => {
-      setSetting("multipliers", JSON.stringify(body.multipliers));
-      for (const account of db.select({ id: accounts.id }).from(accounts).all())
-        rebuildAccount(account.id);
-    });
-  db.transaction(() => {
-    for (const id of AI_PROVIDERS) {
-      const key = body[`${id}Key`];
-      if (key !== undefined) setAiKey(id, key);
+
+  // A display-only change must not silently alter the legacy import default.
+  if (conversion) await setSetting("currencyConversion", JSON.stringify(conversion));
+  if (body.timeZone !== undefined || body.importTimeZone !== undefined)
+    await setSetting("importTimeZone", body.importTimeZone ?? (await getImportTimeZone()));
+  if (body.timeZone !== undefined) await setSetting("timeZone", body.timeZone);
+
+  if (body.multipliers !== undefined) {
+    await setSetting("multipliers", JSON.stringify(body.multipliers));
+    const allAccounts = await db.select({ id: accounts.id }).from(accounts);
+    for (const account of allAccounts) {
+      await rebuildAccount(account.id);
     }
-    if (body.aiProvider !== undefined) setSetting("aiProvider", body.aiProvider);
-    if (body.aiModel !== undefined) setSetting(aiModelSetting(provider), body.aiModel.trim());
-  });
+  }
+
+  for (const id of AI_PROVIDERS) {
+    const key = body[`${id}Key`];
+    if (key !== undefined) await setAiKey(id, key);
+  }
+  if (body.aiProvider !== undefined) await setSetting("aiProvider", body.aiProvider);
+  if (body.aiModel !== undefined) await setSetting(aiModelSetting(provider), body.aiModel.trim());
+
   return ok({ saved: true });
 });

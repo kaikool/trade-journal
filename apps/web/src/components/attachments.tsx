@@ -4,6 +4,11 @@ import { useRef, useState } from "react";
 import { Paperclip, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { postJson, useApi } from "@/lib/use-api";
+
+type PreparedAttachment = {
+  id: string;
+  uploadUrl: string;
+};
 export function Attachments({
   type,
   id,
@@ -45,13 +50,21 @@ export function Attachments({
           setFailure("");
           try {
             for (const file of files) {
-              const body = new FormData();
-              body.append("type", type);
-              body.append("id", id);
-              body.append("file", file);
-              const r = await fetch("/api/attachments", { method: "POST", body });
-              const result = await r.json();
-              if (!r.ok) throw new Error(result.error);
+              const prepared = await postJson<PreparedAttachment>("/api/attachments", {
+                action: "prepare",
+                type,
+                id,
+                name: file.name,
+                size: file.size,
+                mime: file.type,
+              });
+              const upload = await fetch(prepared.uploadUrl, {
+                method: "PUT",
+                headers: { "Content-Type": file.type },
+                body: file,
+              });
+              if (!upload.ok) throw new Error("Storage upload failed.");
+              await postJson("/api/attachments", { action: "finalize", id: prepared.id });
             }
           } catch (err) {
             setFailure(err instanceof Error ? err.message : "Upload failed.");

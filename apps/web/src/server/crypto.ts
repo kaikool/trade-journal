@@ -1,24 +1,14 @@
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { dataDir } from "@/db";
 
 /**
  * Broker credentials at rest are AES-256-GCM encrypted. The key comes from
- * JOURNAL_SECRET when set; otherwise a random key file is generated next to
- * the database — same trust boundary as the data it protects, so a copied
- * data directory keeps working while a leaked database file alone does not.
+ * JOURNAL_SECRET. Serverless filesystems are ephemeral, so production cannot
+ * safely generate key material on disk.
  */
 const keyMaterial = (): Buffer => {
   const secret = process.env.JOURNAL_SECRET;
-  if (secret && secret.length > 0) return scryptSync(secret, "luxalgo-trade-journal", 32);
-  const dir = dataDir();
-  const keyPath = join(dir, ".secret");
-  if (!existsSync(keyPath)) {
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(keyPath, randomBytes(32).toString("hex"), { mode: 0o600 });
-  }
-  return Buffer.from(readFileSync(keyPath, "utf8").trim(), "hex");
+  if (!secret) throw new Error("JOURNAL_SECRET is required to encrypt saved credentials");
+  return scryptSync(secret, "luxalgo-trade-journal", 32);
 };
 
 export const encryptJson = (value: unknown): string => {

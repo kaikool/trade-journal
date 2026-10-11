@@ -25,11 +25,15 @@ import { queryTrades, type TradeFilters } from "@/server/trades-query";
 /** The entire dashboard in one request. */
 export const GET = handler(async (request: Request) => {
   const url = new URL(request.url);
-  const timeZone = getTimeZone();
   const filters: TradeFilters = readFilters(url.searchParams);
-
-  const { trades: originalTrades } = queryTrades(filters);
-  const accountRows = db.select().from(accounts).orderBy(asc(accounts.createdAt)).all();
+  const [timeZone, { trades: originalTrades }, accountRows, conversion, playbookRows] =
+    await Promise.all([
+      getTimeZone(),
+      queryTrades(filters),
+      db.select().from(accounts).orderBy(asc(accounts.createdAt)),
+      getCurrencyConversion(),
+      db.select({ id: playbooks.id, name: playbooks.name }).from(playbooks),
+    ]);
   const selected = filters.accounts
     ? accountRows.filter((a) =>
         filters
@@ -42,7 +46,7 @@ export const GET = handler(async (request: Request) => {
     trades,
     initialBalance,
     scope: currencyScope,
-  } = currencyProjection(originalTrades, selected, getCurrencyConversion());
+  } = currencyProjection(originalTrades, selected, conversion);
 
   const { metrics, days, equity } = computeOverview(trades, { timeZone, initialBalance });
   const accountCurrencies = new Map(accountRows.map((a) => [a.id, a.currency]));
@@ -82,7 +86,7 @@ export const GET = handler(async (request: Request) => {
           };
         }),
     accounts: accountRows.map((a) => ({ id: a.id, name: a.name })),
-    playbooks: db.select({ id: playbooks.id, name: playbooks.name }).from(playbooks).all(),
+    playbooks: playbookRows,
     metrics: currencyScope.monetary ? metrics : null,
     edgeScore: currencyScope.monetary ? computeEdgeScore(metrics) : null,
     days,

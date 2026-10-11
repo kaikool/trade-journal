@@ -22,7 +22,8 @@ import { defaultFee } from "@/lib/journal-defaults";
 import { requireValue } from "./api";
 import { executionHash, newId, nowIso } from "./ids";
 import { getMultipliers, getJournalDefaults, getTimeZone } from "./settings";
-import { rebuildAccount } from "./rebuild";
+import { rebuildAccount, rebuildAccountInTransaction } from "./rebuild";
+import type { JournalExecutor } from "@/db/postgres";
 import { orderNinjaTraderFills } from "./ninjatrader-order";
 
 const digest = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
@@ -78,37 +79,38 @@ interface Plan {
 }
 
 /** Read-only plan used by both preview and the transaction that commits it. */
-function planImport(
+async function planImport(
   accountId: string,
   parsed: ParsedImport,
   content: string,
   timeZone: string,
   rawOptions: ImportReviewOptions,
-): Plan {
+  executor: JournalExecutor = db,
+): Promise<Plan> {
   const options = readOptions(rawOptions);
-  const account = db.select().from(accounts).where(eq(accounts.id, accountId)).get();
+  const [account] = await executor.select().from(accounts).where(eq(accounts.id, accountId)).limit(1);
   requireValue(account, "Account not found.");
-  const savedSources = db
+  const savedSources = await executor
     .select()
     .from(importSources)
-    .where(and(eq(importSources.accountId, accountId), eq(importSources.format, FORMAT)))
-    .all();
-  const savedAliases = db
+    .where(and(eq(importSources.accountId, accountId), eq(importSources.format, FORMAT)));
+  const savedAliases = await executor
     .select()
     .from(importSourceAliases)
     .where(
       and(eq(importSourceAliases.accountId, accountId), eq(importSourceAliases.format, FORMAT)),
-    )
-    .all();
-  const batches = db
+    );
+  const batches = await executor
     .select()
     .from(importBatches)
-    .where(and(eq(importBatches.accountId, accountId), eq(importBatches.format, FORMAT)))
-    .all();
-  const stored = db.select().from(executions).where(eq(executions.accountId, accountId)).all();
-  const oldTrades = db.select().from(trades).where(eq(trades.accountId, accountId)).all();
-  const defaults = getJournalDefaults(),
-    multipliers = getMultipliers();
+    .where(and(eq(importBatches.accountId, accountId), eq(importBatches.format, FORMAT)));
+  const stored = await executor.select().from(executions).where(eq(executions.accountId, accountId));
+  const oldTrades = await executor.select().from(trades).where(eq(trades.accountId, accountId));
+  const [defaults, multipliers, tz] = await Promise.all([
+    getJournalDefaults(executor),
+    getMultipliers(executor),
+    getTimeZone(),
+  ]);
   const conflicts = new Set(parsed.errors ?? []),
     warnings = new Set<string>();
   if (parsed.skippedRows)
@@ -406,7 +408,7 @@ function planImport(
     conflicts.add(
       "This import would replace existing trade identities and could orphan reviews or attachments. Recover the complete history into a new journal account instead.",
     );
-  const metrics = computeMetrics(projected, { timeZone: getTimeZone() });
+  const metrics = computeMetrics(projected, { timeZone: tz });
   const storedById = new Map(stored.map((row) => [row.id, row]));
   const updates = all.filter((e) => {
     const old = storedById.get(e.id);
@@ -480,70 +482,64 @@ function planImport(
   };
 }
 
-export const previewNinjaTraderImport = (
+export const previewNinjaTraderImport = async (
   accountId: string,
   parsed: ParsedImport,
   content: string,
   timeZone: string,
   options: ImportReviewOptions = {},
-) => db.transaction(() => planImport(accountId, parsed, content, timeZone, options).review);
+): Promise<ImportReview> => (await planImport(accountId, parsed, content, timeZone, options)).review;
 
-export const commitNinjaTraderImport = (
+export const commitNinjaTraderImport = async (
   accountId: string,
   parsed: ParsedImport,
   content: string,
   timeZone: string,
   options: ImportReviewOptions = {},
 ) =>
-  db.transaction(
-    (tx) => {
-      const plan = planImport(accountId, parsed, content, timeZone, options);
-      requireValue(plan.review.conflicts.length === 0, plan.review.conflicts.join(" "));
-      requireValue(
-        !plan.review.corrections.length || options.approveFeeCorrections,
-        "Review and approve the commission corrections before importing.",
-      );
-      requireValue(
-        options.previewToken && options.previewToken === plan.review.token,
-        "The import or journal changed since preview. Review the import again before saving.",
-      );
-      for (const source of plan.sources)
-        tx.insert(importSources).values(source).onConflictDoNothing().run();
-      for (const alias of plan.aliases)
-        tx.insert(importSourceAliases).values(alias).onConflictDoNothing().run();
-      for (const fill of plan.inserts)
-        tx.insert(executions)
-          .values({
-            id: newId(),
-            accountId,
-            symbol: fill.symbol,
-            side: fill.side,
-            quantity: fill.quantity,
-            price: fill.price,
-            fee: fill.fee,
-            executedAt: fill.executedAt,
-            assetClass: fill.assetClass ?? null,
-            source: "import",
-            contentHash: executionHash(fill),
-            importMetadataJson: JSON.stringify(fill.importMetadata),
-            createdAt: nowIso(),
-          })
-          .run();
-      for (const fill of plan.updates)
-        tx.update(executions)
-          .set({ fee: fill.fee, importMetadataJson: JSON.stringify(fill.importMetadata) })
-          .where(eq(executions.id, fill.id))
-          .run();
-      if (plan.inserts.length || plan.updates.length) rebuildAccount(accountId);
-      tx.insert(importBatches).values(plan.batch).onConflictDoNothing().run();
-      return {
-        inserted: plan.inserts.length,
-        duplicates: plan.review.duplicates,
-        corrected: plan.review.corrections.length,
-        skipped: 0,
-        skippedReasons: [],
-        warnings: plan.review.warnings,
-      };
-    },
-    { behavior: "immediate" },
-  );
+  db.transaction(async (tx) => {
+    const plan = await planImport(accountId, parsed, content, timeZone, options, tx);
+    requireValue(plan.review.conflicts.length === 0, plan.review.conflicts.join(" "));
+    requireValue(
+      !plan.review.corrections.length || options.approveFeeCorrections,
+      "Review and approve the commission corrections before importing.",
+    );
+    requireValue(
+      options.previewToken && options.previewToken === plan.review.token,
+      "The import or journal changed since preview. Review the import again before saving.",
+    );
+    for (const source of plan.sources)
+      await tx.insert(importSources).values(source).onConflictDoNothing();
+    for (const alias of plan.aliases)
+      await tx.insert(importSourceAliases).values(alias).onConflictDoNothing();
+    for (const fill of plan.inserts)
+      await tx.insert(executions).values({
+        id: newId(),
+        accountId,
+        symbol: fill.symbol,
+        side: fill.side,
+        quantity: fill.quantity,
+        price: fill.price,
+        fee: fill.fee,
+        executedAt: fill.executedAt,
+        assetClass: fill.assetClass ?? null,
+        source: "import",
+        contentHash: executionHash(fill),
+        importMetadataJson: JSON.stringify(fill.importMetadata),
+        createdAt: nowIso(),
+      });
+    for (const fill of plan.updates)
+      await tx.update(executions)
+        .set({ fee: fill.fee, importMetadataJson: JSON.stringify(fill.importMetadata) })
+        .where(eq(executions.id, fill.id));
+    if (plan.inserts.length || plan.updates.length) await rebuildAccountInTransaction(accountId, tx);
+    await tx.insert(importBatches).values(plan.batch).onConflictDoNothing();
+    return {
+      inserted: plan.inserts.length,
+      duplicates: plan.review.duplicates,
+      corrected: plan.review.corrections.length,
+      skipped: 0,
+      skippedReasons: [],
+      warnings: plan.review.warnings,
+    };
+  });

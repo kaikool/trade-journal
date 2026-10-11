@@ -14,14 +14,15 @@ interface PatchNoteBody {
 
 export const PATCH = handler(async (request: Request, { params }: Params) => {
   const { id } = await params;
-  const existing = db.select().from(notes).where(eq(notes.id, id)).get();
+  const [existing] = await db.select().from(notes).where(eq(notes.id, id)).limit(1);
   if (!existing) return bad("Note not found", 404);
   const body = (await request.json()) as PatchNoteBody;
   if (body.folderId !== undefined) {
-    const folder = db.select().from(folders).where(eq(folders.id, body.folderId)).get();
+    const [folder] = await db.select().from(folders).where(eq(folders.id, body.folderId)).limit(1);
     if (!folder || folder.deletedAt || body.folderId === "all") return bad("Folder not found", 404);
   }
-  db.update(notes)
+  await db
+    .update(notes)
     .set({
       title: body.title ?? existing.title,
       content: body.content ?? existing.content,
@@ -29,13 +30,12 @@ export const PATCH = handler(async (request: Request, { params }: Params) => {
       folderId: body.folderId ?? existing.folderId,
       updatedAt: nowIso(),
     })
-    .where(eq(notes.id, id))
-    .run();
+    .where(eq(notes.id, id));
   return ok({ updated: true });
 });
 
 export const DELETE = handler(async (_request: Request, { params }: Params) => {
   const { id } = await params;
-  db.delete(notes).where(eq(notes.id, id)).run();
+  await db.delete(notes).where(eq(notes.id, id));
   return ok({ deleted: true });
 });
