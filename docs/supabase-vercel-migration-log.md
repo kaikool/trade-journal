@@ -25,11 +25,13 @@ This log tracks implementation progress against `docs/supabase-vercel-migration-
 ## Change log
 
 ### Live Supabase Migration Verified
+
 - Ran live migration tool `scripts/migrate-to-supabase.ts` against target Supabase project `ojggrdfhkqxsvfahqkru` (`ap-northeast-2`).
 - Successfully verified parity across all 23 tables: 100% MATCH.
 - All system folders, records, and table structures reconciled with PostgreSQL.
 
 ### Async Domain & API Migration (Completed)
+
 - Ported all server domain modules to async PostgreSQL:
   - `apps/web/src/server/rebuild.ts`: Async account rebuild within transactions.
   - `apps/web/src/server/executions.ts`: Async execution mutations, deduplication, row-level locks.
@@ -54,3 +56,14 @@ This log tracks implementation progress against `docs/supabase-vercel-migration-
   - Core and importers packages: 0 errors.
 - Verified test suites on Postgres (PGlite):
   - `settings-postgres.test.ts`, `journal-playbooks-postgres.test.ts`, `rebuild-postgres.test.ts`, `workspace-postgres.test.ts`, `notebook-postgres.test.ts`, `trades-query-postgres.test.ts`, `postgres-schema.test.ts`, `postgres-client.test.ts`, `postgres-runtime.test.ts`, `trade-roi-api.test.ts`, `trade-navigation.test.ts`, `timezone.test.ts` all pass.
+
+## Production 500 diagnostics (follow-up)
+
+- User-provided Vercel export contains request summary events only (`level: info`, empty `message`) and HTTP 500 statuses; it does not contain the Serverless Function exception/stack.
+- `/api/workspace/defaults` returned 200 during the same period other DB-backed routes returned 500, so this log does not support a blanket database-auth failure.
+- Replayed the exact failing `missed_trades`, `accounts`, and parameterized `settings` SELECT statements against the generated migration in PGlite; all three returned 0 rows without error. Schema/query spelling is valid in the migration fixture; remote permissions/protocol remain unverified.
+- Added safe API error diagnostics in `apps/web/src/server/api.ts`: server logs now include correlation request ID, route, underlying `cause` name/code/severity/table/column/constraint and sanitized cause message. Generic 500 responses no longer disclose SQL or bind parameters.
+- Added a regression test proving the server log preserves a PostgreSQL auth code while the response hides SQL and parameter values. `pnpm exec vitest run apps/web/tests/api-auth.test.ts`: **5 tests passed**.
+- `pnpm run build` without any database environment failed while collecting `/api/accounts` because local `DATABASE_URL` is intentionally absent. Re-run with a synthetic non-secret `DATABASE_URL`: production build passed. This does not connect to or verify Supabase.
+- Full production typecheck still reports unrelated migration errors in the worktree; the new API diagnostics files have no TypeScript errors.
+- This patch is local/uncommitted and will not appear in Vercel until the owner commits/pushes and a new deployment succeeds.

@@ -38,4 +38,33 @@ describe("optional journal password protection", () => {
     expect(verifyPassword("wrong-password")).toBe(false);
     expect((await handler(() => ok({ login: true }), { public: true })()).status).toBe(200);
   });
+  it("logs the database cause without returning SQL or parameters to the client", async () => {
+    vi.stubEnv("JOURNAL_PASSWORD", "");
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const cause = Object.assign(new Error("password authentication failed for user postgres"), {
+      code: "28P01",
+    });
+    const error = new Error('Failed query: select * from "settings" params: secret-value', {
+      cause,
+    });
+    const response = await handler((_: Request) => Promise.reject(error))(
+      new Request("https://journal.example/api/settings"),
+    );
+    const body = await response.json();
+    expect(response.status).toBe(500);
+    expect(body.error).toBe("Internal server error");
+    expect(body.requestId).toEqual(expect.any(String));
+    expect(JSON.stringify(body)).not.toContain("secret-value");
+    expect(log).toHaveBeenCalledWith(
+      "[api] Request failed",
+      expect.objectContaining({
+        requestId: body.requestId,
+        path: "/api/settings",
+        errorName: "Error",
+        causeName: "Error",
+        causeCode: "28P01",
+        causeMessage: "password authentication failed for user postgres",
+      }),
+    );
+  });
 });
