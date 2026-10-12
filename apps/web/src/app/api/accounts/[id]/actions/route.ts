@@ -51,7 +51,11 @@ export const POST = handler(async (request: Request, { params }: Params) => {
       // so after the rebuild they re-anchor under the destination's prefix.
       const sourceTrades = await db.select().from(trades).where(eq(trades.accountId, id));
       await db.transaction(async (tx) => {
-        const [currentSource] = await tx.select().from(accounts).where(eq(accounts.id, id)).limit(1);
+        const [currentSource] = await tx
+          .select()
+          .from(accounts)
+          .where(eq(accounts.id, id))
+          .limit(1);
         const [currentDestination] = await tx
           .select()
           .from(accounts)

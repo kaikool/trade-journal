@@ -32,11 +32,7 @@ export const PATCH = handler(async (request: Request, { params }: Params) => {
   await db.transaction(async (tx) => {
     const [current] = await tx.select().from(accounts).where(eq(accounts.id, id)).limit(1);
     requireValue(current, "Account not found.");
-    if (
-      body.broker !== undefined &&
-      body.broker !== current.broker &&
-      isIbkrSyncAccount(current)
-    ) {
+    if (body.broker !== undefined && body.broker !== current.broker && isIbkrSyncAccount(current)) {
       const synced = await hasSyncedExecutions(id, tx);
       requireValue(
         !synced,

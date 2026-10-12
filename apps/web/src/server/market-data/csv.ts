@@ -90,19 +90,17 @@ export async function importCsvDataset(input: {
   decoded.set(id, bars);
   decodedCount += bars.length;
 
-  await db
-    .insert(marketCsvDatasets)
-    .values({
-      ...metadata,
-      id,
-      storagePath,
-      checksum,
-      formatVersion: 1,
-      importedAt: new Date().toISOString(),
-      barCount: bars.length,
-      firstTime: bars[0]!.time,
-      lastTime: bars.at(-1)!.time,
-    });
+  await db.insert(marketCsvDatasets).values({
+    ...metadata,
+    id,
+    storagePath,
+    checksum,
+    formatVersion: 1,
+    importedAt: new Date().toISOString(),
+    barCount: bars.length,
+    firstTime: bars[0]!.time,
+    lastTime: bars.at(-1)!.time,
+  });
   return id;
 }
 

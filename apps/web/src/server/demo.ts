@@ -172,7 +172,11 @@ export interface DemoResult {
 
 /** Idempotent: a second call returns the existing demo account untouched. */
 export const loadDemoData = async (): Promise<DemoResult> => {
-  const [existing] = await db.select().from(accounts).where(eq(accounts.broker, DEMO_BROKER)).limit(1);
+  const [existing] = await db
+    .select()
+    .from(accounts)
+    .where(eq(accounts.broker, DEMO_BROKER))
+    .limit(1);
   if (existing) {
     if (existing.archivedAt)
       await db.update(accounts).set({ archivedAt: null }).where(eq(accounts.id, existing.id));
@@ -180,20 +184,18 @@ export const loadDemoData = async (): Promise<DemoResult> => {
   }
 
   const id = newId();
-  await db
-    .insert(accounts)
-    .values({
-      id,
-      name: "Demo data",
-      broker: DEMO_BROKER,
-      kind: "import",
-      currency: "USD",
-      initialBalance: 25000,
-      profitCalcMethod: "fifo",
-      credentialsEnc: null,
-      autoSync: false,
-      createdAt: nowIso(),
-    });
+  await db.insert(accounts).values({
+    id,
+    name: "Demo data",
+    broker: DEMO_BROKER,
+    kind: "import",
+    currency: "USD",
+    initialBalance: 25000,
+    profitCalcMethod: "fifo",
+    credentialsEnc: null,
+    autoSync: false,
+    createdAt: nowIso(),
+  });
   const { inserted } = await insertExecutions(id, generateExecutions(), "import");
   return { accountId: id, inserted, alreadyLoaded: false };
 };

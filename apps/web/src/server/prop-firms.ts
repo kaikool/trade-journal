@@ -129,10 +129,7 @@ const editReason = (body: Record<string, unknown>, old: unknown) =>
 
 const first = <T>(rows: T[]): T | undefined => rows[0];
 
-export async function mutatePropInTransaction(
-  tx: JournalExecutor,
-  body: Record<string, unknown>,
-) {
+export async function mutatePropInTransaction(tx: JournalExecutor, body: Record<string, unknown>) {
   const today = await propToday(tx);
   const id = idValue(body.id);
   if (body.action === "account.save") {
@@ -172,7 +169,10 @@ export async function mutatePropInTransaction(
       values.status !== "passed" || ["evaluation", "verification"].includes(values.program),
       "Only an evaluation or verification can be marked passed. Track funding as a new linked phase.",
     );
-    requireValue(!values.renewalOn || values.renewalMinor !== null, "Enter the expected renewal amount.");
+    requireValue(
+      !values.renewalOn || values.renewalMinor !== null,
+      "Enter the expected renewal amount.",
+    );
     requireValue(
       !values.renewalOn || values.status === "active",
       "Clear the renewal reminder for a resolved account.",
@@ -273,7 +273,12 @@ export async function mutatePropInTransaction(
     requireValue(old, "Account not found.");
     checkRevision(old, body.revision);
     requireValue(typeof body.archived === "boolean", "Choose archive or restore.");
-    const updated = { ...old, archived: body.archived, revision: old.revision + 1, updatedAt: nowIso() };
+    const updated = {
+      ...old,
+      archived: body.archived,
+      revision: old.revision + 1,
+      updatedAt: nowIso(),
+    };
     await tx.update(propAccounts).set(updated).where(eq(propAccounts.id, id));
     await audit(tx, "account", id, old, updated, text(body.reason, "a reason", 500));
     return { id };
@@ -316,17 +321,23 @@ export async function mutatePropInTransaction(
       splitBps,
       feeMinor,
       category:
-        kind === "expense" ? choice(body.category, EXPENSE_CATEGORIES, "an expense category") : kind,
+        kind === "expense"
+          ? choice(body.category, EXPENSE_CATEGORIES, "an expense category")
+          : kind,
       occurredOn: date(today, body.occurredOn, kind === "payout" ? "request date" : "cash date"),
       dueOn: kind === "payout" ? maybeDate(today, body.dueOn, "expected payment date", true) : null,
       status:
-        kind === "payout" ? choice(body.status, PAYOUT_STATES, "a payout status") : ("completed" as const),
+        kind === "payout"
+          ? choice(body.status, PAYOUT_STATES, "a payout status")
+          : ("completed" as const),
       parentId: kind === "refund" ? parentId : null,
       ...details(body),
     };
     if (account)
       requireValue(
-        account.firm === values.firm && account.currency === code && values.occurredOn >= account.openedOn,
+        account.firm === values.firm &&
+          account.currency === code &&
+          values.occurredOn >= account.openedOn,
         "Use the selected account's firm, currency and a date on or after it opened.",
       );
     if (kind === "payout") {
@@ -334,8 +345,14 @@ export async function mutatePropInTransaction(
         account && ["funded", "instant_funded", "live"].includes(account.program),
         "Payouts need a funded, instant-funded or live prop account.",
       );
-      requireValue(expectedPayout(values as PropEntry) >= 0, "Withheld fees cannot exceed your share of the payout.");
-      requireValue(!values.dueOn || values.dueOn >= values.occurredOn, "Expected payment date must follow the request date.");
+      requireValue(
+        expectedPayout(values as PropEntry) >= 0,
+        "Withheld fees cannot exceed your share of the payout.",
+      );
+      requireValue(
+        !values.dueOn || values.dueOn >= values.occurredOn,
+        "Expected payment date must follow the request date.",
+      );
     }
     if (kind === "refund") {
       const expense = parentId
@@ -360,11 +377,18 @@ export async function mutatePropInTransaction(
         "Link this refund to a matching expense in the same account, firm and currency.",
       );
       const other = (
-        await tx.select().from(propEntries).where(eq(propEntries.parentId, expense.id)).for("update")
+        await tx
+          .select()
+          .from(propEntries)
+          .where(eq(propEntries.parentId, expense.id))
+          .for("update")
       )
         .filter((e) => !e.voided && e.id !== id)
         .reduce((sum, e) => sum + e.amountMinor, 0);
-      requireValue(other + amountMinor <= expense.amountMinor, "Refunds cannot exceed the original expense.");
+      requireValue(
+        other + amountMinor <= expense.amountMinor,
+        "Refunds cannot exceed the original expense.",
+      );
     }
     if (old) {
       requireValue(
@@ -375,9 +399,9 @@ export async function mutatePropInTransaction(
           old.parentId === values.parentId,
         "Account, currency, firm, entry type and refund link are fixed. Void an incorrect entry and add a replacement.",
       );
-      const children = (await tx.select().from(propEntries).where(eq(propEntries.parentId, id)).for("update")).filter(
-        (e) => !e.voided,
-      );
+      const children = (
+        await tx.select().from(propEntries).where(eq(propEntries.parentId, id)).for("update")
+      ).filter((e) => !e.voided);
       requireValue(
         !children.length ||
           (children.reduce((sum, e) => sum + e.amountMinor, 0) <= amountMinor &&
@@ -437,10 +461,13 @@ export async function mutatePropInTransaction(
     requireValue(old, "Entry not found.");
     checkRevision(old, body.revision);
     requireValue(typeof body.voided === "boolean", "Choose void or restore.");
-    const refunds = (await tx.select().from(propEntries).where(eq(propEntries.parentId, id)).for("update")).filter(
-      (e) => !e.voided,
+    const refunds = (
+      await tx.select().from(propEntries).where(eq(propEntries.parentId, id)).for("update")
+    ).filter((e) => !e.voided);
+    requireValue(
+      !body.voided || !refunds.length,
+      "Void linked refunds before voiding their expense.",
     );
-    requireValue(!body.voided || !refunds.length, "Void linked refunds before voiding their expense.");
     if (!body.voided && old.kind === "refund") {
       const parent = first(
         await tx
@@ -451,7 +478,11 @@ export async function mutatePropInTransaction(
           .for("update"),
       );
       const others = (
-        await tx.select().from(propEntries).where(eq(propEntries.parentId, old.parentId!)).for("update")
+        await tx
+          .select()
+          .from(propEntries)
+          .where(eq(propEntries.parentId, old.parentId!))
+          .for("update")
       ).filter((e) => !e.voided && e.id !== id);
       requireValue(
         parent &&
@@ -461,7 +492,12 @@ export async function mutatePropInTransaction(
         "Restore the expense first and ensure refunds do not exceed its amount.",
       );
     }
-    const updated = { ...old, voided: body.voided, revision: old.revision + 1, updatedAt: nowIso() };
+    const updated = {
+      ...old,
+      voided: body.voided,
+      revision: old.revision + 1,
+      updatedAt: nowIso(),
+    };
     await tx.update(propEntries).set(updated).where(eq(propEntries.id, id));
     await audit(tx, "entry", id, old, updated, text(body.reason, "a reason", 500));
     return { id };
@@ -477,7 +513,10 @@ export async function mutatePropInTransaction(
         .limit(1)
         .for("update"),
     );
-    requireValue(payout && payout.kind === "payout" && !payout.voided, "Choose an active payout record.");
+    requireValue(
+      payout && payout.kind === "payout" && !payout.voided,
+      "Choose an active payout record.",
+    );
     const old = first(
       await tx.select().from(propReceipts).where(eq(propReceipts.id, id)).limit(1).for("update"),
     );
@@ -507,7 +546,10 @@ export async function mutatePropInTransaction(
         "Enter a positive amount and a settlement date on or after the payout request.",
       );
       if (old && same(old, updated)) return { id };
-      requireValue(!old, "Receipt ID already exists. Void an incorrect receipt and add a replacement.");
+      requireValue(
+        !old,
+        "Receipt ID already exists. Void an incorrect receipt and add a replacement.",
+      );
       requireValue(
         first(await tx.select({ n: count() }).from(propReceipts))!.n < 50_000,
         "Receipt limit reached (50,000).",
@@ -525,7 +567,10 @@ export async function mutatePropInTransaction(
       .sort((a, b) => a.occurredOn.localeCompare(b.occurredOn) || (a.kind === "receipt" ? -1 : 1));
     let balance = 0;
     for (const r of next) {
-      requireValue(r.occurredOn >= payout.occurredOn, "A receipt cannot precede its payout request.");
+      requireValue(
+        r.occurredOn >= payout.occurredOn,
+        "A receipt cannot precede its payout request.",
+      );
       balance += r.amountMinor * (r.kind === "reversal" ? -1 : 1);
       requireValue(balance >= 0, "A reversal cannot exceed the money received by that date.");
     }
@@ -550,7 +595,9 @@ export async function mutatePropInTransaction(
       payoutId,
       { payout, receipt: old ?? null },
       { payout: updatedPayout, receipt: updated },
-      body.action === "receipt.add" ? `Recorded ${updated.kind}` : text(body.reason, "a reason", 500),
+      body.action === "receipt.add"
+        ? `Recorded ${updated.kind}`
+        : text(body.reason, "a reason", 500),
     );
     return { id };
   }

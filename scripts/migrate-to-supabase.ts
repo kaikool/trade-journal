@@ -12,7 +12,9 @@ import { DatabaseSync } from "node:sqlite";
 // Resolve packages from apps/web if not available in current root
 const webRequire = createRequire(resolve(process.cwd(), "apps/web/package.json"));
 const postgres = webRequire("postgres") as typeof import("postgres");
-const { createClient } = webRequire("@supabase/supabase-js") as typeof import("@supabase/supabase-js");
+const { createClient } = webRequire(
+  "@supabase/supabase-js",
+) as typeof import("@supabase/supabase-js");
 
 interface CliArgs {
   sqlitePath: string;
@@ -78,15 +80,10 @@ Options:
   return {
     sqlitePath: getArg("--sqlite") ?? process.env.JOURNAL_SQLITE_PATH ?? defaultSqlite,
     databaseUrl: cleanUrl(
-      getArg("--database-url") ??
-        process.env.DIRECT_DATABASE_URL ??
-        process.env.DATABASE_URL ??
-        "",
+      getArg("--database-url") ?? process.env.DIRECT_DATABASE_URL ?? process.env.DATABASE_URL ?? "",
     ),
     supabaseUrl: cleanUrl(getArg("--supabase-url") ?? process.env.SUPABASE_URL),
-    supabaseKey: cleanUrl(
-      getArg("--supabase-key") ?? process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
-    ),
+    supabaseKey: cleanUrl(getArg("--supabase-key") ?? process.env.SUPABASE_SERVICE_ROLE_KEY ?? ""),
     targetSecret: cleanUrl(getArg("--secret") ?? process.env.JOURNAL_SECRET ?? ""),
     legacySecretFile: getArg("--legacy-secret-file") ?? defaultLegacySecret,
     dryRun: args.includes("--dry-run"),
@@ -690,7 +687,9 @@ async function main() {
         "\nWarning: Some tables have count discrepancies. Check foreign keys or conflict records above.",
       );
     } else {
-      console.log("\nAll table row counts match 100%! Migration to Supabase completed successfully.");
+      console.log(
+        "\nAll table row counts match 100%! Migration to Supabase completed successfully.",
+      );
     }
   } finally {
     await sql.end({ timeout: 5 });

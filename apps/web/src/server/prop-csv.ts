@@ -133,17 +133,15 @@ export async function importPropCsv(content: string, preview: boolean): Promise<
               reason: "Imported settled payout",
             });
           }
-          await tx
-            .insert(propAudit)
-            .values({
-              id: newId(),
-              entityType: "entry",
-              entityId: id,
-              beforeJson: null,
-              afterJson: JSON.stringify(row),
-              reason: fingerprint,
-              createdAt: nowIso(),
-            });
+          await tx.insert(propAudit).values({
+            id: newId(),
+            entityType: "entry",
+            entityId: id,
+            beforeJson: null,
+            afterJson: JSON.stringify(row),
+            reason: fingerprint,
+            createdAt: nowIso(),
+          });
           imported++;
         } catch (error) {
           throw new RequestError(`Row ${index + 2}: ${(error as Error).message}`);

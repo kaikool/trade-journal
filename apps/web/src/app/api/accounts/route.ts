@@ -47,20 +47,18 @@ export const POST = handler(async (request: Request) => {
   }
 
   const id = newId();
-  await db
-    .insert(accounts)
-    .values({
-      id,
-      name: body.name,
-      broker: body.broker ?? "",
-      kind: body.kind,
-      currency: body.currency ?? "USD",
-      initialBalance: body.initialBalance ?? 0,
-      profitCalcMethod: body.profitCalcMethod ?? "fifo",
-      credentialsEnc: body.kind === "sync" ? encryptJson(body.credentials) : null,
-      autoSync: body.autoSync ?? body.kind === "sync",
-      createdAt: nowIso(),
-    });
+  await db.insert(accounts).values({
+    id,
+    name: body.name,
+    broker: body.broker ?? "",
+    kind: body.kind,
+    currency: body.currency ?? "USD",
+    initialBalance: body.initialBalance ?? 0,
+    profitCalcMethod: body.profitCalcMethod ?? "fifo",
+    credentialsEnc: body.kind === "sync" ? encryptJson(body.credentials) : null,
+    autoSync: body.autoSync ?? body.kind === "sync",
+    createdAt: nowIso(),
+  });
 
   // First sync happens right away so the account isn't born empty.
   let sync = null;

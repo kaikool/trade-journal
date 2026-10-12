@@ -18,13 +18,15 @@ import { isTimeZone } from "@/lib/timezone";
 import { parseCurrencyConversion, type CurrencyConversion } from "@/lib/currencies";
 
 export const GET = handler(async () => {
-  const [timeZone, importTimeZone, multipliers, currencyConversion, aiSettings] = await Promise.all([
-    getTimeZone(),
-    getImportTimeZone(),
-    getMultipliers(),
-    getCurrencyConversion(),
-    getAiSettings(),
-  ]);
+  const [timeZone, importTimeZone, multipliers, currencyConversion, aiSettings] = await Promise.all(
+    [
+      getTimeZone(),
+      getImportTimeZone(),
+      getMultipliers(),
+      getCurrencyConversion(),
+      getAiSettings(),
+    ],
+  );
   return ok({
     timeZone,
     importTimeZone,
@@ -57,12 +59,8 @@ export const PATCH = handler(async (request: Request) => {
       requireValue(false, error instanceof Error ? error.message : "Enter valid conversion rates.");
     }
     if (conversion.enabled) {
-      const accountsList = await db
-        .select({ currency: accounts.currency })
-        .from(accounts);
-      const missing = [
-        ...new Set(accountsList.map((account) => account.currency)),
-      ].filter(
+      const accountsList = await db.select({ currency: accounts.currency }).from(accounts);
+      const missing = [...new Set(accountsList.map((account) => account.currency))].filter(
         (currency) => currency !== conversion!.reportingCurrency && !conversion!.rates[currency],
       );
       requireValue(

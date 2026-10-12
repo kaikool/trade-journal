@@ -43,10 +43,7 @@ export const setSetting = async (
     .onConflictDoUpdate({ target: settings.key, set: { value } });
 };
 
-export const deleteSetting = async (
-  key: string,
-  executor: JournalExecutor = db,
-): Promise<void> => {
+export const deleteSetting = async (key: string, executor: JournalExecutor = db): Promise<void> => {
   await executor.delete(settings).where(eq(settings.key, key));
 };
 

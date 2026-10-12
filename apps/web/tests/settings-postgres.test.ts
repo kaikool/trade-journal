@@ -24,14 +24,20 @@ beforeAll(async () => {
 
 describe("Postgres settings", () => {
   it("uses the supplied transaction for setting writes and rolls them back together", async () => {
-    await expect(db.transaction(async (tx) => {
-      const guard = vi.spyOn(db, "insert").mockImplementation(() => { throw new Error("Global writes forbidden"); });
-      try {
-        await setSetting("transactionFixture", "pending", tx);
-        expect(await getSetting("transactionFixture", tx)).toBe("pending");
-        throw new Error("Fixture rollback");
-      } finally { guard.mockRestore(); }
-    })).rejects.toThrow("Fixture rollback");
+    await expect(
+      db.transaction(async (tx) => {
+        const guard = vi.spyOn(db, "insert").mockImplementation(() => {
+          throw new Error("Global writes forbidden");
+        });
+        try {
+          await setSetting("transactionFixture", "pending", tx);
+          expect(await getSetting("transactionFixture", tx)).toBe("pending");
+          throw new Error("Fixture rollback");
+        } finally {
+          guard.mockRestore();
+        }
+      }),
+    ).rejects.toThrow("Fixture rollback");
     expect(await getSetting("transactionFixture")).toBeNull();
   });
   it("reads defaults and round-trips a setting asynchronously", async () => {

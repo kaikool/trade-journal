@@ -16,7 +16,9 @@ beforeEach(async () => {
   await db.delete(trades);
   await db.delete(accounts);
   await db.delete(settings);
-  await db.insert(accounts).values({ id: "a", name: "Test", kind: "manual", createdAt: "2026-01-01" });
+  await db
+    .insert(accounts)
+    .values({ id: "a", name: "Test", kind: "manual", createdAt: "2026-01-01" });
   await setSetting("multipliers", JSON.stringify({ MNQ: 2, SPREAD: 100 }));
   const fixtures = [
     { symbol: "MNQ", assetClass: "futures", avgEntry: 31157.25, quantity: 4, netPnl: 283 },

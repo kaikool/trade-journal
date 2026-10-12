@@ -73,9 +73,7 @@ export const syncAccount = async (accountId: string): Promise<SyncOutcome> => {
     if (statementTimeZone !== undefined) {
       const [current] = await tx.select().from(accounts).where(eq(accounts.id, accountId)).limit(1);
       requireValue(
-        current &&
-          isIbkrSyncAccount(current) &&
-          current.credentialsEnc === account.credentialsEnc,
+        current && isIbkrSyncAccount(current) && current.credentialsEnc === account.credentialsEnc,
         "The IBKR connection changed during sync. Try again.",
       );
       await assertIbkrSyncTimeZone(current, statementTimeZone, tx);

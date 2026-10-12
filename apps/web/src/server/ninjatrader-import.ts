@@ -88,7 +88,11 @@ async function planImport(
   executor: JournalExecutor = db,
 ): Promise<Plan> {
   const options = readOptions(rawOptions);
-  const [account] = await executor.select().from(accounts).where(eq(accounts.id, accountId)).limit(1);
+  const [account] = await executor
+    .select()
+    .from(accounts)
+    .where(eq(accounts.id, accountId))
+    .limit(1);
   requireValue(account, "Account not found.");
   const savedSources = await executor
     .select()
@@ -104,7 +108,10 @@ async function planImport(
     .select()
     .from(importBatches)
     .where(and(eq(importBatches.accountId, accountId), eq(importBatches.format, FORMAT)));
-  const stored = await executor.select().from(executions).where(eq(executions.accountId, accountId));
+  const stored = await executor
+    .select()
+    .from(executions)
+    .where(eq(executions.accountId, accountId));
   const oldTrades = await executor.select().from(trades).where(eq(trades.accountId, accountId));
   const [defaults, multipliers, tz] = await Promise.all([
     getJournalDefaults(executor),
@@ -488,7 +495,8 @@ export const previewNinjaTraderImport = async (
   content: string,
   timeZone: string,
   options: ImportReviewOptions = {},
-): Promise<ImportReview> => (await planImport(accountId, parsed, content, timeZone, options)).review;
+): Promise<ImportReview> =>
+  (await planImport(accountId, parsed, content, timeZone, options)).review;
 
 export const commitNinjaTraderImport = async (
   accountId: string,
@@ -529,10 +537,12 @@ export const commitNinjaTraderImport = async (
         createdAt: nowIso(),
       });
     for (const fill of plan.updates)
-      await tx.update(executions)
+      await tx
+        .update(executions)
         .set({ fee: fill.fee, importMetadataJson: JSON.stringify(fill.importMetadata) })
         .where(eq(executions.id, fill.id));
-    if (plan.inserts.length || plan.updates.length) await rebuildAccountInTransaction(accountId, tx);
+    if (plan.inserts.length || plan.updates.length)
+      await rebuildAccountInTransaction(accountId, tx);
     await tx.insert(importBatches).values(plan.batch).onConflictDoNothing();
     return {
       inserted: plan.inserts.length,

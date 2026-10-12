@@ -42,7 +42,8 @@ beforeEach(async () => {
   await db.delete(executions);
   await db.delete(settings);
   await db.delete(accounts);
-  await db.insert(accounts)
+  await db
+    .insert(accounts)
     .values({ id: "test", name: "Timezone test", kind: "import", createdAt: "2026-01-01" });
 });
 afterEach(() => vi.useRealTimers());
@@ -79,9 +80,7 @@ describe("statement and display timezones are independent", () => {
       expect(preview.executions[0].executedAt).toBe(expected);
       expect(await db.select().from(executions)).toHaveLength(0);
       await post({ mode: "commit", accountId: "test", content });
-      expect(
-        (await db.select().from(executions)).map((row) => row.executedAt),
-      ).toContain(expected);
+      expect((await db.select().from(executions)).map((row) => row.executedAt)).toContain(expected);
       expect(await post({ mode: "commit", accountId: "test", content })).toMatchObject({
         inserted: 0,
         duplicates: 2,
@@ -95,9 +94,9 @@ describe("statement and display timezones are independent", () => {
     // The UI sends the preview's zone even if the saved default changes before commit.
     await save({ importTimeZone: "America/New_York" });
     await post({ mode: "commit", accountId: "test", content: html, timeZone: preview.timeZone });
-    expect(
-      (await db.select().from(executions)).map((row) => row.executedAt),
-    ).toContain("2026-07-05T01:00:00.000Z");
+    expect((await db.select().from(executions)).map((row) => row.executedAt)).toContain(
+      "2026-07-05T01:00:00.000Z",
+    );
     expect(await getImportTimeZone()).toBe("America/New_York");
     expect(await getTimeZone()).toBe("America/Asuncion");
   });

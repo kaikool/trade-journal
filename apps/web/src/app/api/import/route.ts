@@ -117,7 +117,13 @@ export const POST = handler(async (request: Request) => {
       needsSymbol: parsed.needsSymbol,
       reconciliation:
         parsed.format === "ninjatrader" && body.accountId
-          ? await previewNinjaTraderImport(body.accountId, parsed, body.content, timeZone, body.review)
+          ? await previewNinjaTraderImport(
+              body.accountId,
+              parsed,
+              body.content,
+              timeZone,
+              body.review,
+            )
           : undefined,
     });
   }
