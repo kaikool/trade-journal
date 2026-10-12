@@ -1,14 +1,12 @@
 import { afterAll, beforeEach, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import { FILTER_KEYS } from "@luxalgo/journal-core";
+import { createTestDatabase } from "./helpers/postgres";
 
 vi.mock("@/server/ai", () => ({ runAi: vi.fn(async () => "Controlled AI response") }));
-const originalDir = process.env.JOURNAL_DATA_DIR;
-const scratch = mkdtempSync(join(tmpdir(), "journal-ai-scope-"));
-process.env.JOURNAL_DATA_DIR = scratch;
+const testDatabase = await createTestDatabase();
+(globalThis as { __journalTestDb?: unknown }).__journalTestDb = testDatabase.db;
+vi.resetModules();
 const { db, accounts, executions, trades, settings, journalDays } = await import("../src/db");
 const { insertExecutions } = await import("../src/server/executions");
 const { setSetting } = await import("../src/server/settings");
@@ -42,14 +40,15 @@ const fills = (symbol: string, exit: number, date = "2026-09-15") => [
   },
 ];
 const prompt = () => vi.mocked(runAi).mock.calls.at(-1)![0];
-beforeEach(() => {
+beforeEach(async () => {
   vi.stubEnv("JOURNAL_PASSWORD", "");
-  db.delete(trades).run();
-  db.delete(executions).run();
-  db.delete(accounts).run();
-  db.delete(settings).run();
-  db.delete(journalDays).run();
-  db.insert(accounts)
+  await db.delete(trades);
+  await db.delete(executions);
+  await db.delete(accounts);
+  await db.delete(settings);
+  await db.delete(journalDays);
+  await db
+    .insert(accounts)
     .values(
       ["a", "b", "empty"].map((id) => ({
         id,
@@ -57,19 +56,16 @@ beforeEach(() => {
         kind: "manual" as const,
         createdAt: "2026-01-01",
       })),
-    )
-    .run();
-  insertExecutions("a", fills("ONLY_A", 110), "manual");
-  insertExecutions("b", fills("ONLY_B", 50), "manual");
-  setSetting("timeZone", "UTC");
+    );
+  await insertExecutions("a", fills("ONLY_A", 110), "manual");
+  await insertExecutions("b", fills("ONLY_B", 50), "manual");
+  await setSetting("timeZone", "UTC");
   vi.mocked(runAi).mockClear();
 });
-afterAll(() => {
-  db.$client.close();
+afterAll(async () => {
+  delete (globalThis as { __journalTestDb?: unknown }).__journalTestDb;
+  await testDatabase.close();
   vi.unstubAllEnvs();
-  if (originalDir === undefined) delete process.env.JOURNAL_DATA_DIR;
-  else process.env.JOURNAL_DATA_DIR = originalDir;
-  rmSync(scratch, { recursive: true, force: true });
 });
 
 it.each([
@@ -155,7 +151,8 @@ it("does not widen an empty account or empty filter result", async () => {
 });
 
 it("applies every supported journal filter using the same predicate as the visible day", async () => {
-  db.update(trades)
+  await db
+    .update(trades)
     .set({
       tagsJson: '["setup"]',
       mistakesJson: '["early"]',
@@ -166,8 +163,7 @@ it("applies every supported journal filter using the same predicate as the visib
       assetClass: "equity",
       playbookId: "strategy-a",
     })
-    .where(eq(trades.accountId, "a"))
-    .run();
+    .where(eq(trades.accountId, "a"));
   const examples: Record<(typeof FILTER_KEYS)[number], string> = {
     accounts: "a",
     from: "2026-09-15",
@@ -205,7 +201,7 @@ it("applies every supported journal filter using the same predicate as the visib
   };
   for (const key of FILTER_KEYS) {
     const filters = { [key]: examples[key] };
-    const selected = queryTrades(filters).trades;
+    const selected = (await queryTrades(filters)).trades;
     const expectedSymbols = selected.map((t) => t.symbol);
     const visible = await day(
       new Request("http://localhost/api/journal/2026-09-15?" + new URLSearchParams(filters)),
@@ -231,8 +227,8 @@ it("applies every supported journal filter using the same predicate as the visib
 });
 
 it("uses the journal timezone at midnight and keeps date filters in recaps", async () => {
-  setSetting("timeZone", "America/New_York");
-  insertExecutions(
+  await setSetting("timeZone", "America/New_York");
+  await insertExecutions(
     "a",
     [
       {
@@ -296,14 +292,15 @@ it("uses the journal timezone at midnight and keeps date filters in recaps", asy
 
 it("excludes shared notes from any trade subset, and leaves saved notes untouched", async () => {
   const note = "PRIVATE_OTHER_ACCOUNT_NOTE";
-  db.insert(journalDays).values({ date: "2026-09-15", note, updatedAt: "2026-09-15" }).run();
+  await db.insert(journalDays).values({ date: "2026-09-15", note, updatedAt: "2026-09-15" });
   for (const filters of [{ accounts: "a" }, { symbol: "ONLY_A" }, { status: "win" }]) {
     await recap(request({ date: "2026-09-15", filters }));
     expect(prompt()).not.toContain(note);
   }
   await recap(request({ date: "2026-09-15", filters: { from: "2026-09-15", to: "2026-09-15" } }));
   expect(prompt()).toContain(note);
-  expect(db.select().from(journalDays).get()?.note).toBe(note);
+  const [savedNote] = await db.select().from(journalDays).limit(1);
+  expect(savedNote?.note).toBe(note);
 });
 
 it("rejects invalid request bodies, dates and legacy account fields instead of silently ignoring them", async () => {
@@ -323,8 +320,9 @@ it("rejects invalid request bodies, dates and legacy account fields instead of s
 
 it("keeps single-trade critique scoped to its key", async () => {
   const { POST: critique } = await import("../src/app/api/ai/critique/route");
+  const { trades: selectedTrades } = await queryTrades({ accounts: "a" });
   expect(
-    (await critique(request({ key: queryTrades({ accounts: "a" }).trades[0]!.key }))).status,
+    (await critique(request({ key: selectedTrades[0]!.key }))).status,
   ).toBe(200);
   expect(prompt()).toContain("ONLY_A");
   expect(prompt()).not.toContain("ONLY_B");

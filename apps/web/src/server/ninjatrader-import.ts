@@ -116,7 +116,7 @@ async function planImport(
   const [defaults, multipliers, tz] = await Promise.all([
     getJournalDefaults(executor),
     getMultipliers(executor),
-    getTimeZone(),
+    getTimeZone(executor),
   ]);
   const conflicts = new Set(parsed.errors ?? []),
     warnings = new Set<string>();

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { act, createElement, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { listBrokers } from "@luxalgo/broker-sdk";
+import { filterEnabledSyncBrokers } from "../src/lib/supported-brokers";
 
 const state = vi.hoisted(() => ({
   post: vi.fn(),
@@ -16,13 +17,13 @@ vi.mock("@/lib/use-api", () => ({
   postJson: (...args: unknown[]) => state.post(...args),
   useApi: (url: string) =>
     url === "/api/brokers"
-      ? { data: { brokers: listBrokers() } }
+      ? { data: { brokers: filterEnabledSyncBrokers(listBrokers()) } }
       : {
           data: state.settingsError ? undefined : { importTimeZone: state.zone },
           error: state.settingsError,
         },
 }));
-// Exercise the journal credential form with the real SDK roster. Native controls
+// Exercise the journal credential form with the enabled SDK roster. Native controls
 // keep this focused on field semantics; the Radix picker is checked in browser QA.
 vi.mock("@/components/ui/select", () => ({
   Select: ({
@@ -56,7 +57,7 @@ vi.mock("@/components/ui/tabs", () => ({
     value === "sync" ? children : null,
 }));
 const { default: ImportPage } = await import("../src/app/import/page");
-const brokers = listBrokers();
+const brokers = filterEnabledSyncBrokers(listBrokers());
 let container: HTMLDivElement;
 let root: Root;
 beforeEach(async () => {
@@ -103,20 +104,10 @@ const connectButton = () =>
     (button) => button.textContent === "Connect & sync",
   )!;
 
-it("exposes exactly the 22 public brokers including the six added integrations", () => {
-  expect(brokers).toHaveLength(22);
+it("exposes only the four brokers enabled for this journal", () => {
+  expect(brokers.map((broker) => broker.id)).toEqual(["binance", "bybit", "okx", "topstep"]);
   expect([...container.querySelectorAll("option")].map((option) => option.value).sort()).toEqual(
     brokers.map((broker) => broker.id).sort(),
-  );
-  expect(brokers.map((broker) => broker.id)).toEqual(
-    expect.arrayContaining([
-      "schwab",
-      "tradestation",
-      "tastytrade",
-      "robinhood-crypto",
-      "gemini",
-      "kucoin",
-    ]),
   );
 });
 it.each(brokers)(
@@ -148,13 +139,13 @@ it.each(brokers)(
     expect(state.push).toHaveBeenCalledWith("/?accounts=connected-test");
   },
 );
-it("shows the effective IBKR timezone, reports skipped fills and surfaces connection failures", async () => {
-  await choose("ibkr-flex");
-  await fill(brokers.find((broker) => broker.id === "ibkr-flex")!);
-  expect(container.textContent).toContain("Statement timezone: America/New_York");
-  state.post.mockRejectedValueOnce(new Error("IBKR rejected test credentials"));
+it("reports skipped fills and surfaces connection failures for a retained broker", async () => {
+  const broker = brokers.find((item) => item.id === "topstep")!;
+  await choose(broker.id);
+  await fill(broker);
+  state.post.mockRejectedValueOnce(new Error("Topstep rejected test credentials"));
   await act(async () => connectButton().click());
-  expect(container.textContent).toContain("IBKR rejected test credentials");
+  expect(container.textContent).toContain("Topstep rejected test credentials");
   expect(state.push).not.toHaveBeenCalled();
   state.post.mockResolvedValueOnce({
     id: "corrected",
@@ -163,11 +154,4 @@ it("shows the effective IBKR timezone, reports skipped fills and surfaces connec
   await act(async () => connectButton().click());
   expect(alert).toHaveBeenCalledWith(expect.stringContaining("2 broker record(s) were skipped"));
   expect(state.push).toHaveBeenCalledWith("/?accounts=corrected");
-});
-it("blocks IBKR connection when its effective timezone cannot be loaded", async () => {
-  state.settingsError = "Unavailable";
-  await choose("ibkr-flex");
-  await fill(brokers.find((broker) => broker.id === "ibkr-flex")!);
-  expect(container.textContent).toContain("Could not load the import timezone");
-  expect(connectButton().disabled).toBe(true);
 });

@@ -22,12 +22,27 @@ beforeEach(async () => {
     .mockImplementation(async (accountId: string) => ({ accountId }));
   await db.delete(accounts);
   await db.insert(accounts).values([
-    { id: "auto-active", name: "Auto", kind: "sync", autoSync: true, createdAt: "2026-01-01" },
-    { id: "manual-active", name: "Manual", kind: "sync", autoSync: false, createdAt: "2026-01-02" },
+    {
+      id: "auto-active",
+      name: "Auto",
+      kind: "sync",
+      broker: "topstep",
+      autoSync: true,
+      createdAt: "2026-01-01",
+    },
+    {
+      id: "manual-active",
+      name: "Manual",
+      kind: "sync",
+      broker: "topstep",
+      autoSync: false,
+      createdAt: "2026-01-02",
+    },
     {
       id: "auto-archived",
       name: "Archived",
       kind: "sync",
+      broker: "topstep",
       autoSync: true,
       archivedAt: "2026-01-03",
       createdAt: "2026-01-03",
@@ -36,8 +51,17 @@ beforeEach(async () => {
       id: "auto-manual-kind",
       name: "Manual account",
       kind: "manual",
+      broker: "",
       autoSync: true,
       createdAt: "2026-01-04",
+    },
+    {
+      id: "auto-removed-broker",
+      name: "Removed broker",
+      kind: "sync",
+      broker: "alpaca",
+      autoSync: true,
+      createdAt: "2026-01-05",
     },
   ]);
 });
@@ -67,8 +91,9 @@ describe("daily broker auto-sync cron", () => {
       id: "auto-active-2",
       name: "Auto 2",
       kind: "sync",
+      broker: "bybit",
       autoSync: true,
-      createdAt: "2026-01-05",
+      createdAt: "2026-01-06",
     });
     syncMocks.syncAccount.mockImplementation(async (accountId: string) => {
       if (accountId === "auto-active") throw new Error("broker unavailable");

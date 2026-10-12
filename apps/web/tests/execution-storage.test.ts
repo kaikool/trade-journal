@@ -1,12 +1,10 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import type { ImportedExecution } from "@luxalgo/journal-importers";
+import { createTestDatabase } from "./helpers/postgres";
 
-const originalDir = process.env.JOURNAL_DATA_DIR;
-const scratch = mkdtempSync(join(tmpdir(), "journal-storage-test-"));
-process.env.JOURNAL_DATA_DIR = scratch;
+const testDatabase = await createTestDatabase();
+(globalThis as { __journalTestDb?: unknown }).__journalTestDb = testDatabase.db;
+vi.resetModules();
 const { db, accounts, executions, trades } = await import("../src/db");
 const { insertExecutions } = await import("../src/server/executions");
 const { rebuildAccount } = await import("../src/server/rebuild");
@@ -31,26 +29,24 @@ const rows: ImportedExecution[] = [
   },
 ];
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.stubEnv("JOURNAL_PASSWORD", "");
-  db.delete(trades).run();
-  db.delete(executions).run();
-  db.delete(accounts).run();
-  db.insert(accounts)
-    .values({ id: "test", name: "Test", kind: "manual", createdAt: "2026-01-01" })
-    .run();
+  await db.delete(trades);
+  await db.delete(executions);
+  await db.delete(accounts);
+  await db
+    .insert(accounts)
+    .values({ id: "test", name: "Test", kind: "manual", createdAt: "2026-01-01" });
 });
-afterAll(() => {
+afterAll(async () => {
+  delete (globalThis as { __journalTestDb?: unknown }).__journalTestDb;
   vi.unstubAllEnvs();
-  db.$client.close();
-  if (originalDir === undefined) delete process.env.JOURNAL_DATA_DIR;
-  else process.env.JOURNAL_DATA_DIR = originalDir;
-  rmSync(scratch, { recursive: true, force: true });
+  await testDatabase.close();
 });
 
 describe("execution storage preserves a coherent journal", () => {
-  it("rejects missing accounts and invalid fills before inserting data", () => {
-    expect(() => insertExecutions("missing", rows, "manual")).toThrow("Account not found");
+  it("rejects missing accounts and invalid fills before inserting data", async () => {
+    await expect(insertExecutions("missing", rows, "manual")).rejects.toThrow("Account not found");
     for (const invalid of [
       { quantity: Infinity },
       { quantity: 0 },
@@ -59,35 +55,47 @@ describe("execution storage preserves a coherent journal", () => {
       { side: "hold" },
       { symbol: " " },
     ]) {
-      expect(() =>
+      await expect(
         insertExecutions(
           "test",
           [rows[0]!, { ...rows[1]!, ...invalid } as ImportedExecution],
           "manual",
         ),
-      ).toThrow();
+      ).rejects.toThrow();
     }
-    expect(db.select().from(executions).all()).toHaveLength(0);
+    expect(await db.select().from(executions)).toHaveLength(0);
   });
 
-  it("rolls back the fills if calculating their trades fails", () => {
-    db.$client.exec(
-      "CREATE TRIGGER fail_trade BEFORE INSERT ON trades BEGIN SELECT RAISE(FAIL, 'test storage failure'); END",
-    );
+  it("rolls back the fills if calculating their trades fails", async () => {
+    await testDatabase.client.exec(`
+      CREATE FUNCTION reject_trade_fixture() RETURNS trigger AS $$
+      BEGIN RAISE EXCEPTION 'test storage failure'; END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER fail_trade BEFORE INSERT ON trades
+      FOR EACH ROW EXECUTE FUNCTION reject_trade_fixture();
+    `);
     try {
-      expect(() => insertExecutions("test", rows, "manual")).toThrow();
-      expect(db.select().from(executions).all()).toHaveLength(0);
-      expect(db.select().from(trades).all()).toHaveLength(0);
+      await expect(insertExecutions("test", rows, "manual")).rejects.toThrow();
+      expect(await db.select().from(executions)).toHaveLength(0);
+      expect(await db.select().from(trades)).toHaveLength(0);
     } finally {
-      db.$client.exec("DROP TRIGGER fail_trade");
+      await testDatabase.client.exec(
+        "DROP TRIGGER fail_trade ON trades; DROP FUNCTION reject_trade_fixture();",
+      );
     }
   });
 
-  it("deduplicates repeated imports while keeping the calculated total", () => {
-    expect(insertExecutions("test", rows, "manual")).toMatchObject({ inserted: 2, duplicates: 0 });
-    expect(insertExecutions("test", rows, "manual")).toMatchObject({ inserted: 0, duplicates: 2 });
-    expect(db.select().from(executions).all()).toHaveLength(2);
-    expect(db.select().from(trades).all()[0]?.netPnl).toBe(20);
+  it("deduplicates repeated imports while keeping the calculated total", async () => {
+    expect(await insertExecutions("test", rows, "manual")).toMatchObject({
+      inserted: 2,
+      duplicates: 0,
+    });
+    expect(await insertExecutions("test", rows, "manual")).toMatchObject({
+      inserted: 0,
+      duplicates: 2,
+    });
+    expect(await db.select().from(executions)).toHaveLength(2);
+    expect((await db.select().from(trades))[0]?.netPnl).toBe(20);
   });
 
   it("saves Markdown notes with manual trades and preserves them through a rebuild and retry", async () => {
@@ -100,29 +108,30 @@ describe("execution storage preserves a coherent journal", () => {
       }),
     );
     expect(response.status).toBe(200);
-    const trade = db.select().from(trades).get()!;
+    const [trade] = await db.select().from(trades).limit(1);
     const detail = await getTrade(new Request("http://localhost/api/trades/fixture"), {
-      params: Promise.resolve({ key: trade.key }),
+      params: Promise.resolve({ key: trade!.key }),
     });
     expect((await detail.json()).trade.notes).toBe(notes);
-    rebuildAccount("test");
-    expect(insertExecutions("test", rows, "manual", notes)).toMatchObject({
+    await rebuildAccount("test");
+    expect(await insertExecutions("test", rows, "manual", notes)).toMatchObject({
       inserted: 0,
       duplicates: 2,
     });
-    expect(db.select().from(trades).get()?.notes).toBe(notes);
+    const [rebuilt] = await db.select().from(trades).limit(1);
+    expect(rebuilt?.notes).toBe(notes);
   });
 
-  it("appends exit notes to the correct position without changing unrelated trade notes", () => {
-    insertExecutions("test", [rows[0]!], "manual", "Entry plan");
-    insertExecutions(
+  it("appends exit notes to the correct position without changing unrelated trade notes", async () => {
+    await insertExecutions("test", [rows[0]!], "manual", "Entry plan");
+    await insertExecutions(
       "test",
       rows.map((row) => ({ ...row, symbol: "OTHER" })),
       "manual",
       "Unrelated note",
     );
-    insertExecutions("test", [rows[1]!], "manual", "Exit review");
-    const saved = db.select().from(trades).all();
+    await insertExecutions("test", [rows[1]!], "manual", "Exit review");
+    const saved = await db.select().from(trades);
     expect(saved.find((row) => row.symbol === "TEST")).toMatchObject({
       notes: "Entry plan\n\nExit review",
       netPnl: 20,
@@ -130,25 +139,27 @@ describe("execution storage preserves a coherent journal", () => {
     expect(saved.find((row) => row.symbol === "OTHER")?.notes).toBe("Unrelated note");
   });
 
-  it("keeps existing notes when a manual exit has no notes", () => {
-    insertExecutions("test", [rows[0]!], "manual", "Keep this plan");
-    insertExecutions("test", [rows[1]!], "manual", "   ");
-    expect(db.select().from(trades).get()?.notes).toBe("Keep this plan");
+  it("keeps existing notes when a manual exit has no notes", async () => {
+    await insertExecutions("test", [rows[0]!], "manual", "Keep this plan");
+    await insertExecutions("test", [rows[1]!], "manual", "   ");
+    const [saved] = await db.select().from(trades).limit(1);
+    expect(saved?.notes).toBe("Keep this plan");
   });
 
-  it("saves notes for an already-recorded trade without duplicating fills or repeated notes", () => {
-    insertExecutions("test", rows, "manual", "Entry plan");
-    expect(insertExecutions("test", rows, "manual", "Later review")).toMatchObject({
+  it("saves notes for an already-recorded trade without duplicating fills or repeated notes", async () => {
+    await insertExecutions("test", rows, "manual", "Entry plan");
+    expect(await insertExecutions("test", rows, "manual", "Later review")).toMatchObject({
       inserted: 0,
       duplicates: 2,
     });
-    insertExecutions("test", rows, "manual", "Later review");
-    expect(db.select().from(executions).all()).toHaveLength(2);
-    expect(db.select().from(trades).get()?.notes).toBe("Entry plan\n\nLater review");
+    await insertExecutions("test", rows, "manual", "Later review");
+    expect(await db.select().from(executions)).toHaveLength(2);
+    const [saved] = await db.select().from(trades).limit(1);
+    expect(saved?.notes).toBe("Entry plan\n\nLater review");
   });
 
-  it("attaches a batch note to each trade formed by its new executions", () => {
-    insertExecutions(
+  it("attaches a batch note to each trade formed by its new executions", async () => {
+    await insertExecutions(
       "test",
       [
         ...rows,
@@ -157,7 +168,7 @@ describe("execution storage preserves a coherent journal", () => {
       "manual",
       "Session review",
     );
-    const saved = db.select().from(trades).all();
+    const saved = await db.select().from(trades);
     expect(saved).toHaveLength(2);
     expect(saved.every((row) => row.notes === "Session review")).toBe(true);
   });
@@ -173,17 +184,18 @@ describe("execution storage preserves a coherent journal", () => {
       );
       expect(response.status).toBe(400);
     }
-    expect(db.select().from(executions).all()).toHaveLength(0);
-    expect(db.select().from(trades).all()).toHaveLength(0);
+    expect(await db.select().from(executions)).toHaveLength(0);
+    expect(await db.select().from(trades)).toHaveLength(0);
   });
 
-  it("rolls back new executions if appending notes exceeds the existing notes limit", () => {
+  it("rolls back new executions if appending notes exceeds the existing notes limit", async () => {
     const existing = "a".repeat(100000);
-    insertExecutions("test", [rows[0]!], "manual", existing);
-    expect(() => insertExecutions("test", [rows[1]!], "manual", "Exit review")).toThrow(
-      "Combined trade notes",
-    );
-    expect(db.select().from(executions).all()).toHaveLength(1);
-    expect(db.select().from(trades).get()).toMatchObject({ notes: existing, status: "open" });
+    await insertExecutions("test", [rows[0]!], "manual", existing);
+    await expect(
+      insertExecutions("test", [rows[1]!], "manual", "Exit review"),
+    ).rejects.toThrow("Combined trade notes");
+    expect(await db.select().from(executions)).toHaveLength(1);
+    const [saved] = await db.select().from(trades).limit(1);
+    expect(saved).toMatchObject({ notes: existing, status: "open" });
   });
 });

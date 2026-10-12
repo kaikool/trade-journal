@@ -692,9 +692,6 @@ function FileImport() {
 function BrokerConnect() {
   const router = useRouter();
   const { data } = useApi<{ brokers: BrokerInfo[] }>("/api/brokers");
-  const { data: settingsData, error: settingsError } = useApi<{ importTimeZone: string }>(
-    "/api/settings",
-  );
   const [brokerId, setBrokerId] = useState("");
   const [name, setName] = useState("");
   const [credentials, setCredentials] = useState<Record<string, string>>({});
@@ -761,15 +758,7 @@ function BrokerConnect() {
             <p className="rounded-md bg-muted/60 p-2.5 text-xs text-muted-foreground">
               {broker.readOnlySetup}
             </p>
-            {broker.id === "ibkr-flex" && (
-              <p className="text-xs text-muted-foreground">
-                {settingsError
-                  ? "Could not load the import timezone. Refresh and try again."
-                  : settingsData
-                    ? `Statement timezone: ${settingsData.importTimeZone}. Used for Flex timestamps without an offset. Change it in Settings → Journal before connecting.`
-                    : "Loading statement timezone…"}
-              </p>
-            )}
+
             <div>
               <Label className="mb-1 block text-xs text-muted-foreground">Account name</Label>
               <Input
@@ -799,8 +788,7 @@ function BrokerConnect() {
                 busy ||
                 broker.credentials.some(
                   (field) => !/optional/i.test(field.label) && !credentials[field.key]?.trim(),
-                ) ||
-                (broker.id === "ibkr-flex" && !isTimeZone(settingsData?.importTimeZone))
+                )
               }
             >
               {busy ? "Connecting…" : "Connect & sync"}

@@ -1,23 +1,12 @@
 import { afterAll, expect, it, vi } from "vitest";
-import Database from "better-sqlite3";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { eq } from "drizzle-orm";
+import { createTestDatabase } from "./helpers/postgres";
 
-const previous = process.env.JOURNAL_DATA_DIR;
-const scratch = mkdtempSync(join(tmpdir(), "journal-folder-delete-"));
-process.env.JOURNAL_DATA_DIR = scratch;
-vi.stubEnv("JOURNAL_PASSWORD", "");
+const testDatabase = await createTestDatabase();
+(globalThis as { __journalTestDb?: unknown }).__journalTestDb = testDatabase.db;
+vi.resetModules();
 vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => undefined }) }));
-// Exercise the additive upgrade from the existing folder schema.
-const legacy = new Database(join(scratch, "journal.db"));
-legacy.exec(`CREATE TABLE folders (
-  id TEXT PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'user', created_at TEXT NOT NULL
-)`);
-legacy.close();
 const { db, folders, notes } = await import("../src/db");
-const { BOOTSTRAP_SQL } = await import("../src/db/bootstrap");
 const { DELETE } = await import("../src/app/api/folders/[id]/route");
 const { GET, POST } = await import("../src/app/api/notes/route");
 const { PATCH } = await import("../src/app/api/notes/[id]/route");
@@ -27,12 +16,12 @@ const removeFolder = (id: string) =>
     params: Promise.resolve({ id }),
   });
 const createFolder = (id: string) =>
-  db.insert(folders).values({ id, name: id, kind: "user", createdAt: "2026-01-01" }).run();
+  db.insert(folders).values({ id, name: id, kind: "user", createdAt: "2026-01-01" });
 
 it.each(["custom", "trade-notes", "daily-journal", "session-recaps"])(
   "removes %s while preserving all note fields and keeps it removed after bootstrap",
   async (id) => {
-    if (id === "custom") createFolder(id);
+    if (id === "custom") await createFolder(id);
     const note = {
       id: `note-${id}`,
       folderId: id,
@@ -44,13 +33,13 @@ it.each(["custom", "trade-notes", "daily-journal", "session-recaps"])(
       createdAt: "2026-10-01",
       updatedAt: "2026-10-02",
     };
-    db.insert(notes).values(note).run();
+    await db.insert(notes).values(note);
     expect((await removeFolder(id)).status).toBe(200);
-    expect(db.select().from(notes).where(eq(notes.id, note.id)).get()).toEqual({
+    const [saved] = await db.select().from(notes).where(eq(notes.id, note.id)).limit(1);
+    expect(saved).toEqual({
       ...note,
       folderId: "my-notes",
     });
-    db.$client.exec(BOOTSTRAP_SQL);
     const listed = await (await GET(new Request("http://localhost/api/notes"))).json();
     expect(listed.folders.some((folder: { id: string }) => folder.id === id)).toBe(false);
     expect((await removeFolder(id)).status).toBe(404);
@@ -59,7 +48,8 @@ it.each(["custom", "trade-notes", "daily-journal", "session-recaps"])(
 
 it.each(["all", "my-notes"])("keeps the essential %s view", async (id) => {
   expect((await removeFolder(id)).status).toBe(400);
-  expect(db.select().from(folders).where(eq(folders.id, id)).get()?.deletedAt).toBeNull();
+  const [folder] = await db.select().from(folders).where(eq(folders.id, id)).limit(1);
+  expect(folder?.deletedAt).toBeNull();
 });
 
 it("returns not found for a missing folder", async () => {
@@ -67,25 +57,36 @@ it("returns not found for a missing folder", async () => {
 });
 
 it("rolls back moving notes if folder removal fails", async () => {
-  createFolder("rollback");
-  db.insert(notes)
+  await createFolder("rollback");
+  await db
+    .insert(notes)
     .values({
       id: "rollback-note",
       folderId: "rollback",
       createdAt: "2026-01-01",
       updatedAt: "2026-01-01",
-    })
-    .run();
-  db.$client.exec(`CREATE TRIGGER fail_folder_delete BEFORE UPDATE ON folders
-    WHEN NEW.id = 'rollback' BEGIN SELECT RAISE(ABORT, 'Failed to remove folder'); END`);
+    });
+  await testDatabase.client.exec(`
+    CREATE FUNCTION reject_folder_delete() RETURNS trigger AS $$
+    BEGIN RAISE EXCEPTION 'Failed to remove folder'; END;
+    $$ LANGUAGE plpgsql;
+    CREATE TRIGGER fail_folder_delete BEFORE UPDATE ON folders
+    FOR EACH ROW WHEN (NEW.id = 'rollback') EXECUTE FUNCTION reject_folder_delete();
+  `);
   try {
     expect((await removeFolder("rollback")).status).toBe(500);
-    expect(db.select().from(notes).where(eq(notes.id, "rollback-note")).get()?.folderId).toBe(
-      "rollback",
-    );
-    expect(db.select().from(folders).where(eq(folders.id, "rollback")).get()?.deletedAt).toBeNull();
+    const [note] = await db.select().from(notes).where(eq(notes.id, "rollback-note")).limit(1);
+    const [folder] = await db
+      .select()
+      .from(folders)
+      .where(eq(folders.id, "rollback"))
+      .limit(1);
+    expect(note?.folderId).toBe("rollback");
+    expect(folder?.deletedAt).toBeNull();
   } finally {
-    db.$client.exec("DROP TRIGGER fail_folder_delete");
+    await testDatabase.client.exec(
+      "DROP TRIGGER fail_folder_delete ON folders; DROP FUNCTION reject_folder_delete();",
+    );
   }
 });
 
@@ -105,15 +106,12 @@ it("rejects creating or moving notes into a removed folder", async () => {
     { params: Promise.resolve({ id: "note-custom" }) },
   );
   expect(updated.status).toBe(404);
-  expect(db.select().from(notes).where(eq(notes.id, "note-custom")).get()?.folderId).toBe(
-    "my-notes",
-  );
+  const [note] = await db.select().from(notes).where(eq(notes.id, "note-custom")).limit(1);
+  expect(note?.folderId).toBe("my-notes");
 });
 
-afterAll(() => {
-  db.$client.close();
+afterAll(async () => {
+  delete (globalThis as { __journalTestDb?: unknown }).__journalTestDb;
   vi.unstubAllEnvs();
-  if (previous === undefined) delete process.env.JOURNAL_DATA_DIR;
-  else process.env.JOURNAL_DATA_DIR = previous;
-  rmSync(scratch, { recursive: true, force: true });
+  await testDatabase.close();
 });

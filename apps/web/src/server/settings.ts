@@ -55,11 +55,12 @@ export const getCurrencyConversion = async () => {
 };
 
 /** Journal display timezone (IANA), default UTC. */
-export const getTimeZone = async (): Promise<string> => (await getSetting("timeZone")) ?? "UTC";
+export const getTimeZone = async (executor: JournalExecutor = db): Promise<string> =>
+  (await getSetting("timeZone", executor)) ?? "UTC";
 
 /** Preserve the legacy parsing default until a separate import zone is saved. */
-export const getImportTimeZone = async (): Promise<string> =>
-  (await getSetting("importTimeZone")) ?? (await getTimeZone());
+export const getImportTimeZone = async (executor: JournalExecutor = db): Promise<string> =>
+  (await getSetting("importTimeZone", executor)) ?? (await getTimeZone(executor));
 
 /** Per-symbol contract multipliers for futures/options P&L. */
 export const getMultipliers = async (

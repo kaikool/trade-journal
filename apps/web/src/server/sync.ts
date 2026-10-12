@@ -1,20 +1,15 @@
-import { connect, listBrokers, type BrokerId } from "@luxalgo/broker-sdk";
+import { connect, listBrokers as sdkListBrokers, type BrokerId } from "@luxalgo/broker-sdk";
 import { eq } from "drizzle-orm";
 import type { ImportedExecution } from "@luxalgo/journal-importers";
 import { accounts, db } from "@/db";
 import { decryptJson, encryptJson } from "./crypto";
 import { nowIso } from "./ids";
 import { insertExecutionsInTransaction, type InsertResult } from "./executions";
-import { getImportTimeZone } from "./settings";
 import { requireValue } from "./api";
-import {
-  assertIbkrSyncTimeZone,
-  canonicalImportTimeZone,
-  isIbkrSyncAccount,
-} from "./ibkr-sync-timezone";
+import { filterEnabledSyncBrokers, isEnabledSyncBroker } from "@/lib/supported-brokers";
 
 /** All broker connectivity goes through @luxalgo/broker-sdk, never direct API code. */
-export { listBrokers };
+export const listBrokers = () => filterEnabledSyncBrokers(sdkListBrokers());
 
 export interface SyncOutcome extends InsertResult {
   accountId: string;
@@ -29,17 +24,14 @@ export const syncAccount = async (accountId: string): Promise<SyncOutcome> => {
   if (account.kind !== "sync" || !account.credentialsEnc) {
     throw new Error("Account is not broker-connected");
   }
-
-  const statementTimeZone = isIbkrSyncAccount(account)
-    ? canonicalImportTimeZone(await getImportTimeZone())
-    : undefined;
-  if (statementTimeZone !== undefined) await assertIbkrSyncTimeZone(account, statementTimeZone);
+  if (!isEnabledSyncBroker(account.broker)) {
+    throw new Error("This account is not available for synchronization.");
+  }
 
   const credentials = decryptJson<Record<string, string>>(account.credentialsEnc);
   const connection = connect({
     broker: account.broker as BrokerId,
     credentials,
-    ...(statementTimeZone !== undefined ? { statementTimeZone } : {}),
     // Some brokers rotate tokens on every fetch (Questrade): persist or die.
     onCredentialsRotated: async (next: Record<string, string>) => {
       await db
@@ -70,14 +62,6 @@ export const syncAccount = async (accountId: string): Promise<SyncOutcome> => {
   const equity = snapshot.accounts.reduce((total, a) => total + a.equity, 0);
   const positions = snapshot.accounts.flatMap((a) => a.positions);
   const result = await db.transaction(async (tx) => {
-    if (statementTimeZone !== undefined) {
-      const [current] = await tx.select().from(accounts).where(eq(accounts.id, accountId)).limit(1);
-      requireValue(
-        current && isIbkrSyncAccount(current) && current.credentialsEnc === account.credentialsEnc,
-        "The IBKR connection changed during sync. Try again.",
-      );
-      await assertIbkrSyncTimeZone(current, statementTimeZone, tx);
-    }
     // Validation, history provenance, deduplication and sync status commit together.
     const inserted = await insertExecutionsInTransaction(tx, accountId, timed, "sync");
     await tx
@@ -85,9 +69,6 @@ export const syncAccount = async (accountId: string): Promise<SyncOutcome> => {
       .set({
         lastSyncAt: syncedAt,
         snapshotJson: JSON.stringify({ equity, positions, fetchedAt: snapshot.fetchedAt }),
-        ...(statementTimeZone !== undefined && inserted.inserted > 0
-          ? { ibkrSyncTimeZone: statementTimeZone }
-          : {}),
       })
       .where(eq(accounts.id, accountId));
     return inserted;
@@ -95,11 +76,7 @@ export const syncAccount = async (accountId: string): Promise<SyncOutcome> => {
   if (untimed > 0) {
     result.skipped += untimed;
     if (result.skippedReasons.length < 5)
-      result.skippedReasons.push(
-        statementTimeZone !== undefined
-          ? `${untimed} fill(s) had no usable timestamp. Check for missing or invalid dates, unsupported timezone suffixes, or ambiguous or nonexistent daylight-saving times.`
-          : `${untimed} fill(s) had no usable timestamp.`,
-      );
+      result.skippedReasons.push(`${untimed} fill(s) had no usable timestamp.`);
   }
 
   return { accountId, ...result, equity, positions: positions.length, syncedAt };

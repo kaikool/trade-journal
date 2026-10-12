@@ -1,31 +1,27 @@
 import { afterAll, beforeEach, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { eq } from "drizzle-orm";
+import { createTestDatabase } from "./helpers/postgres";
 
-const previousDir = process.env.JOURNAL_DATA_DIR;
-const scratch = mkdtempSync(join(tmpdir(), "journal-format-regression-"));
-process.env.JOURNAL_DATA_DIR = scratch;
+const testDatabase = await createTestDatabase();
+(globalThis as { __journalTestDb?: unknown }).__journalTestDb = testDatabase.db;
+vi.resetModules();
 const { db, accounts, executions, trades } = await import("../src/db");
 const { POST } = await import("../src/app/api/import/route");
 const post = (body: object) =>
   POST(new Request("http://localhost/api/import", { method: "POST", body: JSON.stringify(body) }));
-beforeEach(() => {
+beforeEach(async () => {
   vi.stubEnv("JOURNAL_PASSWORD", "");
-  db.delete(trades).run();
-  db.delete(executions).run();
-  db.delete(accounts).run();
-  db.insert(accounts)
-    .values({ id: "test", name: "Regression", kind: "import", createdAt: "2026-01-01" })
-    .run();
+  await db.delete(trades);
+  await db.delete(executions);
+  await db.delete(accounts);
+  await db
+    .insert(accounts)
+    .values({ id: "test", name: "Regression", kind: "import", createdAt: "2026-01-01" });
 });
-afterAll(() => {
+afterAll(async () => {
+  delete (globalThis as { __journalTestDb?: unknown }).__journalTestDb;
   vi.unstubAllEnvs();
-  db.$client.close();
-  if (previousDir === undefined) delete process.env.JOURNAL_DATA_DIR;
-  else process.env.JOURNAL_DATA_DIR = previousDir;
-  rmSync(scratch, { recursive: true, force: true });
+  await testDatabase.close();
 });
 
 // Synthetic, independently calculable round trips. This checks API/storage
@@ -116,11 +112,11 @@ it.each(cases)(
     const preview = await post({ mode: "preview", content, timeZone: "UTC", accountId: "test" });
     expect(preview.status).toBe(200);
     expect(await preview.json()).toMatchObject({ detected: format, totals: { executions: 2 } });
-    expect(db.select().from(executions).all()).toHaveLength(0);
+    expect(await db.select().from(executions)).toHaveLength(0);
     const first = await post({ mode: "commit", content, timeZone: "UTC", accountId: "test" });
     expect(first.status).toBe(200);
     expect(await first.json()).toMatchObject({ inserted: 2, duplicates: 0 });
-    const saved = db.select().from(trades).all();
+    const saved = await db.select().from(trades);
     expect(saved).toHaveLength(1);
     expect(saved[0]).toMatchObject({
       direction: "long",
@@ -128,15 +124,15 @@ it.each(cases)(
       openQuantity: 0,
       netPnl: pnl,
     });
-    db.update(trades)
+    await db
+      .update(trades)
       .set({ notes: "Keep review", rating: 5 })
-      .where(eq(trades.key, saved[0]!.key))
-      .run();
+      .where(eq(trades.key, saved[0]!.key));
     const repeat = await post({ mode: "commit", content, timeZone: "UTC", accountId: "test" });
     expect(repeat.status).toBe(200);
     expect(await repeat.json()).toMatchObject({ inserted: 0, duplicates: 2 });
-    expect(db.select().from(executions).all()).toHaveLength(2);
-    expect(db.select().from(trades).all()[0]).toMatchObject({
+    expect(await db.select().from(executions)).toHaveLength(2);
+    expect((await db.select().from(trades))[0]).toMatchObject({
       key: saved[0]!.key,
       netPnl: pnl,
       notes: "Keep review",
@@ -156,14 +152,14 @@ it.each(["UTC", "America/New_York"])(
       ...row,
       executedAt: legacyExecutedAt!,
     }));
-    insertExecutions("test", legacy, "import");
-    const before = db.select().from(executions).all();
-    db.update(trades).set({ notes: "Legacy review" }).run();
+    await insertExecutions("test", legacy, "import");
+    const before = await db.select().from(executions);
+    await db.update(trades).set({ notes: "Legacy review" });
     const response = await post({ mode: "commit", content, accountId: "test", timeZone });
     expect(response.status).toBe(400);
     expect((await response.json()).error).toContain("older parser");
-    expect(db.select().from(executions).all()).toEqual(before);
-    expect(db.select().from(trades).all()[0]?.notes).toBe("Legacy review");
+    expect(await db.select().from(executions)).toEqual(before);
+    expect((await db.select().from(trades))[0]?.notes).toBe("Legacy review");
   },
 );
 
@@ -175,7 +171,7 @@ it("blocks reimports over rounded fractional timestamps without affecting manual
     .replace("10:00:00", "10:00:00.456");
   const { parseAuto } = await import("@luxalgo/journal-importers");
   const parsed = parseAuto(content, { timeZone: "UTC" })!;
-  insertExecutions(
+  await insertExecutions(
     "test",
     parsed.executions.map((row) => ({
       ...row,
@@ -183,9 +179,9 @@ it("blocks reimports over rounded fractional timestamps without affecting manual
     })),
     "import",
   );
-  const before = db.select().from(executions).all();
+  const before = await db.select().from(executions);
   const response = await post({ mode: "commit", content, accountId: "test", timeZone: "UTC" });
   expect(response.status).toBe(400);
-  expect(db.select().from(executions).all()).toEqual(before);
-  expect(insertExecutions("test", parsed.executions, "manual").inserted).toBe(2);
+  expect(await db.select().from(executions)).toEqual(before);
+  expect((await insertExecutions("test", parsed.executions, "manual")).inserted).toBe(2);
 });

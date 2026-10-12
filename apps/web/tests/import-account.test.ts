@@ -1,11 +1,9 @@
 import { afterAll, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { createTestDatabase } from "./helpers/postgres";
 
-const previous = process.env.JOURNAL_DATA_DIR;
-const scratch = mkdtempSync(join(tmpdir(), "journal-import-account-"));
-process.env.JOURNAL_DATA_DIR = scratch;
+const testDatabase = await createTestDatabase();
+(globalThis as { __journalTestDb?: unknown }).__journalTestDb = testDatabase.db;
+vi.resetModules();
 vi.stubEnv("JOURNAL_PASSWORD", "");
 vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => undefined }) }));
 const { POST, GET } = await import("../src/app/api/accounts/route");
@@ -31,7 +29,7 @@ it("creates an import destination with the chosen currency/balance and accepts f
   expect(listed.accounts).toMatchObject([
     { id, name: "Import verification", kind: "import", currency: "USD", initialBalance: 50000 },
   ]);
-  insertExecutions(
+  await insertExecutions(
     id,
     [
       {
@@ -55,16 +53,14 @@ it("creates an import destination with the chosen currency/balance and accepts f
     ],
     "import",
   );
-  expect(db.select().from(executions).all()).toHaveLength(2);
-  expect(db.select().from(trades).all()).toMatchObject([
+  expect(await db.select().from(executions)).toHaveLength(2);
+  expect(await db.select().from(trades)).toMatchObject([
     { accountId: id, status: "win", netPnl: 9.3 },
   ]);
 });
 
-afterAll(() => {
-  db.$client.close();
+afterAll(async () => {
+  delete (globalThis as { __journalTestDb?: unknown }).__journalTestDb;
   vi.unstubAllEnvs();
-  if (previous === undefined) delete process.env.JOURNAL_DATA_DIR;
-  else process.env.JOURNAL_DATA_DIR = previous;
-  rmSync(scratch, { recursive: true, force: true });
+  await testDatabase.close();
 });

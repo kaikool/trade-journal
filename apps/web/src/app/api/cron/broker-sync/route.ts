@@ -1,7 +1,8 @@
 import { timingSafeEqual } from "node:crypto";
-import { and, asc, eq, isNull } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { accounts, db } from "@/db";
 import { syncAccount } from "@/server/sync";
+import { ENABLED_SYNC_BROKER_IDS } from "@/lib/supported-brokers";
 
 export const maxDuration = 300;
 
@@ -22,7 +23,14 @@ export async function GET(request: Request): Promise<Response> {
   const enabled = await db
     .select({ id: accounts.id })
     .from(accounts)
-    .where(and(eq(accounts.kind, "sync"), eq(accounts.autoSync, true), isNull(accounts.archivedAt)))
+    .where(
+      and(
+        eq(accounts.kind, "sync"),
+        eq(accounts.autoSync, true),
+        isNull(accounts.archivedAt),
+        inArray(accounts.broker, [...ENABLED_SYNC_BROKER_IDS]),
+      ),
+    )
     .orderBy(asc(accounts.createdAt));
 
   let synced = 0;

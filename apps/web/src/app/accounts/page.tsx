@@ -26,6 +26,7 @@ import { postJson, useApi } from "@/lib/use-api";
 import { fmtMoney } from "@/lib/utils";
 import { MonetaryValue, MonetaryField } from "@/components/privacy";
 import { DailyAutoSyncToggle } from "@/components/daily-auto-sync-toggle";
+import { isEnabledSyncBroker } from "@/lib/supported-brokers";
 
 interface AccountRow {
   id: string;
@@ -120,14 +121,15 @@ function Accounts() {
                 <Badge variant="secondary" className="mt-1.5 mr-2">
                   {account.kind}
                 </Badge>
-                {account.broker && (
-                  <span className="text-xs font-normal text-muted-foreground">
-                    {account.broker}
-                  </span>
-                )}
+                {account.broker &&
+                  (account.kind !== "sync" || isEnabledSyncBroker(account.broker)) && (
+                    <span className="text-xs font-normal text-muted-foreground">
+                      {account.broker}
+                    </span>
+                  )}
               </CardTitle>
               <div className="ml-auto flex shrink-0 items-center gap-1">
-                {account.kind === "sync" && (
+                {account.kind === "sync" && isEnabledSyncBroker(account.broker) && (
                   <Button
                     variant="ghost"
                     size="icon"
@@ -183,13 +185,15 @@ function Accounts() {
                   </span>
                 </div>
               )}
-              {account.kind === "sync" && !account.archivedAt && (
-                <DailyAutoSyncToggle
-                  accountId={account.id}
-                  enabled={account.autoSync}
-                  onSaved={refresh}
-                />
-              )}
+              {account.kind === "sync" &&
+                isEnabledSyncBroker(account.broker) &&
+                !account.archivedAt && (
+                  <DailyAutoSyncToggle
+                    accountId={account.id}
+                    enabled={account.autoSync}
+                    onSaved={refresh}
+                  />
+                )}
               <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-2">
                 <div className="min-w-0">
                   <label className="mb-1 block text-xs text-muted-foreground">

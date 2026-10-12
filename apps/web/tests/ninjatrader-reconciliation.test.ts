@@ -1,12 +1,11 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { eq } from "drizzle-orm";
 import type { ImportReview, ImportReviewOptions } from "../src/lib/import-review";
-const previousDir = process.env.JOURNAL_DATA_DIR;
-const scratch = mkdtempSync(join(tmpdir(), "journal-reconciliation-"));
-process.env.JOURNAL_DATA_DIR = scratch;
+import { createTestDatabase } from "./helpers/postgres";
+
+const testDatabase = await createTestDatabase();
+(globalThis as { __journalTestDb?: unknown }).__journalTestDb = testDatabase.db;
+vi.resetModules();
 const {
   db,
   accounts,
@@ -47,44 +46,40 @@ async function commit(content = csv(), review: ImportReviewOptions = {}, account
     review: { ...review, previewToken: plan.token ?? undefined },
   });
 }
-const rows = () => db.select().from(trades).where(eq(trades.accountId, "test")).all();
-const state = () => ({
-  executions: db.select().from(executions).all(),
-  trades: db.select().from(trades).all(),
-  sources: db.select().from(importSources).all(),
-  aliases: db.select().from(importSourceAliases).all(),
-  batches: db.select().from(importBatches).all(),
-  attachments: db.select().from(attachments).all(),
+const rows = () => db.select().from(trades).where(eq(trades.accountId, "test"));
+const state = async () => ({
+  executions: await db.select().from(executions),
+  trades: await db.select().from(trades),
+  sources: await db.select().from(importSources),
+  aliases: await db.select().from(importSourceAliases),
+  batches: await db.select().from(importBatches),
+  attachments: await db.select().from(attachments),
 });
-beforeEach(() => {
+beforeEach(async () => {
   vi.stubEnv("JOURNAL_PASSWORD", "");
-  db.delete(attachments).run();
-  db.delete(trades).run();
-  db.delete(executions).run();
-  db.delete(accounts).run();
-  db.delete(settings).run();
-  db.insert(accounts)
-    .values(
-      ["test", "other"].map((id) => ({
-        id,
-        name: id,
-        kind: "import" as const,
-        createdAt: "2026-01-01",
-      })),
-    )
-    .run();
+  await db.delete(attachments);
+  await db.delete(trades);
+  await db.delete(executions);
+  await db.delete(accounts);
+  await db.delete(settings);
+  await db.insert(accounts).values(
+    ["test", "other"].map((id) => ({
+      id,
+      name: id,
+      kind: "import" as const,
+      createdAt: "2026-01-01",
+    })),
+  );
 });
-afterAll(() => {
+afterAll(async () => {
+  delete (globalThis as { __journalTestDb?: unknown }).__journalTestDb;
   vi.unstubAllEnvs();
-  db.$client.close();
-  if (previousDir === undefined) delete process.env.JOURNAL_DATA_DIR;
-  else process.env.JOURNAL_DATA_DIR = previousDir;
-  rmSync(scratch, { recursive: true, force: true });
+  await testDatabase.close();
 });
 
 describe("NinjaTrader review protects identity and source corrections", () => {
   it("does not write while previewing and requires the reviewed token", async () => {
-    const before = state(),
+    const before = await state(),
       plan = await preview();
     expect(plan).toMatchObject({
       inserted: 2,
@@ -93,7 +88,7 @@ describe("NinjaTrader review protects identity and source corrections", () => {
       totals: { netPnl: 10, closedTrades: 1, openTrades: 0 },
     });
     expect(plan.token).toBeTruthy();
-    expect(state()).toEqual(before);
+    expect(await state()).toEqual(before);
     const response = await post({
       mode: "commit",
       content: csv(),
@@ -101,7 +96,7 @@ describe("NinjaTrader review protects identity and source corrections", () => {
       timeZone: "UTC",
     });
     expect(response.status).toBe(400);
-    expect(state()).toEqual(before);
+    expect(await state()).toEqual(before);
   });
 
   it("exports the source identity, aliases and import history with journal data", async () => {
@@ -110,9 +105,10 @@ describe("NinjaTrader review protects identity and source corrections", () => {
     const response = await GET(new Request("http://localhost/api/export"));
     expect(response.status).toBe(200);
     const data = await response.json();
-    expect(data.importSources).toEqual(state().sources);
-    expect(data.importSourceAliases).toEqual(state().aliases);
-    expect(data.importBatches).toEqual(state().batches);
+    const currentState = await state();
+    expect(data.importSources).toEqual(currentState.sources);
+    expect(data.importSourceAliases).toEqual(currentState.aliases);
+    expect(data.importBatches).toEqual(currentState.batches);
     expect(data.executions).toHaveLength(2);
     expect(JSON.parse(data.executions[0].importMetadataJson).ninjaTrader.sourceId).toBe(
       data.importSources[0].id,
@@ -123,11 +119,11 @@ describe("NinjaTrader review protects identity and source corrections", () => {
     "blocks malformed commission %s without changing the journal",
     async (value) => {
       await commit();
-      const before = state();
+      const before = await state();
       const changed = csv([buy.replace(/,0$/, `,${value}`), sell]);
       expect((await preview(changed)).conflicts.join(" ")).toContain("invalid commission");
       expect((await commit(changed)).status).toBe(400);
-      expect(state()).toEqual(before);
+      expect(await state()).toEqual(before);
     },
   );
 
@@ -135,14 +131,12 @@ describe("NinjaTrader review protects identity and source corrections", () => {
     const content = csv([buy.replace(/,0$/, ","), sell.replace(/,0$/, ",")]);
     const plan = await preview(content);
     expect(plan.totals?.netPnl).toBe(10);
-    db.insert(settings)
-      .values({
-        key: "journalDefaults",
-        value: JSON.stringify({
-          feeRules: [{ id: "f", accountId: "test", symbol: "", amount: 1, mode: "execution" }],
-        }),
-      })
-      .run();
+    await db.insert(settings).values({
+      key: "journalDefaults",
+      value: JSON.stringify({
+        feeRules: [{ id: "f", accountId: "test", symbol: "", amount: 1, mode: "execution" }],
+      }),
+    });
     expect(
       (
         await post({
@@ -154,18 +148,18 @@ describe("NinjaTrader review protects identity and source corrections", () => {
         })
       ).status,
     ).toBe(400);
-    expect(state().executions).toHaveLength(0);
+    expect((await state()).executions).toHaveLength(0);
     expect((await preview(content)).totals?.netPnl).toBe(8);
     expect((await commit(content)).status).toBe(200);
     // Defaults do not retroactively change already imported executions on reimport.
-    db.update(settings)
+    await db
+      .update(settings)
       .set({
         value: JSON.stringify({
           feeRules: [{ id: "f", accountId: "test", symbol: "", amount: 2, mode: "execution" }],
         }),
       })
-      .where(eq(settings.key, "journalDefaults"))
-      .run();
+      .where(eq(settings.key, "journalDefaults"));
     expect((await preview(content)).totals?.netPnl).toBe(8);
     expect(await (await commit(content)).json()).toMatchObject({
       inserted: 0,
@@ -178,7 +172,7 @@ describe("NinjaTrader review protects identity and source corrections", () => {
     "requires source reconciliation when %s changes",
     async (change) => {
       expect((await commit()).status).toBe(200);
-      const original = state();
+      const original = await state();
       const changed =
         change === "connection"
           ? csv().replaceAll(",broker,", ",renamed,")
@@ -187,7 +181,7 @@ describe("NinjaTrader review protects identity and source corrections", () => {
       expect(plan.token).toBeNull();
       expect(plan.conflicts.join(" ")).toContain("choose its saved source");
       expect((await commit(changed)).status).toBe(400);
-      expect(state()).toEqual(original);
+      expect(await state()).toEqual(original);
       const source = original.sources[0]!;
       const mapping = { sourceMappings: { [plan.sources[0]!.key]: source.id } };
       const resolved = await preview(changed, mapping);
@@ -201,8 +195,8 @@ describe("NinjaTrader review protects identity and source corrections", () => {
         inserted: 0,
         duplicates: 2,
       });
-      expect(rows().map((t) => t.key)).toEqual(original.trades.map((t) => t.key));
-      expect(db.select().from(importSourceAliases).all()).toHaveLength(2);
+      expect((await rows()).map((t) => t.key)).toEqual(original.trades.map((t) => t.key));
+      expect(await db.select().from(importSourceAliases)).toHaveLength(2);
       expect((await preview(changed)).token).toBeTruthy();
     },
   );
@@ -213,13 +207,13 @@ describe("NinjaTrader review protects identity and source corrections", () => {
     const plan = await preview(other);
     const options = { sourceMappings: { [plan.sources[0]!.key]: "new" } };
     expect((await commit(other, options)).status).toBe(200);
-    expect(rows()).toHaveLength(2);
-    expect(rows().reduce((sum, t) => sum + t.netPnl, 0)).toBe(20);
+    expect(await rows()).toHaveLength(2);
+    expect((await rows()).reduce((sum, t) => sum + t.netPnl, 0)).toBe(20);
   });
 
   it("rejects mappings to another destination or reassignment of a saved source", async () => {
     await commit(csv(), {}, "other");
-    const foreign = db.select().from(importSources).all()[0]!;
+    const foreign = (await db.select().from(importSources))[0]!;
     const plan = await preview();
     expect(
       (await commit(csv(), { sourceMappings: { [plan.sources[0]!.key]: foreign.id } })).status,
@@ -232,42 +226,40 @@ describe("NinjaTrader review protects identity and source corrections", () => {
 
   it("shows fee corrections, requires approval and preserves execution IDs, reviews and attachments", async () => {
     await commit();
-    const original = state();
-    const key = rows()[0]!.key;
-    db.update(trades)
+    const original = await state();
+    const key = (await rows())[0]!.key;
+    await db
+      .update(trades)
       .set({
         notes: "Keep this review",
         rating: 5,
         tagsJson: '["setup"]',
         reviewedAt: "2026-09-15",
       })
-      .where(eq(trades.key, key))
-      .run();
-    db.insert(attachments)
-      .values({
-        id: "chart",
-        ownerType: "trade",
-        ownerId: key,
-        name: "chart.png",
-        mime: "image/png",
-        size: 3,
-        data: Buffer.from([1, 2, 3]),
-        createdAt: "2026-09-15",
-      })
-      .run();
+      .where(eq(trades.key, key));
+    await db.insert(attachments).values({
+      id: "chart",
+      ownerType: "trade",
+      ownerId: key,
+      name: "chart.png",
+      mime: "image/png",
+      size: 3,
+      storagePath: `attachments/trade/${key}/chart.png`,
+      createdAt: "2026-09-15",
+    });
     const corrected = csv([buy.replace(/,0$/, ",1"), sell.replace(/,0$/, ",1")]);
     const plan = await preview(corrected);
     expect(plan.corrections).toHaveLength(2);
     expect(plan.token).toBeNull();
     expect(plan.totals?.netPnl).toBe(8);
-    const before = state();
+    const before = await state();
     expect((await commit(corrected)).status).toBe(400);
-    expect(state()).toEqual(before);
+    expect(await state()).toEqual(before);
     expect(await (await commit(corrected, { approveFeeCorrections: true })).json()).toMatchObject({
       inserted: 0,
       corrected: 2,
     });
-    expect(rows()[0]).toMatchObject({
+    expect((await rows())[0]).toMatchObject({
       key,
       notes: "Keep this review",
       rating: 5,
@@ -276,12 +268,10 @@ describe("NinjaTrader review protects identity and source corrections", () => {
       netPnl: 8,
       fees: 2,
     });
-    expect(
-      state()
-        .executions.map((e) => e.id)
-        .sort(),
-    ).toEqual(original.executions.map((e) => e.id).sort());
-    expect(state().attachments).toEqual(before.attachments);
+    expect((await state()).executions.map((e) => e.id).sort()).toEqual(
+      original.executions.map((e) => e.id).sort(),
+    );
+    expect((await state()).attachments).toEqual(before.attachments);
     expect(await (await commit(corrected)).json()).toMatchObject({
       inserted: 0,
       duplicates: 2,
@@ -296,9 +286,9 @@ describe("NinjaTrader review protects identity and source corrections", () => {
     csv([buy.replace("AAPL", "MSFT"), sell]),
   ])("blocks changes to existing native execution economics", async (changed) => {
     await commit();
-    const before = state();
+    const before = await state();
     expect((await commit(changed)).status).toBe(400);
-    expect(state()).toEqual(before);
+    expect(await state()).toEqual(before);
   });
 
   it("rejects contradictory commissions under the same ID within a file", async () => {
@@ -306,12 +296,12 @@ describe("NinjaTrader review protects identity and source corrections", () => {
     const plan = await preview(contradictory);
     expect(plan.conflicts.join(" ")).toContain("contradictory");
     expect((await commit(contradictory)).status).toBe(400);
-    expect(state().executions).toHaveLength(0);
+    expect((await state()).executions).toHaveLength(0);
   });
 
   it("rejects changed statement timezone for a saved source", async () => {
     await commit();
-    const before = state();
+    const before = await state();
     const response = await post({
       mode: "preview",
       content: csv(),
@@ -321,7 +311,7 @@ describe("NinjaTrader review protects identity and source corrections", () => {
     const plan = (await response.json()).reconciliation;
     expect(plan.conflicts.join(" ")).toContain("different statement timezone");
     expect(plan.token).toBeNull();
-    expect(state()).toEqual(before);
+    expect(await state()).toEqual(before);
   });
 
   it("invalidates a preview when the journal or account currency changes", async () => {
@@ -335,11 +325,11 @@ describe("NinjaTrader review protects identity and source corrections", () => {
       review: { previewToken: plan.token },
     });
     expect(stale.status).toBe(400);
-    expect(state().executions).toHaveLength(2);
+    expect((await state()).executions).toHaveLength(2);
     const next = await preview();
-    db.insert(settings).values({ key: "journalDefaults", value: '{"feeRules":[]}' }).run();
+    await db.insert(settings).values({ key: "journalDefaults", value: '{"feeRules":[]}' });
     // Equivalent settings do not needlessly invalidate the semantic plan.
-    db.update(accounts).set({ currency: "EUR" }).where(eq(accounts.id, "test")).run();
+    await db.update(accounts).set({ currency: "EUR" }).where(eq(accounts.id, "test"));
     expect(
       (
         await post({
@@ -354,11 +344,15 @@ describe("NinjaTrader review protects identity and source corrections", () => {
   });
 
   it("rolls back source mappings, fills and history when rebuilding fails", async () => {
-    const before = state();
+    const before = await state();
     const plan = await preview();
-    db.$client.exec(
-      "CREATE TRIGGER fail_review BEFORE INSERT ON trades BEGIN SELECT RAISE(FAIL, 'rebuild failure'); END",
-    );
+    await testDatabase.client.exec(`
+      CREATE FUNCTION reject_review_trade() RETURNS trigger AS $$
+      BEGIN RAISE EXCEPTION 'rebuild failure'; END;
+      $$ LANGUAGE plpgsql;
+      CREATE TRIGGER fail_review BEFORE INSERT ON trades
+      FOR EACH ROW EXECUTE FUNCTION reject_review_trade();
+    `);
     try {
       expect(
         (
@@ -371,9 +365,11 @@ describe("NinjaTrader review protects identity and source corrections", () => {
           })
         ).status,
       ).toBe(500);
-      expect(state()).toEqual(before);
+      expect(await state()).toEqual(before);
     } finally {
-      db.$client.exec("DROP TRIGGER fail_review");
+      await testDatabase.client.exec(
+        "DROP TRIGGER fail_review ON trades; DROP FUNCTION reject_review_trade();",
+      );
     }
   });
 });
@@ -388,25 +384,30 @@ describe("NinjaTrader overlapping exports and chronology", () => {
     expect(
       (await commit(content, { sourceMappings: { [plan.sources[0]!.key]: "new" } })).status,
     ).toBe(200);
-    expect(rows()[0]?.netPnl).toBe(10);
+    expect((await rows())[0]?.netPnl).toBe(10);
   });
 
   it.each(["fifo", "lifo", "wavg"] as const)(
     "extends an open position across exports with %s while preserving its review",
     async (method) => {
-      db.update(accounts).set({ profitCalcMethod: method }).where(eq(accounts.id, "test")).run();
+      await db.update(accounts).set({ profitCalcMethod: method }).where(eq(accounts.id, "test"));
       const entry = csv([buy.replace(",1,100,", ",2,100,")]);
       expect((await commit(entry)).status).toBe(200);
-      const key = rows()[0]!.key;
-      db.update(trades)
+      const key = (await rows())[0]!.key;
+      await db
+        .update(trades)
         .set({ notes: "Opening review", rating: 4 })
-        .where(eq(trades.key, key))
-        .run();
+        .where(eq(trades.key, key));
       expect((await commit(csv([sell]))).status).toBe(200);
-      expect(rows()[0]).toMatchObject({ key, openQuantity: 1, notes: "Opening review", rating: 4 });
+      expect((await rows())[0]).toMatchObject({
+        key,
+        openQuantity: 1,
+        notes: "Opening review",
+        rating: 4,
+      });
       const exit = sell.replace("09:31", "09:32").replace("e2", "e3").replace(",110,", ",90,");
       expect((await commit(csv([exit]))).status).toBe(200);
-      expect(rows()[0]).toMatchObject({
+      expect((await rows())[0]).toMatchObject({
         key,
         openQuantity: 0,
         netPnl: 0,
@@ -417,28 +418,24 @@ describe("NinjaTrader overlapping exports and chronology", () => {
   );
 
   it("keeps different futures expiry positions separate even when symbols normalize to the same root", async () => {
-    db.insert(settings).values({ key: "multipliers", value: '{"ES":50}' }).run();
+    await db.insert(settings).values({ key: "multipliers", value: '{"ES":50}' });
     const content = csv([buy.replace("AAPL", "ES 09-26"), sell.replace("AAPL", "ES 12-26")]);
     expect((await commit(content)).status).toBe(200);
-    expect(rows()).toHaveLength(2);
-    expect(
-      rows()
-        .map((t) => t.direction)
-        .sort(),
-    ).toEqual(["long", "short"]);
-    expect(rows().every((t) => t.openQuantity === 1)).toBe(true);
+    expect(await rows()).toHaveLength(2);
+    expect((await rows()).map((t) => t.direction).sort()).toEqual(["long", "short"]);
+    expect((await rows()).every((t) => t.openQuantity === 1)).toBe(true);
   });
 
   it("rejects earlier history that would replace an annotated trade identity", async () => {
     await commit();
-    db.update(trades).set({ notes: "Must survive" }).run();
-    const before = state();
+    await db.update(trades).set({ notes: "Must survive" });
+    const before = await state();
     const earlier = csv([buy.replace("09:30", "09:29").replace("e1", "earlier")]);
     expect((await preview(earlier)).conflicts.join(" ")).toContain(
       "replace existing trade identities",
     );
     expect((await commit(earlier)).status).toBe(400);
-    expect(state()).toEqual(before);
+    expect(await state()).toEqual(before);
   });
 
   it("reconstructs an explicit reversal into a closed long and a new short", async () => {
@@ -449,12 +446,8 @@ describe("NinjaTrader overlapping exports and chronology", () => {
       buy.replace("09:30", "09:32").replace(",100,", ",105,").replace("e1", "e3") + ",Exit",
     ].join("\n");
     expect((await commit(content)).status).toBe(200);
-    expect(rows()).toHaveLength(2);
-    expect(
-      rows()
-        .map((t) => [t.direction, t.netPnl])
-        .sort(),
-    ).toEqual([
+    expect(await rows()).toHaveLength(2);
+    expect((await rows()).map((t) => [t.direction, t.netPnl]).sort()).toEqual([
       ["long", 10],
       ["short", 5],
     ]);
@@ -462,7 +455,7 @@ describe("NinjaTrader overlapping exports and chronology", () => {
 
   it("recognizes repeat/reordered snapshots but requires a completeness declaration for a changed overlap", async () => {
     await commit(noIds());
-    const before = state();
+    const before = await state();
     const [head, ...body] = noIds().split("\n");
     expect(await (await commit([head, ...body.reverse()].join("\n"))).json()).toMatchObject({
       inserted: 0,
@@ -478,12 +471,12 @@ describe("NinjaTrader overlapping exports and chronology", () => {
     expect(plan.needsCompleteHistory).toBe(true);
     expect(plan.token).toBeNull();
     expect((await commit(growing)).status).toBe(400);
-    expect(state().executions).toEqual(before.executions);
+    expect((await state()).executions).toEqual(before.executions);
     expect(await (await commit(growing, { completeHistory: true })).json()).toMatchObject({
       inserted: 2,
       duplicates: 2,
     });
-    expect(rows()[0]).toMatchObject({ quantity: 2, netPnl: 20, openQuantity: 0 });
+    expect((await rows())[0]).toMatchObject({ quantity: 2, netPnl: 20, openQuantity: 0 });
     expect(await (await commit(noIds())).json()).toMatchObject({ inserted: 0, duplicates: 2 });
   });
 
@@ -494,7 +487,7 @@ describe("NinjaTrader overlapping exports and chronology", () => {
       buy.replace("09:30", "09:32").replace(",e1,", ",,"),
     ]);
     await commit(first);
-    const before = state();
+    const before = await state();
     const partial = csv([
       buy.replace(",e1,", ",,"),
       buy.replace("09:30", "09:32").replace(",e1,", ",,"),
@@ -502,7 +495,7 @@ describe("NinjaTrader overlapping exports and chronology", () => {
     const plan = await preview(partial, { completeHistory: true });
     expect(plan.conflicts.join(" ")).toContain("omits or changes");
     expect((await commit(partial, { completeHistory: true })).status).toBe(400);
-    expect(state()).toEqual(before);
+    expect(await state()).toEqual(before);
   });
 
   it("blocks arbitrary same-time entry/exit ordering without supporting facts", async () => {
@@ -511,7 +504,7 @@ describe("NinjaTrader overlapping exports and chronology", () => {
     expect(plan.conflicts.join(" ")).toContain("order is ambiguous");
     expect(plan.token).toBeNull();
     expect((await commit(tied)).status).toBe(400);
-    expect(state().executions).toHaveLength(0);
+    expect((await state()).executions).toHaveLength(0);
   });
 
   it("uses millisecond precision to order opposing fills without Entry/Exit labels", async () => {
@@ -523,7 +516,7 @@ describe("NinjaTrader overlapping exports and chronology", () => {
     expect(plan.conflicts).toEqual([]);
     expect(plan.totals?.netPnl).toBe(10);
     expect((await commit(content)).status).toBe(200);
-    expect(rows()[0]).toMatchObject({
+    expect((await rows())[0]).toMatchObject({
       direction: "long",
       openedAt: "2026-09-15T09:30:00.100Z",
       closedAt: "2026-09-15T09:30:00.200Z",
@@ -538,7 +531,7 @@ describe("NinjaTrader overlapping exports and chronology", () => {
         exit = sell.replace("09:31", "09:30") + ",Exit";
       const content = [header + ",E/X", ...(reverse ? [exit, entry] : [entry, exit])].join("\n");
       expect((await commit(content)).status).toBe(200);
-      expect(rows()[0]).toMatchObject({ direction: "long", netPnl: 10, openQuantity: 0 });
+      expect((await rows())[0]).toMatchObject({ direction: "long", netPnl: 10, openQuantity: 0 });
     },
   );
 
@@ -555,14 +548,14 @@ describe("NinjaTrader overlapping exports and chronology", () => {
       ...rowsWithFacts.map((row, i) => row + "," + (i + 1)).reverse(),
     ].join("\n");
     expect((await commit(sequenced)).status).toBe(200);
-    expect(rows()).toHaveLength(2);
-    expect(rows().filter((t) => t.status !== "open")[0]?.netPnl).toBe(10);
+    expect(await rows()).toHaveLength(2);
+    expect((await rows()).filter((t) => t.status !== "open")[0]?.netPnl).toBe(10);
   });
 
   it("blocks an exit with missing opening history rather than creating a false short", async () => {
     const content = [header + ",E/X", sell + ",Exit"].join("\n");
     expect((await commit(content)).status).toBe(400);
-    expect(state().executions).toHaveLength(0);
+    expect((await state()).executions).toHaveLength(0);
   });
 
   it("does not silently skip malformed rows in a position reconstruction", async () => {

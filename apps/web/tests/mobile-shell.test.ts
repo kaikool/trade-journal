@@ -35,7 +35,7 @@ beforeEach(() => {
     matches: false,
     addEventListener: () => undefined,
     removeEventListener: () => undefined,
-  })) as typeof window.matchMedia;
+  })) as unknown as typeof window.matchMedia;
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -54,8 +54,10 @@ describe("mobile navigation drawer", () => {
       root.render(
         createElement(
           TooltipProvider,
-          { delayDuration: 0 },
-          createElement(Shell, { children: createElement("main", null, "Content") }),
+          {
+            delayDuration: 0,
+            children: createElement(Shell, { children: createElement("main", null, "Content") }),
+          },
         ),
       ),
     );

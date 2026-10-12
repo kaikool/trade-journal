@@ -1,35 +1,39 @@
-import { afterAll, expect, it } from "vitest";
-import Database from "better-sqlite3";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-const previousDir = process.env.JOURNAL_DATA_DIR;
-const scratch = mkdtempSync(join(tmpdir(), "journal-csv-upgrade-"));
-process.env.JOURNAL_DATA_DIR = scratch;
-const legacy = new Database(join(scratch, "journal.db"));
-legacy.exec(`CREATE TABLE market_csv_datasets (
-  id TEXT PRIMARY KEY, name TEXT NOT NULL, symbol TEXT NOT NULL,
-  resolution TEXT NOT NULL, currency TEXT NOT NULL, price_basis TEXT NOT NULL,
-  bars_json TEXT NOT NULL, imported_at TEXT NOT NULL
-)`);
-const barsJson = JSON.stringify([
-  { time: 1735689600000, open: 100, high: 104, low: 98, close: 102, volume: 0 },
-]);
-legacy
-  .prepare("INSERT INTO market_csv_datasets VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-  .run("legacy", "legacy.csv", "TEST", "1m", "USD", "raw", barsJson, "2025-01-01");
-legacy.close();
+import { afterAll, expect, it, vi } from "vitest";
+import { createTestDatabase } from "./helpers/postgres";
+
+const testDatabase = await createTestDatabase();
+(globalThis as { __journalTestDb?: unknown }).__journalTestDb = testDatabase.db;
+vi.resetModules();
 const { db, marketCsvDatasets } = await import("../src/db");
 const { csvDatasets } = await import("../src/server/market-data/csv");
-it("backfills existing CSV metadata without modifying candle data", () => {
-  expect(csvDatasets()).toMatchObject([
-    { id: "legacy", count: 1, from: "2025-01-01T00:00:00.000Z", to: "2025-01-01T00:01:00.000Z" },
+it("reads CSV dataset metadata from the current Postgres storage schema", async () => {
+  await db.insert(marketCsvDatasets).values({
+    id: "legacy",
+    name: "legacy.csv",
+    symbol: "TEST",
+    resolution: "1m",
+    currency: "USD",
+    priceBasis: "raw",
+    storagePath: "market-data/legacy.json",
+    checksum: "fixture-checksum",
+    formatVersion: 1,
+    importedAt: "2025-01-01T00:00:00.000Z",
+    barCount: 1,
+    firstTime: 1735689600000,
+    lastTime: 1735689600000,
+  });
+  expect(await csvDatasets()).toMatchObject([
+    {
+      id: "legacy",
+      count: 1,
+      from: "2025-01-01T00:00:00.000Z",
+      to: "2025-01-01T00:01:00.000Z",
+    },
   ]);
-  expect(db.select().from(marketCsvDatasets).get()?.barsJson).toBe(barsJson);
+  const [stored] = await db.select().from(marketCsvDatasets);
+  expect(stored).toMatchObject({ storagePath: "market-data/legacy.json", barCount: 1 });
 });
-afterAll(() => {
-  db.$client.close();
-  if (previousDir === undefined) delete process.env.JOURNAL_DATA_DIR;
-  else process.env.JOURNAL_DATA_DIR = previousDir;
-  rmSync(scratch, { recursive: true, force: true });
+afterAll(async () => {
+  delete (globalThis as { __journalTestDb?: unknown }).__journalTestDb;
+  await testDatabase.close();
 });

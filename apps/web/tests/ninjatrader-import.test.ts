@@ -1,14 +1,13 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
 import { eq } from "drizzle-orm";
 import type { ImportReviewOptions } from "../src/lib/import-review";
 import { parseAuto } from "@luxalgo/journal-importers";
+import { createTestDatabase } from "./helpers/postgres";
 
-const originalDir = process.env.JOURNAL_DATA_DIR;
-const scratch = mkdtempSync(join(tmpdir(), "journal-ninjatrader-test-"));
-process.env.JOURNAL_DATA_DIR = scratch;
+const testDatabase = await createTestDatabase();
+(globalThis as { __journalTestDb?: unknown }).__journalTestDb = testDatabase.db;
+vi.resetModules();
 const { db, accounts, executions, trades, settings } = await import("../src/db");
 const { insertExecutions } = await import("../src/server/executions");
 const { rebuildAccount } = await import("../src/server/rebuild");
@@ -51,34 +50,28 @@ const csv = (rows: string[]) =>
     "Instrument,Action,Quantity,Price,Time,Account,Connection,Execution ID,Commission",
     ...rows,
   ].join("\n");
-const accountTrades = () => db.select().from(trades).where(eq(trades.accountId, "test")).all();
+const accountTrades = () => db.select().from(trades).where(eq(trades.accountId, "test"));
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.stubEnv("JOURNAL_PASSWORD", "");
-  db.delete(trades).run();
-  db.delete(executions).run();
-  db.delete(accounts).run();
-  db.delete(settings).run();
-  db.insert(accounts)
-    .values(
-      ["test", "other"].map((id) => ({
-        id,
-        name: id,
-        kind: "import" as const,
-        createdAt: "2026-01-01",
-      })),
-    )
-    .run();
-  db.insert(settings)
-    .values({ key: "multipliers", value: JSON.stringify({ MNQZ6: 2 }) })
-    .run();
+  await db.delete(trades);
+  await db.delete(executions);
+  await db.delete(accounts);
+  await db.delete(settings);
+  await db.insert(accounts).values(
+    ["test", "other"].map((id) => ({
+      id,
+      name: id,
+      kind: "import" as const,
+      createdAt: "2026-01-01",
+    })),
+  );
+  await db.insert(settings).values({ key: "multipliers", value: JSON.stringify({ MNQZ6: 2 }) });
 });
-afterAll(() => {
+afterAll(async () => {
+  delete (globalThis as { __journalTestDb?: unknown }).__journalTestDb;
   vi.unstubAllEnvs();
-  db.$client.close();
-  if (originalDir === undefined) delete process.env.JOURNAL_DATA_DIR;
-  else process.env.JOURNAL_DATA_DIR = originalDir;
-  rmSync(scratch, { recursive: true, force: true });
+  await testDatabase.close();
 });
 
 describe("NinjaTrader imports through preview, storage and rebuild", () => {
@@ -91,12 +84,12 @@ describe("NinjaTrader imports through preview, storage and rebuild", () => {
     expect(preview.totals).toMatchObject({ executions: 26, skippedRows: 0 });
     expect(preview.errors).toEqual([]);
     expect(preview.warnings.join(" ")).toContain("5 source accounts");
-    expect(db.select().from(executions).all()).toHaveLength(0);
+    expect(await db.select().from(executions)).toHaveLength(0);
     const response = await commit();
     expect(response.status).toBe(200);
     expect(await response.json()).toMatchObject({ inserted: 26, duplicates: 0, skipped: 0 });
-    expect(db.select().from(executions).all()).toHaveLength(26);
-    const saved = accountTrades();
+    expect(await db.select().from(executions)).toHaveLength(26);
+    const saved = await accountTrades();
     expect(saved).toHaveLength(5);
     expect(
       saved.every(
@@ -109,27 +102,25 @@ describe("NinjaTrader imports through preview, storage and rebuild", () => {
 
   it("deduplicates original and reordered reimports without changing trade keys or annotations", async () => {
     await commit();
-    const saved = accountTrades();
+    const saved = await accountTrades();
     const key = saved[0]!.key;
-    db.update(trades).set({ notes: "Keep my review", rating: 5 }).where(eq(trades.key, key)).run();
+    await db.update(trades).set({ notes: "Keep my review", rating: 5 }).where(eq(trades.key, key));
     const [header, ...rows] = sample.trim().split(/\r?\n/);
     for (const content of [sample, [header, ...rows.toReversed()].join("\n")]) {
       const response = await commit(content);
       expect(response.status).toBe(200);
       expect(await response.json()).toMatchObject({ inserted: 0, duplicates: 26 });
     }
-    rebuildAccount("test");
-    expect(
-      accountTrades()
-        .map((t) => t.key)
-        .sort(),
-    ).toEqual(saved.map((t) => t.key).sort());
-    expect(db.select().from(trades).where(eq(trades.key, key)).get()).toMatchObject({
+    await rebuildAccount("test");
+    expect((await accountTrades()).map((t) => t.key).sort()).toEqual(
+      saved.map((t) => t.key).sort(),
+    );
+    expect((await db.select().from(trades).where(eq(trades.key, key)).limit(1))[0]).toMatchObject({
       notes: "Keep my review",
       rating: 5,
       netPnl: 1053,
     });
-    expect(db.select().from(executions).all()).toHaveLength(26);
+    expect(await db.select().from(executions)).toHaveLength(26);
   });
 
   it("reconciles a complete growing export and permits independent destination accounts", async () => {
@@ -142,8 +133,8 @@ describe("NinjaTrader imports through preview, storage and rebuild", () => {
       inserted: 2,
       duplicates: 26,
     });
-    expect(accountTrades()).toHaveLength(6);
-    expect(accountTrades().reduce((sum, t) => sum + t.netPnl, 0)).toBe(5269);
+    expect(await accountTrades()).toHaveLength(6);
+    expect((await accountTrades()).reduce((sum, t) => sum + t.netPnl, 0)).toBe(5269);
     expect(await (await commit(sample, "other")).json()).toMatchObject({
       inserted: 26,
       duplicates: 0,
@@ -158,12 +149,8 @@ describe("NinjaTrader imports through preview, storage and rebuild", () => {
       "AAPL,Sell,2,100,2026-09-15 09:30,B,broker,e1,0",
     ]);
     expect(await (await commit(content)).json()).toMatchObject({ inserted: 3, duplicates: 1 });
-    expect(accountTrades()).toHaveLength(2);
-    expect(
-      accountTrades()
-        .map((t) => [t.direction, t.openQuantity])
-        .sort(),
-    ).toEqual([
+    expect(await accountTrades()).toHaveLength(2);
+    expect((await accountTrades()).map((t) => [t.direction, t.openQuantity]).sort()).toEqual([
       ["long", 2],
       ["short", 2],
     ]);
@@ -171,15 +158,18 @@ describe("NinjaTrader imports through preview, storage and rebuild", () => {
 
   it("blocks reimports into an account containing legacy lossy fills, without touching reviews", async () => {
     const old = parseAuto(sample)!.executions.map(({ importMetadata, ninjaTrader, ...row }) => row);
-    expect(insertExecutions("test", old, "import")).toMatchObject({ inserted: 5, duplicates: 21 });
-    const key = accountTrades()[0]!.key;
-    db.update(trades).set({ notes: "Existing review", rating: 4 }).where(eq(trades.key, key)).run();
-    const before = db.select().from(executions).all();
+    expect(await insertExecutions("test", old, "import")).toMatchObject({
+      inserted: 5,
+      duplicates: 21,
+    });
+    const key = (await accountTrades())[0]!.key;
+    await db.update(trades).set({ notes: "Existing review", rating: 4 }).where(eq(trades.key, key));
+    const before = await db.select().from(executions);
     const response = await commit();
     expect(response.status).toBe(400);
     expect((await response.json()).error).toContain("new journal account");
-    expect(db.select().from(executions).all()).toEqual(before);
-    expect(db.select().from(trades).where(eq(trades.key, key)).get()).toMatchObject({
+    expect(await db.select().from(executions)).toEqual(before);
+    expect((await db.select().from(trades).where(eq(trades.key, key)).limit(1))[0]).toMatchObject({
       notes: "Existing review",
       rating: 4,
     });
@@ -188,12 +178,10 @@ describe("NinjaTrader imports through preview, storage and rebuild", () => {
       duplicates: 0,
     });
     expect(
-      db
-        .select()
-        .from(trades)
-        .where(eq(trades.accountId, "other"))
-        .all()
-        .reduce((sum, t) => sum + t.netPnl, 0),
+      (await db.select().from(trades).where(eq(trades.accountId, "other"))).reduce(
+        (sum, t) => sum + t.netPnl,
+        0,
+      ),
     ).toBe(5265);
   });
 
@@ -207,12 +195,12 @@ describe("NinjaTrader imports through preview, storage and rebuild", () => {
     const response = await commit(changed);
     expect(response.status).toBe(400);
     expect((await response.json()).error).toContain("has changed quantity");
-    expect(db.select().from(executions).all()).toHaveLength(1);
+    expect(await db.select().from(executions)).toHaveLength(1);
     const noIds = original.replace("Execution ID", "Order ID");
     const mixed = await commit(noIds);
     expect(mixed.status).toBe(400);
     expect((await mixed.json()).error).toContain("different execution-ID layouts");
-    expect(db.select().from(executions).all()).toHaveLength(1);
+    expect(await db.select().from(executions)).toHaveLength(1);
   });
 
   it("blocks legacy fills whose fractional seconds were previously lost", async () => {
@@ -223,12 +211,12 @@ describe("NinjaTrader imports through preview, storage and rebuild", () => {
         executedAt: "2026-09-15T09:30:00.000Z",
       }),
     );
-    insertExecutions("test", legacy, "import");
-    const before = db.select().from(executions).all();
+    await insertExecutions("test", legacy, "import");
+    const before = await db.select().from(executions);
     const response = await commit(content);
     expect(response.status).toBe(400);
     expect((await response.json()).error).toContain("legacy fills");
-    expect(db.select().from(executions).all()).toEqual(before);
+    expect(await db.select().from(executions)).toEqual(before);
   });
 
   it("blocks conflicting native IDs in the uploaded file before any write", async () => {
@@ -237,30 +225,28 @@ describe("NinjaTrader imports through preview, storage and rebuild", () => {
       "AAPL,Buy,1,101,2026-09-15 09:30,A,broker,e1,0",
     ]);
     expect((await commit(content)).status).toBe(400);
-    expect(db.select().from(executions).all()).toHaveLength(0);
+    expect(await db.select().from(executions)).toHaveLength(0);
   });
 
   it("preserves reported zero commissions despite account fee defaults", async () => {
-    db.insert(settings)
-      .values({
-        key: "journalDefaults",
-        value: JSON.stringify({
-          feeRules: [{ id: "fee", accountId: "test", symbol: "", amount: 5, mode: "execution" }],
-        }),
-      })
-      .run();
+    await db.insert(settings).values({
+      key: "journalDefaults",
+      value: JSON.stringify({
+        feeRules: [{ id: "fee", accountId: "test", symbol: "", amount: 5, mode: "execution" }],
+      }),
+    });
     const content = csv([
       "AAPL,Buy,1,100,2026-09-15 09:30,A,broker,e1,0",
       "AAPL,Sell,1,101,2026-09-15 09:31,A,broker,e2,0",
     ]);
     expect((await commit(content)).status).toBe(200);
-    expect(accountTrades()[0]).toMatchObject({ netPnl: 1, fees: 0 });
+    expect((await accountTrades())[0]).toMatchObject({ netPnl: 1, fees: 0 });
   });
 
   it("requires the exact contract multiplier before committing the sample", async () => {
-    db.delete(settings).run();
+    await db.delete(settings);
     expect((await commit()).status).toBe(400);
-    expect(accountTrades()).toHaveLength(0);
+    expect(await accountTrades()).toHaveLength(0);
     const response = await updateSettings(
       new Request("http://localhost/api/settings", {
         method: "PATCH",
@@ -270,6 +256,6 @@ describe("NinjaTrader imports through preview, storage and rebuild", () => {
     );
     expect(response.status).toBe(200);
     expect((await commit()).status).toBe(200);
-    expect(accountTrades().reduce((sum, t) => sum + t.netPnl, 0)).toBe(5265);
+    expect((await accountTrades()).reduce((sum, t) => sum + t.netPnl, 0)).toBe(5265);
   });
 });

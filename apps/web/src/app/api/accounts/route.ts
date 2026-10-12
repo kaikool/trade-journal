@@ -4,6 +4,7 @@ import { bad, handler, ok } from "@/server/api";
 import { encryptJson } from "@/server/crypto";
 import { newId, nowIso } from "@/server/ids";
 import { syncAccount } from "@/server/sync";
+import { isEnabledSyncBroker } from "@/lib/supported-brokers";
 
 export const GET = handler(async (request: Request) => {
   if (new URL(request.url).searchParams.get("summary") === "1") {
@@ -44,6 +45,9 @@ export const POST = handler(async (request: Request) => {
   if (!body.name || !body.kind) return bad("name and kind are required");
   if (body.kind === "sync" && (!body.broker || !body.credentials)) {
     return bad("sync accounts need a broker and credentials");
+  }
+  if (body.kind === "sync" && !isEnabledSyncBroker(body.broker!)) {
+    return bad("Choose a broker from the available list.");
   }
 
   const id = newId();

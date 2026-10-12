@@ -1,13 +1,11 @@
 import { createMarketTransport, marketTransport } from "../src/server/market-data/transport";
 import { eq } from "drizzle-orm";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { createTestDatabase } from "./helpers/postgres";
 
-const originalDir = process.env.JOURNAL_DATA_DIR;
-const scratch = mkdtempSync(join(tmpdir(), "journal-market-data-test-"));
-process.env.JOURNAL_DATA_DIR = scratch;
+const testDatabase = await createTestDatabase();
+(globalThis as { __journalTestDb?: unknown }).__journalTestDb = testDatabase.db;
+vi.resetModules();
 const { db, settings, accounts, executions, trades, marketCsvDatasets } = await import("../src/db");
 const { insertExecutions } = await import("../src/server/executions");
 const { GET: savedHistory, POST: loadHistory } =
@@ -28,12 +26,12 @@ const request = (body: unknown) =>
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-beforeEach(() => {
-  db.delete(settings).run();
-  db.delete(marketCsvDatasets).run();
-  db.delete(trades).run();
-  db.delete(executions).run();
-  db.delete(accounts).run();
+beforeEach(async () => {
+  await db.delete(settings);
+  await db.delete(marketCsvDatasets);
+  await db.delete(trades);
+  await db.delete(executions);
+  await db.delete(accounts);
   for (const name of [
     "LSE_API_KEY",
     "ALPACA_API_KEY",
@@ -44,6 +42,7 @@ beforeEach(() => {
   ])
     vi.stubEnv(name, "");
   vi.stubEnv("JOURNAL_PASSWORD", "");
+  vi.stubEnv("JOURNAL_SECRET", "fixture-market-data-secret");
 });
 
 describe("trade history endpoint", () => {
@@ -53,11 +52,11 @@ describe("trade history endpoint", () => {
     resolution: "1m",
     basisConfirmed: true,
   };
-  function seed(assetClass: "equity" | "option" = "equity") {
-    db.insert(accounts)
-      .values({ id: "fixture", name: "Fixture", kind: "manual", createdAt: "2026-01-01" })
-      .run();
-    insertExecutions(
+  async function seed(assetClass: "equity" | "option" = "equity") {
+    await db
+      .insert(accounts)
+      .values({ id: "fixture", name: "Fixture", kind: "manual", createdAt: "2026-01-01" });
+    await insertExecutions(
       "fixture",
       [
         {
@@ -81,12 +80,12 @@ describe("trade history endpoint", () => {
       ],
       "manual",
     );
-    return db.select().from(trades).all()[0]!.key;
+    return (await db.select().from(trades))[0]!.key;
   }
   it("loads candles and estimates without changing journal facts or exposing credentials", async () => {
-    const key = seed();
-    saveConnection(id, "fixture-key-only");
-    const before = db.select().from(trades).all();
+    const key = await seed();
+    await saveConnection(id, "fixture-key-only");
+    const before = await db.select().from(trades);
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>
@@ -108,7 +107,7 @@ describe("trade history endpoint", () => {
     expect(result.estimate).toMatchObject({ mae: 20, mfe: 40 });
     expect(result.bars).toHaveLength(3);
     expect(JSON.stringify(result)).not.toContain("fixture-key-only");
-    expect(db.select().from(trades).all()).toEqual(before);
+    expect(await db.select().from(trades)).toEqual(before);
     const saved = await (
       await savedHistory(request({}), { params: Promise.resolve({ key }) })
     ).json();
@@ -134,25 +133,23 @@ describe("trade history endpoint", () => {
       (await (await savedHistory(request({}), { params: Promise.resolve({ key }) })).json()).saved
         .estimate.mae,
     ).toBe(20);
-    db.insert(settings)
-      .values({ key: "multipliers", value: JSON.stringify({ TEST: 2 }) })
-      .run();
+    await db.insert(settings).values({ key: "multipliers", value: JSON.stringify({ TEST: 2 }) });
     expect(
       (await (await savedHistory(request({}), { params: Promise.resolve({ key }) })).json()).saved,
     ).toBeNull();
-    db.delete(settings).where(eq(settings.key, "multipliers")).run();
+    await db.delete(settings).where(eq(settings.key, "multipliers"));
     // Account currency and execution changes invalidate derived values, even without a rebuild.
-    db.update(accounts).set({ currency: "EUR" }).where(eq(accounts.id, "fixture")).run();
+    await db.update(accounts).set({ currency: "EUR" }).where(eq(accounts.id, "fixture"));
     expect(
       (await (await savedHistory(request({}), { params: Promise.resolve({ key }) })).json()).saved,
     ).toBeNull();
-    db.update(accounts).set({ currency: "USD" }).where(eq(accounts.id, "fixture")).run();
-    db.update(executions).set({ price: 101 }).where(eq(executions.side, "buy")).run();
+    await db.update(accounts).set({ currency: "USD" }).where(eq(accounts.id, "fixture"));
+    await db.update(executions).set({ price: 101 }).where(eq(executions.side, "buy"));
     const stale = await (await explorer(new Request("http://localhost/api/trade-explorer"))).json();
     expect(stale.points[0]).toMatchObject({ mae: null, mfe: null });
   });
   it("previews CSV without writes, imports candles, replays them, persists estimates and removes their derived results", async () => {
-    const key = seed();
+    const key = await seed();
     const payload = {
       name: "Fixture.csv",
       symbol: "TEST",
@@ -168,7 +165,7 @@ describe("trade history endpoint", () => {
     expect((await (await listCsv()).json()).datasets).toHaveLength(0);
     const imported = await (await csvRequest(request({ ...payload, action: "import" }))).json();
     expect(imported.datasets).toMatchObject([{ symbol: "TEST", count: 3 }]);
-    expect(connections().find((item) => item.id === "market-csv")?.configured).toBe(true);
+    expect((await connections()).find((item) => item.id === "market-csv")?.configured).toBe(true);
     const history = await (
       await loadHistory(request({ ...body, provider: "market-csv", dataset: imported.id }), {
         params: Promise.resolve({ key }),
@@ -195,10 +192,10 @@ describe("trade history endpoint", () => {
     expect(
       (await (await savedHistory(request({}), { params: Promise.resolve({ key }) })).json()).saved,
     ).toBeNull();
-    expect(db.select().from(trades).all()).toHaveLength(1);
+    expect(await db.select().from(trades)).toHaveLength(1);
   });
   it("keeps CSV currency mismatches unavailable even with the confirmation checked", async () => {
-    const key = seed();
+    const key = await seed();
     const imported = await (
       await csvRequest(
         request({
@@ -229,7 +226,7 @@ describe("trade history endpoint", () => {
     const { importCsvDataset, marketCsv, csvDatasets, removeCsvDataset } =
       await import("../src/server/market-data/csv");
     const start = Date.parse("2025-01-01T00:00:00Z");
-    const id = importCsvDataset({
+    const id = await importCsvDataset({
       name: "large.csv",
       symbol: "TEST",
       resolution: "1m",
@@ -239,7 +236,7 @@ describe("trade history endpoint", () => {
         "time,open,high,low,close\n" +
         Array.from({ length: 50_000 }, (_, i) => `${start + i * 60_000},100,104,98,102`).join("\n"),
     });
-    expect(csvDatasets()[0]?.count).toBe(50_000);
+    expect((await csvDatasets())[0]?.count).toBe(50_000);
     const request = {
       symbol: "TEST",
       resolution: "1m" as const,
@@ -250,14 +247,14 @@ describe("trade history endpoint", () => {
     expect(first.bars.map((bar) => bar.time)).toEqual(
       [40_000, 40_001, 40_002].map((i) => start + i * 60_000),
     );
-    const prepare = vi.spyOn(db.$client, "prepare");
+    const query = vi.spyOn(testDatabase.client, "query");
     try {
       expect((await marketCsv.history(request, "")).bars).toEqual(first.bars);
-      expect(prepare.mock.calls.every(([query]) => !query.includes('"bars_json"'))).toBe(true);
+      expect(query.mock.calls.every(([sql]) => !String(sql).includes('"bars_json"'))).toBe(true);
     } finally {
-      prepare.mockRestore();
+      query.mockRestore();
     }
-    removeCsvDataset(id);
+    await removeCsvDataset(id);
     await expect(marketCsv.history(request, "")).rejects.toThrow("No CSV dataset");
   });
   it("validates hundreds of saved estimates with bounded database reads", async () => {
@@ -265,11 +262,11 @@ describe("trade history endpoint", () => {
       await import("../src/server/market-data/estimates");
     const { rowToTrade } = await import("../src/server/trades-query");
     const { tradeExcursions } = await import("../src/db");
-    db.insert(accounts)
-      .values({ id: "batch", name: "Batch", kind: "manual", createdAt: "2025-01-01" })
-      .run();
+    await db
+      .insert(accounts)
+      .values({ id: "batch", name: "Batch", kind: "manual", createdAt: "2025-01-01" });
     const start = Date.parse("2025-01-01T10:00:00Z");
-    insertExecutions(
+    await insertExecutions(
       "batch",
       Array.from({ length: 401 }, (_, index) => [
         {
@@ -293,30 +290,28 @@ describe("trade history endpoint", () => {
       ]).flat(),
       "manual",
     );
-    const selected = db
-      .select()
-      .from(trades)
-      .all()
-      .map((row) => rowToTrade(row));
+    const selected = await Promise.all(
+      (await db.select().from(trades)).map((row) => rowToTrade(row)),
+    );
     expect(selected).toHaveLength(401);
-    for (const trade of selected)
-      db.insert(tradeExcursions)
-        .values({
-          tradeKey: trade.key,
-          fingerprint: estimateFingerprint(trade),
-          provider: "Fixture",
-          symbol: "TEST",
-          resolution: "1m",
-          fetchedAt: "2026-01-01",
-          estimateJson: JSON.stringify({ mae: 20, mfe: 40, warnings: [] }),
-        })
-        .run();
-    const prepare = vi.spyOn(db.$client, "prepare");
+    for (const trade of selected) {
+      const fingerprint = await estimateFingerprint(trade);
+      await db.insert(tradeExcursions).values({
+        tradeKey: trade.key,
+        fingerprint,
+        provider: "Fixture",
+        symbol: "TEST",
+        resolution: "1m",
+        fetchedAt: "2026-01-01",
+        estimateJson: JSON.stringify({ mae: 20, mfe: 40, warnings: [] }),
+      });
+    }
+    const query = vi.spyOn(testDatabase.client, "query");
     try {
-      expect(savedEstimates(selected).size).toBe(401);
-      expect(prepare.mock.calls.length).toBeLessThanOrEqual(10);
+      expect((await savedEstimates(selected)).size).toBe(401);
+      expect(query.mock.calls.length).toBeLessThanOrEqual(10);
     } finally {
-      prepare.mockRestore();
+      query.mockRestore();
     }
   });
   it("rejects missing trades, invalid resolutions, and options before requesting data", async () => {
@@ -325,7 +320,7 @@ describe("trade history endpoint", () => {
     expect(
       (await loadHistory(request(body), { params: Promise.resolve({ key: "missing" }) })).status,
     ).toBe(404);
-    const key = seed("option");
+    const key = await seed("option");
     expect(
       (
         await loadHistory(request({ ...body, resolution: "tick" }), {
@@ -343,18 +338,16 @@ afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });
-afterAll(() => {
-  db.$client.close();
-  if (originalDir === undefined) delete process.env.JOURNAL_DATA_DIR;
-  else process.env.JOURNAL_DATA_DIR = originalDir;
-  rmSync(scratch, { recursive: true, force: true });
+afterAll(async () => {
+  delete (globalThis as { __journalTestDb?: unknown }).__journalTestDb;
+  await testDatabase.close();
 });
 
 describe("market data credential lifecycle", () => {
   it("starts with every source disabled and makes no provider requests", async () => {
     const fetcher = vi.fn();
     vi.stubGlobal("fetch", fetcher);
-    const state = connections();
+    const state = await connections();
     expect(state).toHaveLength(6);
     expect(state.every((item) => !item.configured && item.source === null)).toBe(true);
     expect(state.map((item) => item.name)).toEqual(
@@ -363,7 +356,7 @@ describe("market data credential lifecycle", () => {
     const response = await GET();
     expect(response.status).toBe(200);
     for (const id of ["london-strategic-edge", "alpaca", "binance", "coinbase", "oanda"])
-      expect(() => connectionKey(id)).toThrow();
+      await expect(connectionKey(id)).rejects.toThrow();
     expect(fetcher).not.toHaveBeenCalled();
   });
 
@@ -373,16 +366,16 @@ describe("market data credential lifecycle", () => {
     );
     expect(response.status).toBe(200);
     expect(await response.text()).not.toContain("fixture-key-only");
-    expect(JSON.stringify(db.select().from(settings).all())).not.toContain("fixture-key-only");
-    expect(connectionKey(id)).toBe("fixture-key-only");
+    expect(JSON.stringify(await db.select().from(settings))).not.toContain("fixture-key-only");
+    expect(await connectionKey(id)).toBe("fixture-key-only");
     expect(await (await GET()).json()).toEqual({
       connections: expect.arrayContaining([
         { id, name: "London Strategic Edge", configured: true, source: "saved" },
       ]),
     });
     expect((await POST(request({ provider: id, action: "remove" }))).status).toBe(200);
-    expect(connections()[0]?.configured).toBe(false);
-    expect(() => connectionKey(id)).toThrow("Add a market data API key");
+    expect((await connections())[0]?.configured).toBe(false);
+    await expect(connectionKey(id)).rejects.toThrow("Add a market data API key");
   });
   it("encrypts multi-field credentials, validates complete sets and leaves partial environment configs unavailable", async () => {
     expect(
@@ -401,17 +394,17 @@ describe("market data credential lifecycle", () => {
     );
     expect(response.status).toBe(200);
     expect(await response.text()).not.toContain("fixture-secret");
-    expect(JSON.stringify(db.select().from(settings).all())).not.toContain("fixture-secret");
-    expect(JSON.parse(connectionKey("alpaca"))).toEqual({
+    expect(JSON.stringify(await db.select().from(settings))).not.toContain("fixture-secret");
+    expect(JSON.parse(await connectionKey("alpaca"))).toEqual({
       apiKey: "fixture-id",
       secretKey: "fixture-secret",
     });
     vi.stubEnv("ALPACA_API_KEY", "environment-fixture");
-    expect(connections().find((item) => item.id === "alpaca")).toMatchObject({
+    expect((await connections()).find((item) => item.id === "alpaca")).toMatchObject({
       configured: false,
       source: "environment",
     });
-    expect(() => connectionKey("alpaca")).toThrow("Complete all");
+    await expect(connectionKey("alpaca")).rejects.toThrow("Complete all");
     expect((await POST(request({ provider: "alpaca", action: "remove" }))).status).toBe(400);
     expect(
       (
@@ -437,25 +430,25 @@ describe("market data credential lifecycle", () => {
     ).toBe(200);
   });
   it("enables and disables public sources explicitly without accepting unnecessary secrets", async () => {
-    expect(() => connectionKey("binance")).toThrow("Enable");
+    await expect(connectionKey("binance")).rejects.toThrow("Enable");
     expect(
       (await POST(request({ provider: "binance", action: "save", apiKey: "unused-secret" })))
         .status,
     ).toBe(400);
     expect((await POST(request({ provider: "binance", action: "enable" }))).status).toBe(200);
-    expect(connectionKey("binance")).toBe("");
-    expect(connections().find((item) => item.id === "binance")).toMatchObject({
+    expect(await connectionKey("binance")).toBe("");
+    expect((await connections()).find((item) => item.id === "binance")).toMatchObject({
       configured: true,
       source: "public",
     });
     expect((await POST(request({ provider: "binance", action: "remove" }))).status).toBe(200);
-    expect(() => connectionKey("binance")).toThrow("Enable");
+    await expect(connectionKey("binance")).rejects.toThrow("Enable");
   });
   it("honors environment precedence and refuses misleading saves or removals", async () => {
-    saveConnection(id, "saved-fixture");
+    await saveConnection(id, "saved-fixture");
     vi.stubEnv("LSE_API_KEY", "environment-fixture");
-    expect(connectionKey(id)).toBe("environment-fixture");
-    expect(connections().find((item) => item.id === id)?.source).toBe("environment");
+    expect(await connectionKey(id)).toBe("environment-fixture");
+    expect((await connections()).find((item) => item.id === id)?.source).toBe("environment");
     expect((await POST(request({ provider: id, action: "remove" }))).status).toBe(400);
     expect(
       (await POST(request({ provider: id, action: "save", apiKey: "replacement" }))).status,
@@ -465,12 +458,12 @@ describe("market data credential lifecycle", () => {
     for (const apiKey of [null, "", " ", 42, "a\nb", "a".repeat(4097)])
       expect((await POST(request({ provider: id, action: "save", apiKey }))).status).toBe(400);
     expect((await POST(request({ provider: "unknown", action: "remove" }))).status).toBe(400);
-    expect(connections()[0]?.configured).toBe(false);
+    expect((await connections())[0]?.configured).toBe(false);
   });
   it("tests access only on request and does not relay upstream details", async () => {
     const fetcher = vi.fn(async () => new Response("fixture-key-only", { status: 403 }));
     vi.stubGlobal("fetch", fetcher);
-    saveConnection(id, "fixture-key-only");
+    await saveConnection(id, "fixture-key-only");
     expect(fetcher).not.toHaveBeenCalled();
     const response = await POST(request({ provider: id, action: "test" }));
     expect(response.status).toBe(400);
@@ -485,7 +478,7 @@ describe("market data credential lifecycle", () => {
     expect(
       (await POST(request({ provider: id, action: "save", apiKey: "fixture-key" }))).status,
     ).toBe(401);
-    expect(connections()[0]?.configured).toBe(false);
+    expect((await connections())[0]?.configured).toBe(false);
   });
 });
 

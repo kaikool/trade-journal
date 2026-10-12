@@ -3,6 +3,7 @@ import { accounts, db, executions, trades } from "@/db";
 import { bad, handler, ok, requireValue } from "@/server/api";
 import { rebuildAccountInTransaction } from "@/server/rebuild";
 import { hasSyncedExecutions, isIbkrSyncAccount } from "@/server/ibkr-sync-timezone";
+import { isEnabledSyncBroker } from "@/lib/supported-brokers";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -21,6 +22,8 @@ export const PATCH = handler(async (request: Request, { params }: Params) => {
   if (!account) return bad("Account not found", 404);
 
   const body = (await request.json()) as PatchBody;
+  if (account.kind === "sync" && body.broker !== undefined && !isEnabledSyncBroker(body.broker))
+    return bad("Choose a broker from the available list.");
   const patch: Partial<typeof accounts.$inferInsert> = {};
   if (body.name !== undefined) patch.name = body.name;
   if (body.broker !== undefined) patch.broker = body.broker;
