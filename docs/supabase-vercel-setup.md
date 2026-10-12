@@ -108,6 +108,7 @@ Tại phần **Environment Variables** trên Vercel, thêm 5 biến môi trườ
 | `SUPABASE_SERVICE_ROLE_KEY` | `eyJhbGciOi...`                                                                                            | Secret `service_role` key của Supabase                                                                           |
 | `JOURNAL_SECRET`            | `64_hex_chars_or_strong_passphrase`                                                                        | Khóa mã hóa AES-256-GCM dùng bảo vệ thông tin đăng nhập broker và AI keys (tạo bằng lệnh `openssl rand -hex 32`) |
 | `JOURNAL_PASSWORD`          | `your_secure_password`                                                                                     | Mật khẩu đăng nhập vào Journal của bạn                                                                           |
+| `CRON_SECRET`               | Chuỗi ngẫu nhiên tối thiểu 16 ký tự                                                                        | Bảo vệ endpoint Vercel Cron dùng cho đồng bộ broker hằng ngày                                                    |
 
 #### Các biến tùy chọn bổ sung:
 
@@ -123,3 +124,7 @@ Sau khi deploy thành công:
 1. Mở URL của trang web.
 2. Đăng nhập bằng `JOURNAL_PASSWORD`.
 3. Kiểm tra các trang: Dashboard, Trades, Calendar, Notebook, Analytics, Settings.
+
+### Đồng bộ broker tự động
+
+Vercel Cron gọi `/api/cron/broker-sync` mỗi ngày lúc 16:00 UTC. Trên Hobby, Vercel chỉ hỗ trợ cron mỗi ngày và có thể chạy trong vòng một giờ quanh thời điểm đặt lịch. Chỉ sync accounts đang bật **Daily automatic sync** trong trang Accounts; lỗi từng broker được log và làm invocation trả lỗi để có thể theo dõi trong Vercel Logs. `CRON_SECRET` phải được cấu hình cho Production.

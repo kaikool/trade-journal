@@ -25,6 +25,7 @@ import {
 import { postJson, useApi } from "@/lib/use-api";
 import { fmtMoney } from "@/lib/utils";
 import { MonetaryValue, MonetaryField } from "@/components/privacy";
+import { DailyAutoSyncToggle } from "@/components/daily-auto-sync-toggle";
 
 interface AccountRow {
   id: string;
@@ -181,6 +182,13 @@ function Accounts() {
                     {account.lastSyncAt?.slice(0, 16).replace("T", " ")}
                   </span>
                 </div>
+              )}
+              {account.kind === "sync" && !account.archivedAt && (
+                <DailyAutoSyncToggle
+                  accountId={account.id}
+                  enabled={account.autoSync}
+                  onSaved={refresh}
+                />
               )}
               <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-2">
                 <div className="min-w-0">

@@ -67,3 +67,13 @@ This log tracks implementation progress against `docs/supabase-vercel-migration-
 - `pnpm run build` without any database environment failed while collecting `/api/accounts` because local `DATABASE_URL` is intentionally absent. Re-run with a synthetic non-secret `DATABASE_URL`: production build passed. This does not connect to or verify Supabase.
 - Full production typecheck still reports unrelated migration errors in the worktree; the new API diagnostics files have no TypeScript errors.
 - This patch is local/uncommitted and will not appear in Vercel until the owner commits/pushes and a new deployment succeeds.
+
+## Vercel auto-sync and container cleanup
+
+- Removed the obsolete SQLite Docker artifacts: `Dockerfile`, `docker-compose.yml`, and `.dockerignore`. The current app is deployed to Vercel and uses Supabase Postgres/Storage; the old image referenced `.next/standalone` which is no longer emitted by the Vercel-focused Next config.
+- Kept the `autoSync` account preference and made it functional with authenticated daily Vercel Cron at `/api/cron/broker-sync` (`vercel.json`, 16:00 UTC). Only active broker-sync accounts with the preference enabled are selected and synchronized sequentially; each sync still deduplicates fills.
+- Added a per-account toggle to Accounts so users can turn scheduled sync off/on. Manual “Sync now” remains available.
+- Cron uses `CRON_SECRET` bearer authorization and fails closed if missing. Failed accounts are logged without credentials and the endpoint returns 500 with aggregate counts so the invocation is observable; Vercel Cron does not retry failed invocations automatically.
+- Vercel Hobby permits once-daily jobs with up to ±59 minutes scheduling variance. Users must add a random `CRON_SECRET` in Production Environment Variables for the feature to run.
+- Added PGlite route tests for auth, filtering, partial failures and missing secret (4 tests), plus UI tests for toggling the preference (2 tests). Focused verification: **6 tests passed**.
+- Updated `.env.example`, setup guide and README to document daily sync and the removal of the obsolete Docker path.

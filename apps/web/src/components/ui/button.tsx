@@ -35,11 +35,15 @@ function Button({
   variant,
   size,
   asChild = false,
+  disableTooltip = false,
   title,
   ...props
-}: React.ComponentProps<"button"> & VariantProps<typeof buttonVariants> & { asChild?: boolean }) {
+}: React.ComponentProps<"button"> &
+  VariantProps<typeof buttonVariants> & { asChild?: boolean; disableTooltip?: boolean }) {
   const Comp = asChild ? Slot : "button";
-  const hint = title || (size === "icon" ? props["aria-label"] : undefined);
+  const hint = disableTooltip
+    ? undefined
+    : title || (size === "icon" ? props["aria-label"] : undefined);
   const button = (
     <Comp
       aria-label={props["aria-label"] ?? (size === "icon" ? title : undefined)}

@@ -13,7 +13,7 @@ Trade Journal is a [LuxAlgo](https://luxalgo.com) open-source project.
 [![npm](https://img.shields.io/npm/v/@luxalgo/journal-core?label=npm&color=white)](https://www.npmjs.com/package/@luxalgo/journal-core)
 [![License](https://img.shields.io/badge/license-MIT-white)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/lang-TypeScript-white)](packages/core/src/types.ts)
-[![SQLite](https://img.shields.io/badge/db-SQLite-white)](#quickstart)
+[![PostgreSQL](https://img.shields.io/badge/db-PostgreSQL-white)](docs/supabase-vercel-setup.md)
 
 [Homepage](https://www.luxalgo.com/trade-journal/) · [Quickstart](#quickstart) · [Features](#features) · [Screenshots](#screenshots) · [How it works](#how-it-works) · [Migrate](#migrating-from-tradezella-or-tradervue) · [Edge Score](docs/edge-score.md) · [Contributing](CONTRIBUTING.md)
 
@@ -21,7 +21,7 @@ Trade Journal is a [LuxAlgo](https://luxalgo.com) open-source project.
 
 ---
 
-**Record every trade. See what actually works.** Connect a broker, drop in a statement export, or add trades manually from the dashboard. Trade Journal rebuilds your history into round-trip trades, a P&L calendar, deep analytics, and a daily journal you can type, dictate, or ask questions of with your own AI. Your journal lives in a local SQLite database; broker sync, market data, and AI connect to the services you choose.
+**Record every trade. See what actually works.** Connect a broker, drop in a statement export, or add trades manually from the dashboard. Trade Journal rebuilds your history into round-trip trades, a P&L calendar, deep analytics, and a daily journal you can type, dictate, or ask questions of with your own AI. The current web app stores structured data in PostgreSQL and files in Supabase Storage; broker, market-data, and AI connections are configured by you.
 
 <img src=".github/assets/screenshot-dashboard.png" alt="Trade Journal dashboard in dark mode with demo trades, P&L gauges, Edge Score v2, equity curve, and monthly calendar" width="100%" />
 
@@ -41,11 +41,11 @@ pnpm dev
 # http://localhost:3000
 ```
 
-Requirements: **Node 22+** and **pnpm 11.0.8** (the version pinned in `package.json`). First run creates the SQLite database and applies additive schema upgrades automatically. No migration tool, no setup wizard, no account. With the commands above, local data lives in `apps/web/data/`.
+Requirements: **Node 22+** and **pnpm 11.0.8** (the version pinned in `package.json`). Configure the Supabase/Vercel environment variables in `apps/web/.env.local` and apply the Drizzle migration before starting the app. The app no longer creates a local SQLite database at startup. See [Supabase + Vercel setup](docs/supabase-vercel-setup.md).
 
 For smooth everyday use or UI reviews, stop the development server and run `pnpm preview`.
 This builds the app once, then serves the optimized production version at the same address,
-using the same local data. Unlike `pnpm dev`, it does not compile each page on its first
+using the same configured Supabase database and Storage. Unlike `pnpm dev`, it does not compile each page on its first
 visit or hot-reload code edits. After code changes, stop it and rerun `pnpm preview` to
 rebuild; use `pnpm start` to reuse an existing build. Switch back to `pnpm dev` when editing.
 Run only one mode at a time, since development and production share the build directory.
@@ -58,28 +58,26 @@ To try statement import, use [`docs/samples/demo-trades-tradingview.csv`](docs/s
 
 The **Prop firms** page has its own **Load demo data** button: a read-only simulation of fictional firms, evaluation costs, and payouts. That preview stays in browser memory and does not write financial records.
 
-### Docker
+### Configuration
 
-```bash
-docker compose up -d
-# http://localhost:3000, data persisted in ./data on the host
-```
+| Env var                     | Effect                                                                                   |
+| --------------------------- | ---------------------------------------------------------------------------------------- |
+| `DATABASE_URL`              | Required: Supabase PostgreSQL connection string for the app runtime                      |
+| `SUPABASE_URL`              | Required for attachment and market-data Storage                                          |
+| `SUPABASE_SERVICE_ROLE_KEY` | Required for server-side Storage access; never expose to the browser                     |
+| `JOURNAL_SECRET`            | Required to encrypt/decrypt saved broker and AI credentials                              |
+| `JOURNAL_PASSWORD`          | Optional: require a password to open the single-user journal                             |
+| `DIRECT_DATABASE_URL`       | Optional: database connection for Drizzle migrations and maintenance                     |
+| `CRON_SECRET`               | Required for Vercel daily broker auto-sync; use a random value of at least 16 characters |
+| `ANTHROPIC_API_KEY`         | Optional: Anthropic AI key via environment instead of Settings                           |
+| `OPENAI_API_KEY`            | Optional: OpenAI AI key via environment instead of Settings                              |
+| `JOURNAL_SQLITE_PATH`       | Optional: legacy SQLite source path for `pnpm migrate:supabase`                          |
 
-### Configuration (all optional)
-
-| Env var             | Effect                                                                                                   |
-| ------------------- | -------------------------------------------------------------------------------------------------------- |
-| `JOURNAL_PASSWORD`  | Require a password; recommended when accessible beyond localhost                                         |
-| `JOURNAL_SECRET`    | Encryption key source for credentials at rest (default: generated key file in the data dir)              |
-| `JOURNAL_DATA_DIR`  | Database, attachments, and local encryption key directory (default `./data` relative to the app process) |
-| `ANTHROPIC_API_KEY` | Anthropic AI key via env instead of the Settings page                                                    |
-| `OPENAI_API_KEY`    | OpenAI AI key via env instead of the Settings page                                                       |
-
-Set these in the process environment or in `apps/web/.env.local` for local Next.js runs; the root [`.env.example`](.env.example) documents the optional values. For Docker, configure the service environment in [`docker-compose.yml`](docker-compose.yml).
+Set these in Vercel Project Settings → Environment Variables, or in `apps/web/.env.local` for local development. The root [`.env.example`](.env.example) documents the variables. See [Supabase + Vercel setup](docs/supabase-vercel-setup.md) for connection and migration setup.
 
 For AI, open **Settings → AI**, select **Anthropic** or **OpenAI**, enter your API key, and choose **Save AI settings**. OpenAI defaults to `gpt-4.1-mini`; you can enter another text model ID available to your account. Each provider keeps its own encrypted key and model choice. Existing Anthropic settings continue to work. An OpenAI-only environment setup selects OpenAI automatically; with both keys present, Anthropic remains the default until you save a provider choice. Environment keys override saved keys and must be changed on the server. Saving settings does not make a model request or verify account access.
 
-Deploy anywhere a Node process and a persistent disk exist: Docker, Railway, Fly.io, a small VPS. Serverless platforms without a disk need an external database, which this release does not support. SQLite on disk is the point.
+Deploy the web app to Vercel or another Node host with network access to your configured PostgreSQL database and Supabase Storage. Persistent local disk is not required by the current runtime.
 
 Optional historical market data powers estimated MAE/MFE and candle replay on closed trades, with Vela™ rendering the charts. Configure a connection or upload candle CSVs in **Settings → Market data**. No provider is enabled or selected by default. See [Market data and replay](#market-data-and-replay) below and the [market data guide](docs/market-data.md) for setup, calculation definitions, and coverage limits.
 
@@ -99,11 +97,11 @@ Conversion works entirely offline and uses no rate service or API key. Saved rat
 
 ## Why this exists
 
-A trade journal is two things: a **verified record** of what you actually did, and the **reflection** that turns that record into better trading. Trade Journal keeps the record on your own machine and opens the reflection layer to any tool you choose, including your own AI.
+A trade journal is two things: a **verified record** of what you actually did, and the **reflection** that turns that record into better trading. Trade Journal stores its records in the PostgreSQL database and object storage you configure, and opens the reflection layer to tools you choose, including your own AI.
 
-- **You control your connections.** Broker, market-data, and saved AI credentials are encrypted at rest with AES-256-GCM. Your server uses them to contact the provider you configure, without a LuxAlgo credential proxy.
+- **You control your connections.** Broker, market-data, and saved AI credentials are encrypted at rest with AES-256-GCM using your `JOURNAL_SECRET`. Your server uses them to contact the provider you configure, without a LuxAlgo credential proxy.
 - **Your numbers are auditable.** The [Edge Score](docs/edge-score.md) is a documented, versioned formula, not a proprietary black box. Every metric is open source and unit-tested.
-- **Your journal is portable.** Export trades as CSV, journal records as JSON, and reviews as PDF or PNG. Back up the data directory to retain attachments and the full local state; see [Export and backup](#export-and-backup).
+- **Your journal is portable.** Export trades as CSV, journal records as JSON, and reviews as PDF or PNG. Back up both the PostgreSQL database and Supabase Storage objects; see [Export and backup](#export-and-backup).
 
 ## How it works
 
@@ -232,9 +230,9 @@ See [supported formats and validation status](docs/importers.md). Have an export
 
 **Settings → Data & backups → Full backup (JSON)** includes accounts (without credentials), executions, trades and annotations, daily journal entries, notebook folders and notes, templates, playbooks and rule checks, routines, missed trades, journal defaults, prop firm records and their audit history, and attachment metadata. Trades also export as CSV; review exports support PDF and PNG.
 
-JSON export excludes credentials, candle datasets, saved market-data estimates, and attachment binaries, and there is no general JSON restore importer in this release. For a complete local backup, stop the app and copy the entire data directory, including attachments and the hidden `.secret` file if generated. If you supply `JOURNAL_SECRET`, retain that value separately so encrypted credentials remain readable. Keep original candle CSVs as well.
+JSON export excludes credentials, candle datasets, saved market-data estimates, and attachment binaries, and there is no general JSON restore importer in this release. For a complete hosted backup, back up the PostgreSQL database and Supabase Storage bucket separately. Keep `JOURNAL_SECRET` safe and stable so encrypted credentials remain readable. Keep original candle CSVs as well.
 
-Default locations: `apps/web/data/` for the pnpm commands above, or the host's `./data` bind mount for Docker. `JOURNAL_DATA_DIR` overrides the app's path.
+The default legacy SQLite migration source is `apps/web/data/journal.db`; `JOURNAL_SQLITE_PATH` can override it for the migration CLI. `JOURNAL_DATA_DIR` is not used by the current web runtime.
 
 ## Monorepo layout
 
@@ -242,7 +240,7 @@ Default locations: `apps/web/data/` for the pnpm commands above, or the host's `
 | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
 | [`packages/core`](packages/core)           | `@luxalgo/journal-core`: pure domain engine (round trips, metrics, calendar, Edge Score). No IO, no framework, fully unit-tested. |
 | [`packages/importers`](packages/importers) | `@luxalgo/journal-importers`: statement parsers + migration importers. Zero-dependency CSV/HTML parsing.                          |
-| [`apps/web`](apps/web)                     | The app: Next.js 15, SQLite (Drizzle), Tailwind, Recharts/ECharts, Vela charting, TanStack Table, ai-sdk.                         |
+| [`apps/web`](apps/web)                     | The app: Next.js 15, PostgreSQL (Drizzle), Supabase Storage, Tailwind, Recharts/ECharts, Vela charting, TanStack Table, ai-sdk.   |
 
 ### Use the engine in your own app
 

@@ -35,7 +35,6 @@
     "@supabase/supabase-js": "^2.117.3",
     "@tanstack/react-table": "^9.1.2",
     "ai": "^7.0.77",
-    "better-sqlite3": "^12.2.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "drizzle-orm": "^0.45.2",
@@ -55,6 +54,7 @@
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.8",
     "@tailwindcss/postcss": "^4.3.3",
+    "better-sqlite3": "^12.2.0",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^22.15.0",
     "@types/react": "^19.1.0",

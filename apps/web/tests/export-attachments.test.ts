@@ -27,8 +27,10 @@ describe("the JSON export stays small enough to build in memory", () => {
     expect(exported).not.toHaveProperty("dataBase64");
   });
 
-  it("tells the reader that attachment binaries live in the data directory", () => {
-    expect(EXPORT_ATTACHMENTS_NOTE).toMatch(/data directory/);
-    expect(EXPORT_ATTACHMENTS_NOTE).toMatch(/metadata/);
+  it("tells the reader that attachment binaries are stored separately from the JSON export", () => {
+    expect(EXPORT_ATTACHMENTS_NOTE).toMatch(/Supabase Storage/);
+    expect(EXPORT_ATTACHMENTS_NOTE).toMatch(/metadata only/);
+    expect(EXPORT_ATTACHMENTS_NOTE).toMatch(/backed up separately/i);
+    expect(EXPORT_ATTACHMENTS_NOTE).not.toMatch(/data directory|JOURNAL_DATA_DIR/);
   });
 });

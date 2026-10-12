@@ -1,9 +1,8 @@
 /**
- * Idempotent schema bootstrap, run by the app at startup. Self-hosted software
- * should never make its user run a migration tool; new columns arrive as
- * additive `ALTER TABLE` guards in `MIGRATION_STEPS` below.
+ * Legacy SQLite schema kept for historical SQLite test fixtures and source-data
+ * migration tests. The application runtime uses schema.pg.ts and Drizzle migrations.
  *
- * Keep in sync with schema.ts.
+ * Do not use this as the active Postgres schema.
  */
 export const BOOTSTRAP_SQL = `
 CREATE TABLE IF NOT EXISTS accounts (

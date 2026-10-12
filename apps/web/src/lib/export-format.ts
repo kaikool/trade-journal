@@ -1,4 +1,4 @@
-/** Attachment fields included in the JSON export. Binaries stay on disk. */
+/** Attachment fields included in the JSON export. Binaries stay in object storage. */
 export interface ExportedAttachment {
   id: string;
   ownerType: string;
@@ -10,7 +10,7 @@ export interface ExportedAttachment {
 }
 
 export const EXPORT_ATTACHMENTS_NOTE =
-  "Attachments are listed as metadata only. Their binary contents live in the data directory (JOURNAL_DATA_DIR, default ./data), which remains the complete backup.";
+  "Attachments are listed as metadata only. Their binary contents live in Supabase Storage and must be backed up separately.";
 
 /**
  * Strip attachment binaries from an export row. Embedding every file (up to

@@ -177,22 +177,6 @@ export function Shell({ children }: { children: React.ReactNode }) {
       ))}
     </nav>
   );
-  const footer = (
-    <div className="journal-sidebar-footer space-y-1 border-t p-3 text-xs text-muted-foreground">
-      <div>
-        Open source ·{" "}
-        <a
-          href="https://github.com/LuxAlgo/trade-journal"
-          className="underline underline-offset-2 hover:text-foreground"
-          target="_blank"
-          rel="noreferrer"
-        >
-          GitHub
-        </a>
-      </div>
-      <div>Not investment advice.</div>
-    </div>
-  );
   return (
     <div className="journal-shell min-h-dvh lg:flex">
       <header className="journal-mobile-header sticky top-0 z-30 flex h-14 items-center gap-2 border-b bg-background/95 px-3 backdrop-blur lg:hidden">
@@ -201,6 +185,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
             <Button
               variant="ghost"
               size="icon"
+              disableTooltip
               className="h-9 w-9 shrink-0"
               aria-label="Open navigation"
             >
@@ -222,6 +207,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
                   <Button
                     variant="ghost"
                     size="icon"
+                    disableTooltip
                     className="ml-auto h-8 w-8"
                     aria-label="Close navigation"
                   >
@@ -233,7 +219,6 @@ export function Shell({ children }: { children: React.ReactNode }) {
               <div className="border-t p-3">
                 <PrivacyToggle />
               </div>
-              {footer}
             </DialogPrimitive.Content>
           </DialogPrimitive.Portal>
         </DialogPrimitive.Root>
@@ -284,7 +269,6 @@ export function Shell({ children }: { children: React.ReactNode }) {
             <PrivacyToggle iconOnly={sidebarCollapsed} />
           </div>
         </div>
-        {footer}
       </aside>
       <PageTransition>{children}</PageTransition>
     </div>
