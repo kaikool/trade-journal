@@ -14,7 +14,7 @@ export const metadata: Metadata = {
     "A private trading journal with broker sync, analytics, journaling, and trade review.",
   appleWebApp: {
     capable: true,
-    statusBarStyle: "black-translucent",
+    statusBarStyle: "default",
     title: "Trade Journal",
   },
   icons: {
@@ -24,7 +24,10 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#08080a",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#f9f9f7" },
+    { media: "(prefers-color-scheme: dark)", color: "#08080a" },
+  ],
   colorScheme: "dark light",
 };
 
