@@ -2,7 +2,15 @@
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { Vela } from "@luxalgo/vela";
-import { ChevronLeft, ChevronRight, Pause, Play, RotateCcw, SkipForward } from "lucide-react";
+import {
+  Camera,
+  ChevronLeft,
+  ChevronRight,
+  Pause,
+  Play,
+  RotateCcw,
+  SkipForward,
+} from "lucide-react";
 import {
   RESOLUTIONS,
   type MarketConnection,
@@ -13,6 +21,7 @@ import {
 import { providerInfo } from "@/lib/market-providers";
 import type { MarketCsvDataset } from "@/lib/market-csv";
 import { replayFrame } from "@/lib/trade-replay";
+import { uploadChartScreenshot } from "@/lib/chart-screenshot-upload";
 import { useApi } from "@/lib/use-api";
 import { fmtMoney } from "@/lib/utils";
 import { TradeChart, type ChartExecution, type ChartTrade } from "./trade-chart";
@@ -51,6 +60,8 @@ export function TradeMarketData({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const controller = useRef<AbortController | null>(null);
+  const saveScreenshot = (dataUrl: string) =>
+    uploadChartScreenshot(trade.key, trade.symbol, dataUrl);
   useEffect(() => () => controller.current?.abort(), []);
   const invalidate = () => {
     controller.current?.abort();
@@ -291,6 +302,7 @@ export function TradeMarketData({
           trade={trade}
           executions={executions}
           privacy={privacy}
+          onSaveScreenshot={saveScreenshot}
         />
       ) : (
         <>
@@ -339,7 +351,11 @@ export function TradeMarketData({
               dataset and plan coverage.
             </p>
           )}
-          <TradeChart trade={trade} executions={executions} />
+          <TradeChart
+            trade={trade}
+            executions={executions}
+            onSaveScreenshot={privacy ? undefined : saveScreenshot}
+          />
         </>
       )}
     </div>
@@ -351,11 +367,13 @@ export function HistoricalReplay({
   trade,
   executions,
   privacy,
+  onSaveScreenshot,
 }: {
   history: TradeMarketResult;
   trade: ChartTrade & { currency: string };
   executions: ChartExecution[];
   privacy: boolean;
+  onSaveScreenshot?: (dataUrl: string) => Promise<void>;
 }) {
   const [count, setCount] = useState(history.bars.length);
   const [playing, setPlaying] = useState(false);
@@ -405,7 +423,7 @@ export function HistoricalReplay({
                 prices; fill labels and MAE/MFE estimates are withheld. See the data limits below.
               </p>
             )}
-            <ReplayChart history={history} nextFrame={frame} />
+            <ReplayChart history={history} nextFrame={frame} onSaveScreenshot={onSaveScreenshot} />
             <div
               className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/30 p-2"
               role="group"
@@ -544,9 +562,11 @@ export function HistoricalReplay({
 function ReplayChart({
   history,
   nextFrame,
+  onSaveScreenshot,
 }: {
   history: TradeMarketResult;
   nextFrame: ReturnType<typeof replayFrame<ChartExecution>>;
+  onSaveScreenshot?: (dataUrl: string) => Promise<void>;
 }) {
   // Chart-local identity also works on HTTP LAN origins without crypto.randomUUID.
   const indicatorType = `replay-fills-${useId()}`;
@@ -558,6 +578,8 @@ function ReplayChart({
   const update = useRef<(() => void) | null>(null);
   const [error, setError] = useState("");
   const [ready, setReady] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [captureMessage, setCaptureMessage] = useState("");
   useEffect(() => {
     let disposed = false;
     let cleanup = () => {};
@@ -684,6 +706,41 @@ function ReplayChart({
         )}
         <div ref={host} className={`h-full ${ready ? "journal-replay-reveal" : "invisible"}`} />
       </div>
+      {onSaveScreenshot && (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={!ready || saving}
+            onClick={async () => {
+              setSaving(true);
+              setCaptureMessage("");
+              try {
+                const image = chart.current?.renderer.screenshot();
+                if (!image) throw new Error("The chart is not ready to capture.");
+                await onSaveScreenshot(image);
+                setCaptureMessage("Screenshot saved to trade attachments.");
+              } catch (cause) {
+                setCaptureMessage(cause instanceof Error ? cause.message : "Screenshot failed.");
+              } finally {
+                setSaving(false);
+              }
+            }}
+          >
+            <Camera />
+            {saving ? "Saving…" : "Save chart screenshot"}
+          </Button>
+          {captureMessage && (
+            <span
+              role={captureMessage.includes("saved") ? "status" : "alert"}
+              className="text-xs text-muted-foreground"
+            >
+              {captureMessage}
+            </span>
+          )}
+        </div>
+      )}
     </>
   );
 }

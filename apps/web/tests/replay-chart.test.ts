@@ -56,6 +56,7 @@ const props = {
 const chart = () => ({
   addNativeIndicator: vi.fn(),
   ready: vi.fn().mockResolvedValue(undefined),
+  renderer: { screenshot: vi.fn(() => "data:image/png;base64,iVBORw0KGgo=") },
   setMarket: vi.fn().mockResolvedValue(undefined),
   setTheme: vi.fn(),
   destroy: vi.fn(),
@@ -120,6 +121,27 @@ it.each([false, true])(
     expect(container.querySelector('[role="alert"]')).toBeNull();
   },
 );
+
+it("saves a screenshot of the loaded replay chart to the trade attachment callback", async () => {
+  const saveScreenshot = vi.fn().mockResolvedValue(undefined);
+  await act(async () =>
+    root.render(
+      createElement(
+        TooltipProvider,
+        null,
+        createElement(HistoricalReplay, { ...props, onSaveScreenshot: saveScreenshot }),
+      ),
+    ),
+  );
+  await act(async () => vi.dynamicImportSettled());
+
+  await click("Save chart screenshot");
+
+  const instance = renderer.create.mock.results[0]!.value;
+  expect(instance.renderer.screenshot).toHaveBeenCalledOnce();
+  expect(saveScreenshot).toHaveBeenCalledWith("data:image/png;base64,iVBORw0KGgo=");
+  expect(container.textContent).toContain("Screenshot saved to trade attachments.");
+});
 
 it("keeps concurrent charts distinct and cleans up their indicators on replacement and unmount", async () => {
   vi.stubGlobal("crypto", {});

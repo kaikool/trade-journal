@@ -1,14 +1,11 @@
 "use client";
 import { HoverHint } from "./ui/tooltip";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Paperclip, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ATTACHMENTS_CHANGED_EVENT, uploadAttachmentBlob } from "@/lib/chart-screenshot-upload";
 import { postJson, useApi } from "@/lib/use-api";
 
-type PreparedAttachment = {
-  id: string;
-  uploadUrl: string;
-};
 export function Attachments({
   type,
   id,
@@ -22,6 +19,14 @@ export function Attachments({
   const [busy, setBusy] = useState(false),
     [failure, setFailure] = useState("");
   const input = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    const refreshIfChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{ type: string; id: string }>).detail;
+      if (detail?.type === type && detail.id === id) refresh();
+    };
+    window.addEventListener(ATTACHMENTS_CHANGED_EVENT, refreshIfChanged);
+    return () => window.removeEventListener(ATTACHMENTS_CHANGED_EVENT, refreshIfChanged);
+  }, [id, refresh, type]);
   return (
     <div className="space-y-3 border-t pt-3">
       <div className="flex flex-wrap items-center gap-2">
@@ -50,28 +55,13 @@ export function Attachments({
           setFailure("");
           try {
             for (const file of files) {
-              const prepared = await postJson<PreparedAttachment>("/api/attachments", {
-                action: "prepare",
-                type,
-                id,
-                name: file.name,
-                size: file.size,
-                mime: file.type,
-              });
-              const upload = await fetch(prepared.uploadUrl, {
-                method: "PUT",
-                headers: { "Content-Type": file.type },
-                body: file,
-              });
-              if (!upload.ok) throw new Error("Storage upload failed.");
-              await postJson("/api/attachments", { action: "finalize", id: prepared.id });
+              await uploadAttachmentBlob(type, id, file.name, file);
             }
           } catch (err) {
             setFailure(err instanceof Error ? err.message : "Upload failed.");
           } finally {
             setBusy(false);
             if (input.current) input.current.value = "";
-            refresh();
           }
         }}
       />

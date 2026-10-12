@@ -1,9 +1,12 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { Vela } from "@luxalgo/vela";
+import { Camera } from "lucide-react";
 import { fmtMoney } from "@/lib/utils";
 import { usePrivacy } from "./privacy";
 import { EquityArea } from "./charts/equity-area";
+import { Button } from "./ui/button";
 
 export interface ChartExecution {
   side: "buy" | "sell";
@@ -46,6 +49,7 @@ export function TradeChart(props: {
   trade: ChartTrade;
   executions: ChartExecution[];
   height?: number;
+  onSaveScreenshot?: (dataUrl: string) => Promise<void>;
 }) {
   const privateMode = usePrivacy();
   if (!privateMode) return <PriceChart {...props} />;
@@ -80,18 +84,25 @@ function PriceChart({
   trade,
   executions,
   height = 420,
+  onSaveScreenshot,
 }: {
   trade: ChartTrade;
   executions: ChartExecution[];
   height?: number;
+  onSaveScreenshot?: (dataUrl: string) => Promise<void>;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<Vela | null>(null);
+  const [ready, setReady] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [captureMessage, setCaptureMessage] = useState("");
 
   useEffect(() => {
     const host = hostRef.current;
     if (!host || executions.length === 0) return;
     let disposed = false;
     let cleanup: (() => void) | null = null;
+    setReady(false);
 
     void (async () => {
       const vela = await import("@luxalgo/vela");
@@ -220,6 +231,7 @@ function PriceChart({
           volume: 0,
         })),
       });
+      chartRef.current = chart;
       let indicator = chart.addNativeIndicator(type);
       const themeObserver = new MutationObserver(() => {
         const nextDark = document.documentElement.classList.contains("dark");
@@ -239,8 +251,11 @@ function PriceChart({
       cleanup = () => {
         themeObserver.disconnect();
         chart.destroy();
+        if (chartRef.current === chart) chartRef.current = null;
         unregisterNativeIndicator(type);
       };
+      await chart.ready();
+      if (!disposed) setReady(true);
     })();
 
     return () => {
@@ -252,9 +267,43 @@ function PriceChart({
   return (
     <figure>
       <div ref={hostRef} style={{ height }} className="overflow-hidden rounded-lg border" />
-      <figcaption className="mt-1.5 px-1 text-xs text-muted-foreground">
-        Price path from recorded fills. To view market candles, choose a data source and load
-        history in Market data &amp; replay.
+      <figcaption className="mt-2 flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-muted-foreground">
+        <span>
+          Price path from recorded fills. To view market candles, choose a data source and load
+          history in Market data &amp; replay.
+        </span>
+        {onSaveScreenshot && (
+          <span className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={!ready || saving}
+              onClick={async () => {
+                setSaving(true);
+                setCaptureMessage("");
+                try {
+                  const image = chartRef.current?.renderer.screenshot();
+                  if (!image) throw new Error("The chart is not ready to capture.");
+                  await onSaveScreenshot(image);
+                  setCaptureMessage("Screenshot saved to trade attachments.");
+                } catch (cause) {
+                  setCaptureMessage(cause instanceof Error ? cause.message : "Screenshot failed.");
+                } finally {
+                  setSaving(false);
+                }
+              }}
+            >
+              <Camera />
+              {saving ? "Saving…" : "Save chart screenshot"}
+            </Button>
+            {captureMessage && (
+              <span role={captureMessage.includes("saved") ? "status" : "alert"}>
+                {captureMessage}
+              </span>
+            )}
+          </span>
+        )}
       </figcaption>
     </figure>
   );
