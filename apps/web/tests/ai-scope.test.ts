@@ -47,16 +47,14 @@ beforeEach(async () => {
   await db.delete(accounts);
   await db.delete(settings);
   await db.delete(journalDays);
-  await db
-    .insert(accounts)
-    .values(
-      ["a", "b", "empty"].map((id) => ({
-        id,
-        name: "Account " + id.toUpperCase(),
-        kind: "manual" as const,
-        createdAt: "2026-01-01",
-      })),
-    );
+  await db.insert(accounts).values(
+    ["a", "b", "empty"].map((id) => ({
+      id,
+      name: "Account " + id.toUpperCase(),
+      kind: "manual" as const,
+      createdAt: "2026-01-01",
+    })),
+  );
   await insertExecutions("a", fills("ONLY_A", 110), "manual");
   await insertExecutions("b", fills("ONLY_B", 50), "manual");
   await setSetting("timeZone", "UTC");
@@ -321,9 +319,7 @@ it("rejects invalid request bodies, dates and legacy account fields instead of s
 it("keeps single-trade critique scoped to its key", async () => {
   const { POST: critique } = await import("../src/app/api/ai/critique/route");
   const { trades: selectedTrades } = await queryTrades({ accounts: "a" });
-  expect(
-    (await critique(request({ key: selectedTrades[0]!.key }))).status,
-  ).toBe(200);
+  expect((await critique(request({ key: selectedTrades[0]!.key }))).status).toBe(200);
   expect(prompt()).toContain("ONLY_A");
   expect(prompt()).not.toContain("ONLY_B");
 });

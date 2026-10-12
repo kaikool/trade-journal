@@ -106,14 +106,12 @@ describe("history imports use the existing preview, commit and rebuild pipeline"
     expect((await db.select().from(trades))[0]?.symbol).toBe("AAPL");
   });
   it("does not replace reported zero fees or P&L with account defaults or multiplier recalculations", async () => {
-    await db
-      .insert(settings)
-      .values({
-        key: "journalDefaults",
-        value: JSON.stringify({
-          feeRules: [{ id: "fee", accountId: "test", symbol: "", amount: 5, mode: "execution" }],
-        }),
-      });
+    await db.insert(settings).values({
+      key: "journalDefaults",
+      value: JSON.stringify({
+        feeRules: [{ id: "fee", accountId: "test", symbol: "", amount: 5, mode: "execution" }],
+      }),
+    });
     await db.insert(settings).values({ key: "multipliers", value: JSON.stringify({ AAPL: 100 }) });
     const parsed = parseHistory(
       `Position,Symbol,Direction,Open Time,Close Time,Entry Price,Exit Price,Quantity,PnL,Fees

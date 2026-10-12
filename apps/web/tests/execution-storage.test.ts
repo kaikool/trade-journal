@@ -191,9 +191,9 @@ describe("execution storage preserves a coherent journal", () => {
   it("rolls back new executions if appending notes exceeds the existing notes limit", async () => {
     const existing = "a".repeat(100000);
     await insertExecutions("test", [rows[0]!], "manual", existing);
-    await expect(
-      insertExecutions("test", [rows[1]!], "manual", "Exit review"),
-    ).rejects.toThrow("Combined trade notes");
+    await expect(insertExecutions("test", [rows[1]!], "manual", "Exit review")).rejects.toThrow(
+      "Combined trade notes",
+    );
     expect(await db.select().from(executions)).toHaveLength(1);
     const [saved] = await db.select().from(trades).limit(1);
     expect(saved).toMatchObject({ notes: existing, status: "open" });

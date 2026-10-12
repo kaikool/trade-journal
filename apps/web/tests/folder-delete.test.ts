@@ -58,14 +58,12 @@ it("returns not found for a missing folder", async () => {
 
 it("rolls back moving notes if folder removal fails", async () => {
   await createFolder("rollback");
-  await db
-    .insert(notes)
-    .values({
-      id: "rollback-note",
-      folderId: "rollback",
-      createdAt: "2026-01-01",
-      updatedAt: "2026-01-01",
-    });
+  await db.insert(notes).values({
+    id: "rollback-note",
+    folderId: "rollback",
+    createdAt: "2026-01-01",
+    updatedAt: "2026-01-01",
+  });
   await testDatabase.client.exec(`
     CREATE FUNCTION reject_folder_delete() RETURNS trigger AS $$
     BEGIN RAISE EXCEPTION 'Failed to remove folder'; END;
@@ -76,11 +74,7 @@ it("rolls back moving notes if folder removal fails", async () => {
   try {
     expect((await removeFolder("rollback")).status).toBe(500);
     const [note] = await db.select().from(notes).where(eq(notes.id, "rollback-note")).limit(1);
-    const [folder] = await db
-      .select()
-      .from(folders)
-      .where(eq(folders.id, "rollback"))
-      .limit(1);
+    const [folder] = await db.select().from(folders).where(eq(folders.id, "rollback")).limit(1);
     expect(note?.folderId).toBe("rollback");
     expect(folder?.deletedAt).toBeNull();
   } finally {

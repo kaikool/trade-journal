@@ -52,13 +52,10 @@ describe("mobile navigation drawer", () => {
     vi.useFakeTimers();
     await act(async () =>
       root.render(
-        createElement(
-          TooltipProvider,
-          {
-            delayDuration: 0,
-            children: createElement(Shell, { children: createElement("main", null, "Content") }),
-          },
-        ),
+        createElement(TooltipProvider, {
+          delayDuration: 0,
+          children: createElement(Shell, { children: createElement("main", null, "Content") }),
+        }),
       ),
     );
     await act(async () =>
