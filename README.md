@@ -43,6 +43,10 @@ pnpm dev
 
 Requirements: **Node 22+** and **pnpm 11.0.8** (the version pinned in `package.json`). Configure the Supabase/Vercel environment variables in `apps/web/.env.local` and apply the Drizzle migration before starting the app. The app no longer creates a local SQLite database at startup. See [Supabase + Vercel setup](docs/supabase-vercel-setup.md).
 
+### Install as an app (PWA)
+
+On a supported browser, use **Install app** or **Add to Home Screen** from the browser menu. Vercel serves the required HTTPS origin, manifest, icons, and service worker. When offline, the app shows an offline notice; journal/API responses are deliberately not cached on the device.
+
 For smooth everyday use or UI reviews, stop the development server and run `pnpm preview`.
 This builds the app once, then serves the optimized production version at the same address,
 using the same configured Supabase database and Storage. Unlike `pnpm dev`, it does not compile each page on its first
