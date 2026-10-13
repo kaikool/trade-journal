@@ -116,6 +116,10 @@ async function connect() {
 }
 beforeEach(async () => {
   await db.delete(settings);
+  const { accounts, propAccounts, propAudit } = await import("../src/db");
+  await db.delete(propAudit);
+  await db.delete(propAccounts);
+  await db.delete(accounts);
   epoch = 1;
   denied = false;
   incomplete = false;
@@ -206,7 +210,9 @@ describe("The5ers OAuth and journal access", () => {
       ),
     );
     expect(completed.status).toBe(307);
-    expect(completed.headers.get("location")).toBe("https://journal.example/the5ers?connected=1");
+    expect(completed.headers.get("location")).toBe(
+      "https://journal.example/accounts?connected=the5ers",
+    );
     const overview = await (await GET()).json();
     expect(overview.connected).toBe(true);
     expect(JSON.stringify(overview)).not.toMatch(
@@ -707,4 +713,197 @@ describe("automatic The5ers OAuth registration", () => {
     ).rejects.toThrow("issuer did not match");
     expect(fetch).not.toHaveBeenCalled();
   });
+});
+
+it("links selected source accounts once without inferring starting capital", async () => {
+  await connect();
+  rows[0]!.type = "evaluation";
+  rows[0]!.status = "active";
+  const [first] = await listSourceAccounts();
+  const { accounts, propAccounts } = await import("../src/db");
+  await selectSourceAccounts([first!.id], true, true);
+  await selectSourceAccounts([first!.id], true, true);
+  const native = await db.select().from(accounts);
+  expect(native).toHaveLength(1);
+  expect(native[0]!.initialBalance).toBe(0);
+  expect((await db.select().from(propAccounts))[0]!.sizeMinor).toBeNull();
+  await db
+    .update(accounts)
+    .set({ name: "Custom name", initialBalance: 50000 })
+    .where(eq(accounts.id, native[0]!.id));
+  await selectSourceAccounts([first!.id], true, true);
+  expect((await db.select().from(accounts))[0]!.name).toBe("Custom name");
+});
+it("does not interpret disabled as a breached/closed prop account", async () => {
+  await connect();
+  rows[0]!.type = "evaluation";
+  rows[0]!.status = "disabled";
+  const [first] = await listSourceAccounts();
+  await selectSourceAccounts([first!.id], false, true);
+  const { propAccounts } = await import("../src/db");
+  expect(await db.select().from(propAccounts)).toHaveLength(0);
+});
+it("reads all purchase pages while retaining separate currencies", async () => {
+  await connect();
+  const original = fetch;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === MCP_URL) {
+        const rpc = JSON.parse(String(init?.body));
+        if (rpc.method === "tools/call" && rpc.params.name === "the5ers_purchase") {
+          const page = rpc.params.arguments.page;
+          return json({
+            jsonrpc: "2.0",
+            id: rpc.id,
+            result: {
+              structuredContent: {
+                currency: page === 1 ? "USD" : "EUR",
+                pagination: { has_more: page < 4 },
+                data: { purchases: [{ id: `purchase-${page}`, amount: 100 }] },
+              },
+            },
+          });
+        }
+      }
+      return original(url, init);
+    }),
+  );
+  const result = (await readSourceSection("purchases")) as {
+    pages: { currency: string }[];
+    complete: boolean;
+  };
+  expect(result.pages).toHaveLength(4);
+  expect(result.complete).toBe(true);
+  expect(result.pages[1]!.currency).toBe("EUR");
+});
+it("accepts observed account field aliases and envelope currency", () => {
+  const result = parseProviderAccounts({
+    currency: "USD",
+    data: {
+      accounts: [
+        {
+          ref: "opaque",
+          label: "meta-trader-5 · ...1234",
+          trading_system: "meta-trader-5",
+          created_at: "2026-02-01T00:00:00.000Z",
+          type: "evaluation",
+          status: "active",
+          balance: 50050.25,
+        },
+      ],
+    },
+    pagination: { has_more: false },
+  });
+  expect(result.accounts[0]!.currency).toBe("USD");
+  expect(result.accounts[0]!.status).toBe("active");
+});
+it("links existing history without overwriting it and removes source selection when deleted", async () => {
+  await connect();
+  rows[0]!.type = "evaluation";
+  rows[0]!.status = "active";
+  const [first] = await listSourceAccounts();
+  const { accounts, propAccounts } = await import("../src/db");
+  await db.insert(accounts).values({
+    id: "my-history",
+    name: "Historical MT5",
+    kind: "import",
+    broker: "MT5 CSV",
+    currency: "USD",
+    initialBalance: 50000,
+    createdAt: new Date().toISOString(),
+  });
+  await selectSourceAccounts([first!.id], true, true, { [first!.id]: "my-history" });
+  const native = await db.select().from(accounts);
+  expect(native).toHaveLength(1);
+  expect(native[0]!.name).toBe("Historical MT5");
+  expect(native[0]!.initialBalance).toBe(50000);
+  expect((await sourceOverview()).selection[0]!.journalAccountId).toBe("my-history");
+  expect((await db.select().from(propAccounts))[0]!.journalAccountId).toBe("my-history");
+  const { DELETE: remove } = await import("../src/app/api/accounts/[id]/route");
+  expect(
+    (
+      await remove(new Request("https://journal.example/api/accounts/my-history"), {
+        params: Promise.resolve({ id: "my-history" }),
+      })
+    ).status,
+  ).toBe(200);
+  expect((await sourceOverview()).selection).toHaveLength(0);
+  expect(await syncScheduledThe5ers()).toEqual({ checked: 0, synced: 0, failed: 0 });
+});
+it("rejects conflicting journal links atomically", async () => {
+  await connect();
+  const listed = await listSourceAccounts();
+  const { accounts } = await import("../src/db");
+  await db.insert(accounts).values({
+    id: "shared-history",
+    name: "History",
+    kind: "import",
+    currency: "USD",
+    createdAt: new Date().toISOString(),
+  });
+  await expect(
+    selectSourceAccounts(
+      listed.map((a) => a.id),
+      true,
+      true,
+      Object.fromEntries(listed.map((a) => [a.id, "shared-history"])),
+    ),
+  ).rejects.toThrow("already linked");
+  expect(await db.select().from(settings).where(eq(settings.key, SELECTION_KEY))).toHaveLength(0);
+  expect(
+    await db.select().from(settings).where(eq(settings.key, "the5ers:journal-links")),
+  ).toHaveLength(0);
+});
+it("shows observed balances immediately without resetting capital and skips archived linked journals in cron", async () => {
+  await connect();
+  rows[0]!.balance = 50050.25;
+  rows[0]!.effective_balance = 50050.25;
+  const [first] = await listSourceAccounts();
+  await selectSourceAccounts([first!.id], true, true);
+  const overview = await sourceOverview();
+  expect(overview.snapshots[0]!.complete).toBe(false);
+  expect(JSON.stringify(overview.snapshots[0]!.sections.balance)).toContain("50050.25");
+  const { accounts } = await import("../src/db");
+  await db
+    .update(accounts)
+    .set({ archivedAt: new Date().toISOString() })
+    .where(eq(accounts.id, `the5ers_${first!.id}`));
+  vi.mocked(fetch).mockClear();
+  expect(await syncScheduledThe5ers()).toEqual({ checked: 0, synced: 0, failed: 0 });
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+it("reuses an existing The5ers prop tracker account linked to the chosen journal", async () => {
+  await connect();
+  rows[0]!.type = "evaluation";
+  rows[0]!.status = "active";
+  const [first] = await listSourceAccounts();
+  const { accounts, propAccounts } = await import("../src/db");
+  const now = new Date().toISOString();
+  await db.insert(accounts).values({
+    id: "existing-journal",
+    name: "History",
+    kind: "import",
+    currency: "USD",
+    createdAt: now,
+  });
+  await db.insert(propAccounts).values({
+    id: "existing-prop",
+    firm: "The5ers",
+    name: "My challenge",
+    program: "evaluation",
+    status: "active",
+    currency: "USD",
+    journalAccountId: "existing-journal",
+    openedOn: "2026-01-01",
+    notes: "Keep my notes",
+    createdAt: now,
+    updatedAt: now,
+  });
+  await selectSourceAccounts([first!.id], false, true, { [first!.id]: "existing-journal" });
+  const props = await db.select().from(propAccounts);
+  expect(props).toHaveLength(1);
+  expect(props[0]!.id).toBe("existing-prop");
+  expect(props[0]!.notes).toBe("Keep my notes");
 });

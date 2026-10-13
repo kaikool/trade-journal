@@ -56,6 +56,13 @@ export const useApi = <T>(url: string | null): ApiState<T> => {
     };
   }, [url, tick]);
 
+  useEffect(() => {
+    if (!url?.startsWith("/api/accounts")) return;
+    const changed = () => setTick((value) => value + 1);
+    window.addEventListener("journal-accounts-changed", changed);
+    return () => window.removeEventListener("journal-accounts-changed", changed);
+  }, [url]);
+
   const refresh = useCallback(() => setTick((value) => value + 1), []);
   const current = dataUrl === url;
   return {

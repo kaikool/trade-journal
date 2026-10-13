@@ -9,6 +9,7 @@ import {
   Download,
   Upload,
 } from "lucide-react";
+import { The5ersSource } from "./the5ers";
 import { FilterBar } from "./filter-bar";
 import { Field } from "./filter-fields";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
@@ -564,7 +565,7 @@ export function PropFirmTracker() {
               aria-label="Prop tracker sections"
               className="flex gap-2 overflow-x-auto"
             >
-              {["overview", "accounts", "payouts", "ledger"].map((v) => (
+              {["overview", "accounts", "payouts", "ledger", "benefits", "activity"].map((v) => (
                 <Button
                   key={v}
                   role="tab"
@@ -576,7 +577,20 @@ export function PropFirmTracker() {
                 </Button>
               ))}
             </div>
-            {tab === "overview" ? (
+            {!demo &&
+              (!firm || firm === "The5ers") &&
+              (!accountId || data.accounts.find((a) => a.id === accountId)?.firm === "The5ers") && (
+                <The5ersSource
+                  view="prop"
+                  section={tab}
+                  query={
+                    accountId
+                      ? `accounts=${data.accounts.find((a) => a.id === accountId)?.journalAccountId}`
+                      : ""
+                  }
+                />
+              )}
+            {tab === "benefits" || tab === "activity" ? null : tab === "overview" ? (
               <div className="space-y-4">
                 <PropCashComparison months={months} currency={selectedCurrency} privacy={privacy} />
                 <details

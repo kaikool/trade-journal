@@ -31,7 +31,16 @@ export const POST = handler(async (request: Request) => {
   );
   requireValue(
     Object.keys(body).every((key) =>
-      ["action", "ids", "autoSync", "id", "resource", "positionKey"].includes(key),
+      [
+        "action",
+        "ids",
+        "autoSync",
+        "id",
+        "resource",
+        "positionKey",
+        "linkJournalAccounts",
+        "journalLinks",
+      ].includes(key),
     ),
     "Unknown The5ers request field.",
   );
@@ -51,7 +60,25 @@ export const POST = handler(async (request: Request) => {
     case "accounts":
       return ok({ accounts: await listSourceAccounts() });
     case "select":
-      return ok({ selection: await selectSourceAccounts(body.ids, body.autoSync) });
+      requireValue(
+        body.linkJournalAccounts === undefined || typeof body.linkJournalAccounts === "boolean",
+        "Choose a valid journal linking option.",
+      );
+      requireValue(
+        body.journalLinks === undefined ||
+          (body.journalLinks &&
+            typeof body.journalLinks === "object" &&
+            !Array.isArray(body.journalLinks)),
+        "Choose valid journal links.",
+      );
+      return ok({
+        selection: await selectSourceAccounts(
+          body.ids,
+          body.autoSync,
+          body.linkJournalAccounts === true,
+          body.journalLinks as Record<string, string> | undefined,
+        ),
+      });
     case "sync":
       requireValue(
         typeof body.id === "string" && /^[a-f0-9]{64}$/.test(body.id),

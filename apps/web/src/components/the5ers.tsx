@@ -1,14 +1,13 @@
 "use client";
-import { useState } from "react";
-import { RefreshCw, Link2, Unplug } from "lucide-react";
+import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
 import { useApi, postJson } from "@/lib/use-api";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Checkbox } from "./ui/checkbox";
-import { Label } from "./ui/label";
-import { usePrivacy } from "./privacy";
+import { Input } from "./ui/input";
+import { MonetaryValue, usePrivacy } from "./privacy";
 import type { SourceAccount, Selection, SourceSnapshot } from "@/server/the5ers/data";
-
 interface Overview {
   configured: boolean;
   connected: boolean;
@@ -17,50 +16,127 @@ interface Overview {
   selection: Selection[];
   snapshots: SourceSnapshot[];
 }
-const nameOf = (name: string) =>
+const heading = (name: string) =>
   name
     .replace(/_/g, " ")
     .replace(/([a-z])([A-Z])/g, "$1 $2")
-    .replace(/^./, (letter) => letter.toUpperCase());
-/** Plain React text rendering. Source strings/links are never executable HTML or instructions. */
+    .replace(/^./, (c) => c.toUpperCase());
+const obj = (value: unknown): Record<string, unknown> =>
+  value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+const num = (value: unknown) =>
+  typeof value === "number" && Number.isFinite(value) ? value : null;
+const accountValue = (account: SourceAccount, ...keys: string[]) => {
+  const source = obj(account.source);
+  return keys.map((key) => source[key]).find((value) => value !== undefined);
+};
+const cash = (value: unknown, currency?: string) => {
+  const amount = num(value);
+  if (amount === null) return "Unavailable";
+  return currency
+    ? new Intl.NumberFormat("en", { style: "currency", currency }).format(amount)
+    : `${amount} (currency unavailable)`;
+};
+function useSource() {
+  const state = useApi<Overview>("/api/the5ers");
+  const [busy, setBusy] = useState(false),
+    [error, setError] = useState<string | null>(null),
+    [notice, setNotice] = useState("");
+  const run = async (work: () => Promise<void>) => {
+    setBusy(true);
+    setError(null);
+    setNotice("");
+    try {
+      await work();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "The5ers request failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return {
+    ...state,
+    busy,
+    run,
+    setNotice,
+    error: error ?? state.error ?? state.data?.error,
+    notice,
+  };
+}
+function Messages({ state }: { state: ReturnType<typeof useSource> }) {
+  return (
+    <>
+      {state.error && (
+        <p role="alert" className="text-sm text-destructive">
+          {state.error}
+        </p>
+      )}
+      {state.notice && (
+        <p role="status" className="text-sm">
+          {state.notice}
+        </p>
+      )}
+    </>
+  );
+}
+/** Curated source payload: protocol envelopes stay out of normal account/finance views. */
 function SourceValue({ value, depth = 0 }: { value: unknown; depth?: number }) {
   const privacy = usePrivacy();
-  if (depth === 0 && privacy)
+  if (privacy && depth === 0)
     return (
       <span aria-label="Source financial data hidden">
         Turn off privacy mode to view source data.
       </span>
     );
-  if (value === null || value === undefined)
-    return <span className="text-muted-foreground">Unavailable</span>;
-  if (typeof value === "boolean") return <span>{value ? "Yes" : "No"}</span>;
-  if (typeof value !== "object") return <span className="break-words">{String(value)}</span>;
-  if (depth > 4)
-    return <span className="text-muted-foreground">Additional nested source details</span>;
+  if (value === null || value === undefined) return <span>Unavailable</span>;
+  if (typeof value !== "object")
+    return (
+      <span className="break-words">
+        {typeof value === "boolean" ? (value ? "Yes" : "No") : String(value)}
+      </span>
+    );
+  if (depth > 6) return <span>Additional nested details</span>;
   if (Array.isArray(value))
-    return value.length ? (
+    return (
       <div className="space-y-3">
-        {value.slice(0, 25).map((item, index) => (
+        {value.slice(0, 100).map((row, index) => (
           <div key={index} className="rounded-md border p-3">
-            <SourceValue value={item} depth={depth + 1} />
+            <SourceValue value={row} depth={depth + 1} />
           </div>
         ))}
-        {value.length > 25 && (
-          <p className="text-xs text-muted-foreground">
-            Showing 25 of {value.length} source records.
-          </p>
-        )}
+        {value.length > 100 && <p>Showing 100 of {value.length} records.</p>}
+        {!value.length && <p>No records returned.</p>}
       </div>
-    ) : (
-      <span className="text-muted-foreground">No records returned</span>
     );
+  const record = obj(value);
+  if (record.pages) return <SourceValue value={record.pages} depth={depth + 1} />;
+  if (record.data)
+    return (
+      <div className="space-y-2">
+        {typeof record.currency === "string" && (
+          <p className="text-xs text-muted-foreground">Currency: {record.currency}</p>
+        )}
+        <SourceValue value={record.data} depth={depth + 1} />
+      </div>
+    );
+  const excluded = [
+    "contract_version",
+    "request_context",
+    "operation",
+    "pagination",
+    "source",
+    "freshness",
+    "warnings",
+    "complete",
+  ];
   return (
     <dl className="space-y-2">
-      {Object.entries(value)
-        .filter(([key]) => !["contract_version", "request_context"].includes(key))
+      {Object.entries(record)
+        .filter(([key]) => !excluded.includes(key))
         .map(([key, item]) => (
           <div key={key} className="grid gap-1 sm:grid-cols-[minmax(100px,1fr)_2fr]">
-            <dt className="text-sm text-muted-foreground">{nameOf(key)}</dt>
+            <dt className="text-sm text-muted-foreground">{heading(key)}</dt>
             <dd className="min-w-0 text-sm">
               <SourceValue value={item} depth={depth + 1} />
             </dd>
@@ -70,374 +146,584 @@ function SourceValue({ value, depth = 0 }: { value: unknown; depth?: number }) {
   );
 }
 export function The5ersConnection() {
-  const state = useApi<Overview>("/api/the5ers");
+  const state = useSource(),
+    overview = state.data;
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>The5ers connection</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-sm text-muted-foreground">
+          Read-only Hub connection. Manage linked accounts in Accounts and program finances in Prop
+          firms.
+        </p>
+        <Messages state={state} />
+        {overview && !overview.configured && (
+          <p className="text-sm">JOURNAL_SECRET is missing on this server.</p>
+        )}
+        <div className="flex flex-wrap gap-2">
+          <Button
+            disabled={state.busy || state.loading}
+            onClick={() =>
+              void state.run(async () => {
+                const result = await postJson<{ url: string }>("/api/the5ers", {
+                  action: "connect",
+                });
+                window.location.assign(result.url);
+              })
+            }
+          >
+            {overview?.connected ? "Reconnect The5ers" : "Connect The5ers"}
+          </Button>
+          <Button
+            variant="outline"
+            disabled={state.busy || state.loading}
+            onClick={() =>
+              void state.run(async () => {
+                const result = await postJson<{ message: string }>("/api/the5ers", {
+                  action: "check",
+                });
+                state.setNotice(result.message);
+              })
+            }
+          >
+            Check connection
+          </Button>
+          {overview?.connected && (
+            <Button
+              variant="outline"
+              disabled={state.busy}
+              onClick={() =>
+                void state.run(async () => {
+                  await postJson("/api/the5ers", { action: "disconnect" });
+                  state.refresh();
+                })
+              }
+            >
+              Disconnect
+            </Button>
+          )}
+        </div>
+        {overview?.connected && (
+          <>
+            <p className="text-sm">
+              Connected · {overview.selection.length} selected accounts
+              {!overview.canRefresh ? " · Reconnect required when access expires" : ""}
+            </p>
+            <div className="flex flex-wrap gap-4 text-sm">
+              <Link href="/accounts" className="underline">
+                Manage accounts
+              </Link>
+              <Link href="/prop-firms" className="underline">
+                Program & finances
+              </Link>
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+export function The5ersAccounts({ onLinked }: { onLinked?: () => void }) {
+  const state = useSource();
+  const journal = useApi<{ accounts: { id: string; name: string; currency: string }[] }>(
+    "/api/accounts?summary=1",
+  );
+  const [links, setLinks] = useState<Record<string, string>>({});
   const [inventory, setInventory] = useState<SourceAccount[] | null>(null),
     [chosen, setChosen] = useState<string[]>([]),
-    [autoSync, setAutoSync] = useState(false);
-  const [busy, setBusy] = useState(false),
-    [error, setError] = useState<string | null>(null),
-    [notice, setNotice] = useState("");
-  const [detail, setDetail] = useState<{ title: string; data: unknown } | null>(null);
-  const overview = state.data;
-  const run = async (work: () => Promise<void>) => {
-    setBusy(true);
-    setError(null);
-    setNotice("");
-    try {
-      await work();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "The5ers request failed.");
-    } finally {
-      setBusy(false);
-    }
-  };
+    [auto, setAuto] = useState(false),
+    [search, setSearch] = useState(""),
+    [all, setAll] = useState(false),
+    [page, setPage] = useState(0);
   const load = () =>
-    run(async () => {
+    state.run(async () => {
       const result = await postJson<{ accounts: SourceAccount[] }>("/api/the5ers", {
         action: "accounts",
       });
       setInventory(result.accounts);
-      setChosen(overview?.selection.map((item) => item.id) ?? []);
-      setAutoSync(overview?.selection.some((item) => item.autoSync) ?? false);
+      setChosen(state.data?.selection.map((a) => a.id) ?? []);
+      setLinks(
+        Object.fromEntries(
+          (state.data?.selection ?? [])
+            .filter((a) => a.journalAccountId)
+            .map((a) => [a.id, a.journalAccountId!]),
+        ),
+      );
+      setAuto(state.data?.selection.some((a) => a.autoSync) ?? false);
+      setPage(0);
     });
-  const read = (resource: string, title: string, id?: string, positionKey?: string) =>
-    run(async () => {
+  const loaded = useRef(false);
+  useEffect(() => {
+    if (state.data?.connected && !loaded.current) {
+      loaded.current = true;
+      void load();
+    }
+  }, [state.data?.connected]);
+  if (state.loading) return null;
+  if (!state.data?.connected)
+    return (
+      <p className="px-4 text-sm text-muted-foreground">
+        <Link href="/settings?section=the5ers" className="underline">
+          Connect The5ers in Settings
+        </Link>{" "}
+        to add your Hub accounts.{state.error && <span role="alert"> {state.error}</span>}
+      </p>
+    );
+  const rows = (inventory ?? []).filter(
+    (a) =>
+      (all || !a.status || a.status === "active" || chosen.includes(a.id)) &&
+      `${a.label} ${a.platform} ${a.status ?? ""}`.toLowerCase().includes(search.toLowerCase()),
+  );
+  return (
+    <Card className="m-4">
+      <CardHeader>
+        <CardTitle>The5ers accounts</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <Messages state={state} />
+        <div className="flex flex-wrap gap-2">
+          <Button variant="outline" disabled={state.busy} onClick={() => void load()}>
+            Refresh account list
+          </Button>
+          <Link href="/settings?section=the5ers" className="self-center text-sm underline">
+            Connection settings
+          </Link>
+        </div>
+        {inventory && (
+          <>
+            <div className="flex flex-wrap items-center gap-3">
+              <Input
+                aria-label="Search The5ers accounts"
+                placeholder="Search account or platform"
+                value={search}
+                onChange={(e) => {
+                  setSearch(e.target.value);
+                  setPage(0);
+                }}
+                className="max-w-sm"
+              />
+              <label className="flex items-center gap-2 text-sm">
+                <Checkbox
+                  checked={all}
+                  onCheckedChange={(v) => {
+                    setAll(v === true);
+                    setPage(0);
+                  }}
+                />
+                Include inactive accounts
+              </label>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              {rows.length} matching / {inventory.length} accounts · {chosen.length} selected
+              (maximum 10)
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="border-b">
+                    <th className="p-2">Select</th>
+                    <th className="p-2">Account</th>
+                    <th className="p-2">Status</th>
+                    <th className="p-2">Journal link</th>
+                    <th className="p-2">Balance</th>
+                    <th className="p-2">Effective balance</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.slice(page * 20, page * 20 + 20).map((a) => (
+                    <tr key={a.id} className="border-b">
+                      <td className="p-2">
+                        <Checkbox
+                          aria-label={`Select ${a.label}`}
+                          checked={chosen.includes(a.id)}
+                          disabled={state.busy || (!chosen.includes(a.id) && chosen.length >= 10)}
+                          onCheckedChange={(v) =>
+                            setChosen((current) =>
+                              v === true ? [...current, a.id] : current.filter((id) => id !== a.id),
+                            )
+                          }
+                        />
+                      </td>
+                      <td className="p-2">
+                        <div>{a.label}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {a.platform} · {a.program ?? "Program unavailable"} ·{" "}
+                          {a.createdAt.slice(0, 10)}
+                        </div>
+                      </td>
+                      <td className="p-2">{a.status ?? "Unavailable"}</td>
+                      <td className="p-2">
+                        <select
+                          aria-label={`Journal account for ${a.label}`}
+                          className="max-w-40 rounded-md border bg-background p-2"
+                          value={links[a.id] ?? ""}
+                          onChange={(e) =>
+                            setLinks((current) => ({ ...current, [a.id]: e.target.value }))
+                          }
+                        >
+                          <option value="">Create account</option>
+                          {journal.data?.accounts
+                            .filter((j) => j.currency === a.currency)
+                            .map((j) => (
+                              <option key={j.id} value={j.id}>
+                                {j.name}
+                              </option>
+                            ))}
+                        </select>
+                      </td>
+                      <td className="p-2">
+                        <MonetaryValue>
+                          {cash(accountValue(a, "balance"), a.currency)}
+                        </MonetaryValue>
+                      </td>
+                      <td className="p-2">
+                        <MonetaryValue>
+                          {cash(
+                            accountValue(a, "effectiveBalance", "effective_balance", "equity"),
+                            a.currency,
+                          )}
+                        </MonetaryValue>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex items-center gap-3">
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!page}
+                onClick={() => setPage(page - 1)}
+              >
+                Previous
+              </Button>
+              <span className="text-sm">
+                Page {page + 1} / {Math.max(1, Math.ceil(rows.length / 20))}
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={(page + 1) * 20 >= rows.length}
+                onClick={() => setPage(page + 1)}
+              >
+                Next
+              </Button>
+            </div>
+            <label className="flex items-center gap-2 text-sm">
+              <Checkbox checked={auto} onCheckedChange={(v) => setAuto(v === true)} />
+              Daily source refresh
+            </label>
+            <Button
+              disabled={state.busy}
+              onClick={() =>
+                void state.run(async () => {
+                  await postJson("/api/the5ers", {
+                    action: "select",
+                    ids: chosen,
+                    autoSync: auto,
+                    linkJournalAccounts: true,
+                    journalLinks: Object.fromEntries(
+                      Object.entries(links).filter(([id, target]) => chosen.includes(id) && target),
+                    ),
+                  });
+                  state.refresh();
+                  onLinked?.();
+                  window.dispatchEvent(new Event("journal-accounts-changed"));
+                  state.setNotice(
+                    "Selected accounts linked to journal filters. Existing records were preserved.",
+                  );
+                })
+              }
+            >
+              Save and link selected accounts
+            </Button>
+            <p className="text-xs text-muted-foreground">
+              Current balances do not set initial capital. Linking makes accounts available to
+              journal filters; source executions are not yet imported into trade analytics.
+            </p>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+function SnapshotPanels({
+  view,
+  state,
+  section = "overview",
+  query = "",
+}: {
+  view: "accounts" | "prop" | "trades" | "dashboard";
+  state: ReturnType<typeof useSource>;
+  section?: string;
+  query?: string;
+}) {
+  const [detail, setDetail] = useState<{ title: string; data: unknown } | null>(null);
+  useEffect(() => setDetail(null), [view, section, query]);
+  const params = new URLSearchParams(query);
+  const selected = params.get("accounts")?.split(",").filter(Boolean) ?? [];
+  const snapshots = (state.data?.snapshots ?? []).filter(
+    (s) =>
+      !selected.length ||
+      selected.includes(
+        state.data?.selection.find((a) => a.id === s.account.id)?.journalAccountId ??
+          `the5ers_${s.account.id}`,
+      ),
+  );
+  const read = (resource: string, title: string, id?: string, key?: string) =>
+    state.run(async () => {
       const result = await postJson<{ data: unknown }>("/api/the5ers", {
         action: "read",
         resource,
         ...(id ? { id } : {}),
-        ...(positionKey ? { positionKey } : {}),
+        ...(key ? { positionKey: key } : {}),
       });
       setDetail({ title, data: result.data });
     });
-  if (state.loading && !overview)
-    return <p className="text-sm text-muted-foreground">Loading The5ers connection…</p>;
   return (
-    <div className="space-y-4">
-      <Card>
-        <CardHeader>
-          <CardTitle>The5ers connection</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-sm text-muted-foreground">
-            Connect your The5ers Hub with read-only permissions. View your accounts and source
-            records here, and refresh selected accounts on the journal&apos;s daily sync schedule.
-          </p>
-          {(state.error || error || overview?.error) && (
-            <p role="alert" className="text-sm text-loss">
-              {error ?? overview?.error ?? state.error}
-            </p>
-          )}
-          {notice && (
-            <p role="status" className="text-sm">
-              {notice}
-            </p>
-          )}
-          {overview && !overview.configured && (
-            <p className="text-sm text-muted-foreground">
-              JOURNAL_SECRET is missing on this server. The5ers credentials cannot be stored
-              securely.
-            </p>
-          )}
-          <div className="flex flex-wrap gap-2">
-            <Button
-              disabled={busy || state.loading}
-              onClick={() =>
-                void run(async () => {
-                  const { url } = await postJson<{ url: string }>("/api/the5ers", {
-                    action: "connect",
-                  });
-                  window.location.assign(url);
-                })
-              }
-            >
-              <Link2 />
-              {overview?.connected ? "Reconnect The5ers" : "Connect The5ers"}
-            </Button>
-            <Button
-              variant="outline"
-              disabled={busy || state.loading}
-              onClick={() =>
-                void run(async () => {
-                  const result = await postJson<{ message: string }>("/api/the5ers", {
-                    action: "check",
-                  });
-                  setNotice(result.message);
-                })
-              }
-            >
-              Check connection
-            </Button>
-            {overview?.connected && (
-              <>
-                <Button variant="outline" disabled={busy} onClick={() => void load()}>
-                  <RefreshCw />
-                  Load accounts
-                </Button>
-                <Button
-                  variant="outline"
-                  disabled={busy}
-                  onClick={() =>
-                    void run(async () => {
-                      await postJson("/api/the5ers", { action: "disconnect" });
-                      setInventory(null);
-                      setChosen([]);
-                      setDetail(null);
-                      state.refresh();
-                    })
-                  }
-                >
-                  <Unplug />
-                  Disconnect
-                </Button>
-              </>
-            )}
-          </div>
-          {overview?.connected && !overview.canRefresh && (
-            <p className="text-sm text-muted-foreground">
-              The5ers did not issue a refresh token. Scheduled reads may require reconnecting when
-              access expires.
-            </p>
-          )}
-          <p className="text-xs text-muted-foreground">
-            Automatic import into journal trade metrics awaits a verified execution format. Source
-            P&amp;L is displayed as reported by The5ers, including its fee and swap treatment.
-          </p>
-        </CardContent>
-      </Card>
-      {inventory && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Select accounts</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <p className="text-xs text-muted-foreground">
-              Select up to 10 accounts. Contest accounts use a separate source and are not included
-              in this selection.
-            </p>
-            {!inventory.length && <p>No trading accounts were returned.</p>}
-            {inventory.map((account) => (
-              <label key={account.id} className="flex items-start gap-3 rounded-md border p-3">
-                <Checkbox
-                  checked={chosen.includes(account.id)}
-                  disabled={busy || (!chosen.includes(account.id) && chosen.length >= 10)}
-                  onCheckedChange={(checked) =>
-                    setChosen((current) =>
-                      checked === true
-                        ? [...current, account.id]
-                        : current.filter((id) => id !== account.id),
-                    )
-                  }
-                />
-                <span>
-                  <span className="block text-sm font-medium">{account.label}</span>
-                  <span className="text-xs text-muted-foreground">
-                    {account.platform} · Created {account.createdAt}
-                  </span>
-                </span>
-              </label>
-            ))}
-            <div className="flex items-center gap-2">
-              <Checkbox
-                id="the5ers-auto-sync"
-                checked={autoSync}
-                disabled={busy}
-                onCheckedChange={(checked) => setAutoSync(checked === true)}
-              />
-              <Label htmlFor="the5ers-auto-sync">
-                Refresh selected accounts automatically each day
-              </Label>
-            </div>
-            <Button
-              disabled={busy}
-              onClick={() =>
-                void run(async () => {
-                  await postJson("/api/the5ers", { action: "select", ids: chosen, autoSync });
-                  state.refresh();
-                  setNotice("Account selection saved.");
-                })
-              }
-            >
-              Save account selection
-            </Button>
-          </CardContent>
-        </Card>
-      )}
-      {overview?.selection.map((account) => {
-        const snapshot = overview.snapshots.find((item) => item.account.id === account.id);
-        const positionSection = snapshot?.sections.positions?.data as
-          { rows?: { key: string; hasDetails: boolean; source: unknown }[] } | undefined;
-        return (
-          <Card key={account.id}>
-            <CardHeader>
-              <CardTitle>{account.label}</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <p className="text-xs text-muted-foreground">
-                {account.autoSync ? "Daily refresh enabled" : "Manual refresh"}
-                {snapshot ? ` · Retrieved ${snapshot.retrievedAt}` : " · Not refreshed yet"}
-              </p>
-              <Button
-                variant="outline"
-                disabled={busy}
-                onClick={() =>
-                  void run(async () => {
-                    await postJson("/api/the5ers", { action: "sync", id: account.id });
-                    state.refresh();
-                    setNotice("The5ers source snapshot refreshed.");
-                  })
-                }
-              >
-                <RefreshCw />
-                Refresh account
-              </Button>
-              {snapshot && !snapshot.complete && (
-                <p role="status" className="text-sm text-muted-foreground">
-                  This source snapshot is partial. Review section availability and coverage below.
+    <div className="space-y-3">
+      {(view === "prop" && ["ledger", "benefits", "activity"].includes(section)
+        ? []
+        : (state.data?.selection ?? [])
+      )
+        .filter(
+          (a) => !selected.length || selected.includes(a.journalAccountId ?? `the5ers_${a.id}`),
+        )
+        .map((a) => {
+          const snapshot = snapshots.find((s) => s.account.id === a.id);
+          const account = snapshot?.account;
+          const sections = snapshot?.sections ?? {};
+          const visible =
+            view === "accounts" || view === "dashboard"
+              ? ["balance"]
+              : view === "prop"
+                ? section === "payouts"
+                  ? ["payout"]
+                  : section === "ledger"
+                    ? []
+                    : ["rules", "consistency", "performance"]
+                : [];
+          const positions = obj(sections.positions?.data).rows as
+            { key: string; hasDetails: boolean; source: unknown }[] | undefined;
+          return (
+            <Card key={a.id}>
+              <CardHeader>
+                <CardTitle>{a.label}</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <p className="text-xs text-muted-foreground">
+                  {snapshot ? `Source retrieved ${snapshot.retrievedAt}` : "Not refreshed yet"} ·{" "}
+                  {a.autoSync ? "Daily refresh" : "Manual refresh"}
                 </p>
-              )}
-              {snapshot &&
-                Object.entries(snapshot.sections)
-                  .filter(([name]) => name !== "positions")
-                  .map(([name, section]) => (
-                    <details key={name} className="rounded-md border p-3">
-                      <summary className="cursor-pointer text-sm font-medium">
-                        {nameOf(name)}
-                        {!section.available ? " · Unavailable" : ""}
-                      </summary>
-                      <div className="mt-3">
-                        {section.available ? (
-                          <SourceValue value={section.data} />
+                {view !== "dashboard" && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={state.busy}
+                    onClick={() =>
+                      void state.run(async () => {
+                        await postJson("/api/the5ers", { action: "sync", id: a.id });
+                        state.refresh();
+                      })
+                    }
+                  >
+                    Refresh source
+                  </Button>
+                )}
+                {snapshot && !snapshot.complete && (
+                  <p className="text-xs text-muted-foreground">
+                    This source snapshot is partial. Some sections or history may be unavailable.
+                  </p>
+                )}
+                {visible.map(
+                  (name) =>
+                    sections[name] && (
+                      <div key={name} className="rounded-md border p-3">
+                        <h4 className="mb-2 text-sm font-medium">
+                          {heading(name)} (
+                          {String(
+                            obj(sections[name].data).currency ??
+                              account?.currency ??
+                              "currency unavailable",
+                          )}
+                          )
+                        </h4>
+                        {sections[name].available ? (
+                          <SourceValue value={sections[name].data} />
                         ) : (
-                          <p className="text-sm text-muted-foreground">{section.error}</p>
+                          <p className="text-sm">{sections[name].error}</p>
                         )}
                       </div>
-                    </details>
-                  ))}
-              {snapshot && (
-                <details className="rounded-md border p-3">
-                  <summary className="cursor-pointer text-sm font-medium">Positions</summary>
-                  <div className="mt-3 space-y-3">
-                    {snapshot.sections.positions?.available ? (
-                      positionSection?.rows?.slice(0, 25).map((position) => (
-                        <div key={position.key} className="space-y-2 rounded-md border p-3">
-                          <SourceValue value={position.source} />
-                          {position.hasDetails && (
-                            <div className="flex gap-2">
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                disabled={busy}
-                                onClick={() =>
-                                  void read(
-                                    "position",
-                                    "Position details",
-                                    account.id,
-                                    position.key,
-                                  )
-                                }
-                              >
-                                Details
-                              </Button>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                disabled={busy}
-                                onClick={() =>
-                                  void read(
-                                    "fills",
-                                    "Position executions",
-                                    account.id,
-                                    position.key,
-                                  )
-                                }
-                              >
-                                Executions
-                              </Button>
-                            </div>
-                          )}
-                        </div>
-                      ))
-                    ) : (
-                      <p className="text-sm text-muted-foreground">
-                        {snapshot.sections.positions?.error ?? "Positions unavailable"}
+                    ),
+                )}
+                {view === "trades" && (
+                  <>
+                    <p className="text-xs text-muted-foreground">
+                      Provider positions and executions. These records have not been included in
+                      journal trading metrics.
+                    </p>
+                    {positions?.slice(0, 100).map((p) => (
+                      <div key={p.key} className="space-y-2 rounded-md border p-3">
+                        <SourceValue value={p.source} />
+                        {p.hasDetails && (
+                          <div className="flex gap-2">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={state.busy}
+                              onClick={() => void read("position", "Position details", a.id, p.key)}
+                            >
+                              Details
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={state.busy}
+                              onClick={() => void read("fills", "Position executions", a.id, p.key)}
+                            >
+                              Executions
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                    {!sections.positions?.available && (
+                      <p className="text-sm">
+                        {sections.positions?.error ?? "Refresh this account to retrieve positions."}
                       </p>
                     )}
-                    {(positionSection?.rows?.length ?? 0) > 25 && (
-                      <p className="text-xs text-muted-foreground">
-                        Showing the first 25 positions from this snapshot.
+                    {(positions?.length ?? 0) > 100 && (
+                      <p className="text-xs">
+                        Showing 100 of {positions?.length} source positions.
                       </p>
                     )}
+                  </>
+                )}
+                {view === "prop" && section !== "ledger" && (
+                  <div className="flex flex-wrap gap-2">
+                    {(section === "payouts"
+                      ? [["payoutHistory", "Payout history"]]
+                      : [
+                          ["health", "Account health"],
+                          ["journey", "Program journey"],
+                        ]
+                    ).map(([resource, title]) => (
+                      <Button
+                        key={resource}
+                        size="sm"
+                        variant="outline"
+                        disabled={state.busy}
+                        onClick={() => void read(resource!, title!, a.id)}
+                      >
+                        {title}
+                      </Button>
+                    ))}
                   </div>
-                </details>
-              )}
-              <div className="flex flex-wrap gap-2">
-                {[
-                  ["health", "Account health"],
-                  ["daily", "Daily summaries"],
-                  ["balanceChart", "Balance history"],
-                  ["journey", "Program journey"],
-                  ["payoutHistory", "Payout history"],
-                ].map(([resource, title]) => (
-                  <Button
-                    key={resource}
-                    size="sm"
-                    variant="outline"
-                    disabled={busy}
-                    onClick={() => void read(resource!, title!, account.id)}
-                  >
-                    {title}
-                  </Button>
-                ))}
-              </div>
-            </CardContent>
-          </Card>
-        );
-      })}
-      {overview?.connected && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Additional The5ers records</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <p className="text-xs text-muted-foreground">
-              Availability depends on the permissions granted and the records The5ers exposes.
-              Payout, coupon and notification histories may be incomplete.
-            </p>
-            <div className="flex flex-wrap gap-2">
-              {[
-                ["accountInventory", "Account source data"],
-                ["purchases", "Account purchases"],
-                ["wallet", "Credits"],
-                ["coupons", "Coupons"],
-                ["achievements", "Achievements"],
-                ["alerts", "Notifications"],
-                ["affiliate", "Affiliate"],
-              ].map(([resource, title]) => (
-                <Button
-                  key={resource}
-                  variant="outline"
-                  size="sm"
-                  disabled={busy}
-                  onClick={() => void read(resource!, title!)}
-                >
-                  {title}
-                </Button>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+                )}
+                {view === "accounts" && account && (
+                  <p className="text-xs text-muted-foreground">
+                    Source status:{" "}
+                    {account.status ?? String(accountValue(account, "status") ?? "Unavailable")} ·
+                    Starting capital is maintained independently.
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          );
+        })}
+      {view === "prop" && state.data?.connected && (
+        <div className="flex flex-wrap gap-2">
+          {(section === "ledger"
+            ? [["purchases", "Purchases & fees"]]
+            : section === "benefits"
+              ? [
+                  ["wallet", "Credits"],
+                  ["coupons", "Coupons"],
+                  ["achievements", "Achievements"],
+                ]
+              : section === "activity"
+                ? [
+                    ["alerts", "Notifications"],
+                    ["affiliate", "Affiliate"],
+                  ]
+                : []
+          ).map(([resource, title]) => (
+            <Button
+              key={resource}
+              variant="outline"
+              disabled={state.busy}
+              onClick={() => void read(resource!, title!)}
+            >
+              {title}
+            </Button>
+          ))}
+        </div>
       )}
+      {view === "prop" &&
+        selected.length > 0 &&
+        ["ledger", "benefits", "activity"].includes(section) && (
+          <p className="text-xs text-muted-foreground">
+            Hub-wide records cannot yet be attributed safely to this account. Clear the account
+            filter to view them.
+          </p>
+        )}
       {detail && (
         <Card>
           <CardHeader>
-            <CardTitle>{detail.title}</CardTitle>
+            <CardTitle>
+              {detail.title}{" "}
+              <span className="text-xs font-normal text-muted-foreground">· Provider records</span>
+            </CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-3">
+            {view === "prop" && (section === "ledger" || section === "payouts") && (
+              <p className="text-xs text-muted-foreground">
+                Source records awaiting reconciliation. They do not count as posted spending or
+                received cash in the totals above.
+              </p>
+            )}
+            {obj(detail.data).complete === false && (
+              <p className="text-xs">Source history is partial.</p>
+            )}
             <SourceValue value={detail.data} />
           </CardContent>
         </Card>
       )}
     </div>
   );
+}
+export function The5ersSource({
+  view,
+  section,
+  query = "",
+}: {
+  view: "prop" | "trades" | "dashboard";
+  section?: string;
+  query?: string;
+}) {
+  const state = useSource();
+  if (!state.data?.connected && !state.error) return null;
+  if (view === "dashboard" && !state.data?.snapshots.length) return null;
+  return (
+    <section className="space-y-3 p-4" aria-label="The5ers source records">
+      <h2 className="text-base font-semibold">
+        {view === "trades"
+          ? "Connected account positions"
+          : view === "dashboard"
+            ? "Connected account balances"
+            : "The5ers program records"}
+      </h2>
+      <Messages state={state} />
+      <SnapshotPanels view={view} section={section} state={state} query={query} />
+    </section>
+  );
+}
+
+export function The5ersLinkedAccount({ accountId }: { accountId: string }) {
+  const state = useSource();
+  if (!state.data?.connected) return null;
+  return <SnapshotPanels view="accounts" state={state} query={`accounts=${accountId}`} />;
 }

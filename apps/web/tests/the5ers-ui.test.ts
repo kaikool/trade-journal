@@ -31,22 +31,35 @@ vi.mock("../src/lib/use-api", () => ({
     },
   }),
 }));
-import { The5ersConnection } from "../src/components/the5ers";
+import { The5ersConnection, The5ersSource } from "../src/components/the5ers";
 afterEach(() => {
   state.privacy = false;
 });
 it("renders reported financial values as text and shows partial coverage", () => {
-  const html = renderToStaticMarkup(createElement(The5ersConnection));
+  const html = renderToStaticMarkup(createElement(The5ersSource, { view: "dashboard" }));
   expect(html).toContain("12345.67");
   expect(html).toContain("snapshot is partial");
   expect(html).toContain("&lt;script&gt;");
   expect(html).not.toContain("<script>");
-  expect(html).toContain("Unsupported platform");
+  expect(html).not.toContain("Unsupported platform");
 });
 it("hides source financial values while journal privacy mode is enabled", () => {
   state.privacy = true;
-  const html = renderToStaticMarkup(createElement(The5ersConnection));
+  const html = renderToStaticMarkup(createElement(The5ersSource, { view: "dashboard" }));
   expect(html).not.toContain("12345.67");
   expect(html).not.toContain("alert(1)");
   expect(html).toContain("Source financial data hidden");
+});
+
+it("keeps financial data out of connection settings and provides links to existing sections", () => {
+  const html = renderToStaticMarkup(createElement(The5ersConnection));
+  expect(html).not.toContain("12345.67");
+  expect(html).toContain('href="/accounts"');
+  expect(html).toContain('href="/prop-firms"');
+});
+it("scopes source balances to the same journal account filter", () => {
+  const html = renderToStaticMarkup(
+    createElement(The5ersSource, { view: "dashboard", query: "accounts=other-account" }),
+  );
+  expect(html).not.toContain("12345.67");
 });

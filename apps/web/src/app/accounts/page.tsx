@@ -2,6 +2,7 @@
 
 import { Suspense, useState } from "react";
 import { Archive, ArchiveRestore, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { The5ersAccounts, The5ersLinkedAccount } from "@/components/the5ers";
 import { AccountCreateForm } from "@/components/account-create-form";
 import { FilterBar } from "@/components/filter-bar";
 import { Badge } from "@/components/ui/badge";
@@ -30,6 +31,7 @@ import { isEnabledSyncBroker } from "@/lib/supported-brokers";
 
 interface AccountRow {
   id: string;
+  the5ersSourceId?: string;
   name: string;
   broker: string;
   kind: "sync" | "import" | "manual";
@@ -90,6 +92,7 @@ function Accounts() {
           </Button>
         }
       />
+      <The5ersAccounts onLinked={refresh} />
       <Dialog open={creating} onOpenChange={setCreating}>
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
@@ -173,6 +176,7 @@ function Accounts() {
               </div>
             </CardHeader>
             <CardContent className="space-y-3">
+              {account.the5ersSourceId && <The5ersLinkedAccount accountId={account.id} />}
               {account.snapshot && (
                 <div className="text-sm">
                   Broker equity:{" "}

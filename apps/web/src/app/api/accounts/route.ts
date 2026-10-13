@@ -6,7 +6,7 @@ import { newId, nowIso } from "@/server/ids";
 import { syncAccount } from "@/server/sync";
 import { isEnabledSyncBroker } from "@/lib/supported-brokers";
 import { validateAccountBody } from "@/server/account-validation";
-import { setSetting, deleteSetting } from "@/server/settings";
+import { setSetting, deleteSetting, getSetting } from "@/server/settings";
 
 export const GET = handler(async (request: Request) => {
   if (new URL(request.url).searchParams.get("summary") === "1") {
@@ -15,6 +15,7 @@ export const GET = handler(async (request: Request) => {
         id: accounts.id,
         name: accounts.name,
         broker: accounts.broker,
+        currency: accounts.currency,
         archivedAt: accounts.archivedAt,
       })
       .from(accounts)
@@ -22,9 +23,15 @@ export const GET = handler(async (request: Request) => {
     return ok({ accounts: list });
   }
   const rows = await db.select().from(accounts).orderBy(asc(accounts.createdAt));
+  const links = JSON.parse((await getSetting("the5ers:journal-links")) ?? "{}") as Record<
+    string,
+    string
+  >;
+
   return ok({
     accounts: rows.map(({ credentialsEnc, ...safe }) => ({
       ...safe,
+      the5ersSourceId: Object.entries(links).find(([, target]) => target === safe.id)?.[0],
       connected: credentialsEnc !== null,
       snapshot: safe.snapshotJson ? JSON.parse(safe.snapshotJson) : null,
     })),

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { The5ersSource } from "@/components/the5ers";
 import { Suspense, useState } from "react";
 import type {
   CalendarMonth,
@@ -99,6 +100,7 @@ function Dashboard() {
   return (
     <>
       <FilterBar title="Dashboard" actions={<AddTradeDialog onSaved={refresh} />} />
+      <The5ersSource view="dashboard" query={query} />
       <DashboardContent
         data={data}
         loading={loading}

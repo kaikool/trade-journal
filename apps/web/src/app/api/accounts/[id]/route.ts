@@ -5,7 +5,7 @@ import { rebuildAccountInTransaction } from "@/server/rebuild";
 import { hasSyncedExecutions, isIbkrSyncAccount } from "@/server/ibkr-sync-timezone";
 import { isEnabledSyncBroker } from "@/lib/supported-brokers";
 import { validateAccountBody } from "@/server/account-validation";
-import { deleteSetting } from "@/server/settings";
+import { deleteSetting, getSetting, setSetting } from "@/server/settings";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -68,6 +68,25 @@ export const DELETE = handler(async (_request: Request, { params }: Params) => {
     await tx.delete(executions).where(eq(executions.accountId, id));
     await tx.delete(accounts).where(eq(accounts.id, id));
     await deleteSetting(`brokerAccount:${id}`, tx);
+    const links = JSON.parse((await getSetting("the5ers:journal-links", tx)) ?? "{}") as Record<
+      string,
+      string
+    >;
+    const sourceIds = Object.entries(links)
+      .filter(([, target]) => target === id)
+      .map(([source]) => source);
+    if (sourceIds.length) {
+      for (const source of sourceIds) delete links[source];
+      await setSetting("the5ers:journal-links", JSON.stringify(links), tx);
+      const selection = JSON.parse((await getSetting("the5ers:selection", tx)) ?? "[]") as {
+        id: string;
+      }[];
+      await setSetting(
+        "the5ers:selection",
+        JSON.stringify(selection.filter((a) => !sourceIds.includes(a.id))),
+        tx,
+      );
+    }
   });
   return ok({ deleted: true });
 });

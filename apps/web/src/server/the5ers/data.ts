@@ -1,11 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
-import { eq, like } from "drizzle-orm";
-import { db, settings } from "@/db";
+import { and, eq, like, sql } from "drizzle-orm";
+import { db, settings, accounts as journalAccounts, propAccounts, propAudit } from "@/db";
 import { parseTimestamp } from "@luxalgo/journal-importers";
 import { RequestError, requireValue } from "@/server/api";
 import { getSetting, setSetting } from "@/server/settings";
 import { encryptJson, decryptJson } from "@/server/crypto";
 import { publicData, record, type ReadTool } from "./contracts";
+import { PROP_PROGRAMS, PROP_STATES, currencyDigits } from "@/lib/prop-firms";
 import { The5ersMcp } from "./mcp";
 import {
   accessConnection,
@@ -22,6 +23,9 @@ export interface SourceAccount {
   platform: string;
   createdAt: string;
   source: unknown;
+  currency?: string;
+  status?: string;
+  program?: string;
 }
 interface ProviderAccount extends SourceAccount {
   ref: string;
@@ -30,6 +34,7 @@ export interface Selection {
   id: string;
   label: string;
   autoSync: boolean;
+  journalAccountId?: string;
 }
 export interface SourceSnapshot {
   account: SourceAccount;
@@ -90,7 +95,8 @@ export function parseProviderAccounts(value: unknown): {
         "The5ers account references or labels are unavailable.",
       );
       const createdAt = row.createdAt ?? row.creationDate ?? row.created_at;
-      const platform = row.tradingPlatform ?? row.platform ?? row.tradingSystem;
+      const platform =
+        row.tradingPlatform ?? row.platform ?? row.tradingSystem ?? row.trading_system;
       requireValue(
         date(createdAt) &&
           typeof platform === "string" &&
@@ -102,7 +108,21 @@ export function parseProviderAccounts(value: unknown): {
       const id = createHash("sha256")
         .update(JSON.stringify([row.label, platform, stamp]))
         .digest("hex");
+      const envelope = record(value);
+      const currency =
+        row.currency ??
+        envelope.currency ??
+        (envelope.data && !Array.isArray(envelope.data)
+          ? record(envelope.data).currency
+          : undefined);
       return {
+        currency:
+          typeof currency === "string" && /^[A-Z]{3}$/.test(currency) ? currency : undefined,
+        status: typeof row.status === "string" ? row.status : undefined,
+        program:
+          typeof (row.type ?? row.accountType ?? row.account_type) === "string"
+            ? String(row.type ?? row.accountType ?? row.account_type)
+            : undefined,
         id,
         ref: row.ref,
         label: row.label,
@@ -177,7 +197,12 @@ export async function selectedAccounts(): Promise<Selection[]> {
   );
   return parsed as Selection[];
 }
-export async function selectSourceAccounts(ids: unknown, autoSync: unknown) {
+export async function selectSourceAccounts(
+  ids: unknown,
+  autoSync: unknown,
+  linkJournalAccounts = false,
+  journalLinks: Record<string, string> = {},
+) {
   requireValue(
     Array.isArray(ids) &&
       ids.length <= 10 &&
@@ -186,15 +211,188 @@ export async function selectSourceAccounts(ids: unknown, autoSync: unknown) {
       typeof autoSync === "boolean",
     "Select up to 10 accounts and choose automatic sync.",
   );
+  requireValue(
+    Object.keys(journalLinks).length <= 10 &&
+      Object.entries(journalLinks).every(
+        ([source, target]) =>
+          (ids as string[]).includes(source) && /^[a-zA-Z0-9_-]{1,100}$/.test(target),
+      ),
+    "Choose valid existing journal accounts.",
+  );
+  const storedLinks = JSON.parse((await getSetting("the5ers:journal-links")) ?? "{}") as Record<
+    string,
+    string
+  >;
   const { connection, client } = await sourceClient();
   const available = await inventory(client);
   const selected = ids.map((id) => {
     const account = available.find((a) => a.id === id);
     requireValue(account, "An account is no longer available. Refresh the account list.");
-    return { id: account.id, label: account.label, autoSync };
+    return {
+      id: account.id,
+      label: account.label,
+      autoSync,
+      journalAccountId:
+        journalLinks[id] ?? storedLinks[id] ?? (linkJournalAccounts ? `the5ers_${id}` : undefined),
+    };
   });
   await db.transaction(async (tx) => {
     await assertConnection(connection.id, tx);
+    if (linkJournalAccounts)
+      for (const selectedAccount of [...selected].sort((a, b) =>
+        (a.journalAccountId ?? "").localeCompare(b.journalAccountId ?? ""),
+      )) {
+        const account = available.find((a) => a.id === selectedAccount.id)!;
+        requireValue(
+          account.currency,
+          "The5ers did not report this account's currency. No journal account was created.",
+        );
+        try {
+          currencyDigits(account.currency);
+        } catch {
+          throw new RequestError(
+            "The5ers reported an unsupported account currency. No journal account was created.",
+          );
+        }
+        const id = selectedAccount.journalAccountId!,
+          now = new Date().toISOString();
+        const mappings = JSON.parse(
+          (await getSetting("the5ers:journal-links", tx)) ?? "{}",
+        ) as Record<string, string>;
+        requireValue(
+          !Object.entries(mappings).some(
+            ([source, target]) => source !== account.id && target === id,
+          ),
+          "This journal account is already linked to another The5ers account.",
+        );
+        if (id === `the5ers_${account.id}`) {
+          await tx
+            .insert(journalAccounts)
+            .values({
+              id,
+              name: `The5ers · ${account.label}`,
+              broker: "The5ers",
+              kind: "import",
+              currency: account.currency,
+              initialBalance: 0,
+              autoSync: false,
+              createdAt: now,
+            })
+            .onConflictDoNothing();
+        }
+        const [existing] = await tx
+          .select()
+          .from(journalAccounts)
+          .where(eq(journalAccounts.id, id));
+        requireValue(
+          existing && existing.kind !== "sync" && existing.currency === account.currency,
+          "The linked journal account currency or provider changed. Review it before linking again.",
+        );
+        if (!(await getSetting(`${SNAPSHOT_PREFIX}${account.id}`, tx))) {
+          const { ref: _ref, ...publicAccount } = account;
+          const source = record(account.source);
+          const money = Object.fromEntries(
+            ["balance", "effectiveBalance", "effective_balance", "equity"]
+              .filter((key) => typeof source[key] === "number" && Number.isFinite(source[key]))
+              .map((key) => [key, source[key]]),
+          );
+          if (Object.keys(money).length) {
+            const snapshot: SourceSnapshot = {
+              account: publicAccount,
+              retrievedAt: now,
+              complete: false,
+              importedExecutions: 0,
+              warnings: [
+                "Account inventory snapshot; source freshness is unknown. Refresh to retrieve program and position history.",
+              ],
+              sections: {
+                balance: { available: true, data: { currency: account.currency, data: money } },
+              },
+            };
+            await setSetting(`${SNAPSHOT_PREFIX}${account.id}`, JSON.stringify(snapshot), tx);
+          }
+        }
+        const previousJournal = mappings[account.id];
+        mappings[account.id] = id;
+        await setSetting("the5ers:journal-links", JSON.stringify(mappings), tx);
+        let [tracked] = await tx
+          .select()
+          .from(propAccounts)
+          .where(eq(propAccounts.id, `the5ers_${account.id}`))
+          .for("update");
+        const associated = await tx
+          .select()
+          .from(propAccounts)
+          .where(
+            and(
+              eq(propAccounts.journalAccountId, previousJournal ?? id),
+              eq(propAccounts.firm, "The5ers"),
+            ),
+          )
+          .for("update");
+        if (!tracked && associated.length === 1 && associated[0]!.currency === account.currency)
+          tracked = associated[0];
+        if (tracked && tracked.journalAccountId !== id) {
+          requireValue(
+            tracked.firm === "The5ers" && tracked.currency === account.currency,
+            "Review the existing prop account before changing its journal link.",
+          );
+          await tx
+            .update(propAccounts)
+            .set({
+              journalAccountId: id,
+              updatedAt: now,
+              revision: sql`${propAccounts.revision} + 1`,
+            })
+            .where(eq(propAccounts.id, tracked.id));
+          await tx.insert(propAudit).values({
+            id: randomUUID(),
+            entityType: "account",
+            entityId: tracked.id,
+            beforeJson: JSON.stringify(tracked),
+            afterJson: JSON.stringify({
+              ...tracked,
+              journalAccountId: id,
+              revision: tracked.revision + 1,
+            }),
+            reason: "Updated The5ers journal association",
+            createdAt: now,
+          });
+        }
+        if (
+          !tracked &&
+          associated.length === 0 &&
+          PROP_PROGRAMS.includes(account.program as (typeof PROP_PROGRAMS)[number]) &&
+          PROP_STATES.includes(account.status as (typeof PROP_STATES)[number])
+        ) {
+          const value = {
+            id: `the5ers_${account.id}`,
+            firm: "The5ers",
+            name: account.label,
+            program: account.program!,
+            status: account.status!,
+            currency: account.currency,
+            journalAccountId: id,
+            openedOn: account.createdAt.slice(0, 10),
+            createdAt: now,
+            updatedAt: now,
+          };
+          const created = await tx
+            .insert(propAccounts)
+            .values(value)
+            .onConflictDoNothing()
+            .returning({ id: propAccounts.id });
+          if (created.length)
+            await tx.insert(propAudit).values({
+              id: randomUUID(),
+              entityType: "account",
+              entityId: id,
+              afterJson: JSON.stringify(value),
+              reason: "Linked from The5ers account selection",
+              createdAt: now,
+            });
+        }
+      }
     await setSetting(SELECTION_KEY, JSON.stringify(selected), tx);
   });
   return selected;
@@ -370,6 +568,18 @@ export async function readSourceSection(resource: string, id?: string, positionK
   const { connection, client } = await sourceClient();
   if (Object.hasOwn(global, resource)) {
     const read = global[resource]!;
+    if (resource === "accountInventory")
+      return {
+        accounts: (await inventory(client)).map(({ ref: _ref, ...account }) => account),
+        complete: true,
+      };
+    if (resource === "purchases" || resource === "alerts")
+      return paginatedSource(
+        client,
+        read.tool,
+        read.operation,
+        resource === "purchases" ? "purchases" : "alerts",
+      );
     return publicData(await client.read(read.tool, read.operation));
   }
   requireValue(
@@ -398,10 +608,22 @@ export async function readSourceSection(resource: string, id?: string, positionK
   }
   const account = (await inventory(client)).find((a) => a.id === id);
   requireValue(account, "This The5ers account is no longer available.");
+  if (resource === "payoutHistory")
+    return paginatedSource(client, read.tool, read.operation, "payouts", {
+      account_ref: account.ref,
+    });
   return publicData(await client.read(read.tool, read.operation, { account_ref: account.ref }));
 }
 export async function syncScheduledThe5ers(deadline = Date.now() + 240_000) {
-  const selected = (await selectedAccounts()).filter((account) => account.autoSync);
+  const candidates = (await selectedAccounts()).filter((account) => account.autoSync);
+  const native = candidates.some((a) => a.journalAccountId)
+    ? await db
+        .select({ id: journalAccounts.id, archivedAt: journalAccounts.archivedAt })
+        .from(journalAccounts)
+    : [];
+  const selected = candidates.filter(
+    (a) => !a.journalAccountId || native.some((n) => n.id === a.journalAccountId && !n.archivedAt),
+  );
   let synced = 0,
     failed = 0;
   for (const account of selected) {
@@ -418,4 +640,52 @@ export async function syncScheduledThe5ers(deadline = Date.now() + 240_000) {
     }
   }
   return { checked: selected.length, synced, failed };
+}
+
+/** Preserve every page envelope (currency/coverage), rather than silently merging money. */
+async function paginatedSource(
+  client: The5ersMcp,
+  tool: ReadTool,
+  operation: string,
+  collection: string,
+  args: Record<string, unknown> = {},
+) {
+  const pages: unknown[] = [];
+  const seen = new Set<string>();
+  let bytes = 0;
+  for (let page = 1; page <= 50; page++) {
+    const result = record(await client.read(tool, operation, { ...args, page, limit: 20 }));
+    const body = result.data && !Array.isArray(result.data) ? record(result.data) : result;
+    const pagination = record(result.pagination ?? body.pagination);
+    requireValue(
+      typeof pagination.has_more === "boolean",
+      "The5ers did not report pagination coverage for this source.",
+    );
+    const values =
+      body[collection] ??
+      body.items ??
+      body.notifications ??
+      body.history ??
+      (Array.isArray(result.data) ? result.data : undefined);
+    requireValue(
+      Array.isArray(values) && values.length <= 20,
+      "The5ers returned an unsupported paginated source format.",
+    );
+    const safe = publicData(result);
+    const fingerprint = JSON.stringify(values);
+    requireValue(
+      !seen.has(fingerprint) && (!pagination.has_more || values.length > 0),
+      "The5ers repeated or omitted a source page. No cash records were posted.",
+    );
+    seen.add(fingerprint);
+    bytes += Buffer.byteLength(JSON.stringify(safe));
+    requireValue(bytes <= 4 * 1024 * 1024, "The5ers source exceeded its size limit.");
+    pages.push(safe);
+    if (!pagination.has_more) return { pages, complete: true };
+  }
+  return {
+    pages,
+    complete: false,
+    warning: "Source history reached its page limit; additional records may exist.",
+  };
 }
