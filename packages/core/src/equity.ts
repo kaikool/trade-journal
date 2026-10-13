@@ -10,8 +10,8 @@ export interface EquityPoint {
 export interface DayStats {
   date: string;
   netPnl: number;
-  grossPnl: number;
-  fees: number;
+  grossPnl: number | null;
+  fees: number | null;
   trades: number;
   wins: number;
   losses: number;
@@ -56,8 +56,9 @@ export const dailyStats = (trades: RoundTrip[], timeZone = "UTC"): DayStats[] =>
       days.set(date, day);
     }
     day.netPnl += trade.netPnl;
-    day.grossPnl += trade.grossPnl;
-    day.fees += trade.fees;
+    day.grossPnl =
+      trade.costsUnavailable || day.grossPnl === null ? null : day.grossPnl + trade.grossPnl;
+    day.fees = trade.costsUnavailable || day.fees === null ? null : day.fees + trade.fees;
     day.trades += 1;
     day.volume += trade.quantity;
     if (trade.status === "win") day.wins += 1;
@@ -146,6 +147,15 @@ export const intradayCurve = (
 ): IntradayPoint[] => {
   const events: { t: string; pnl: number }[] = [];
   for (const trade of trades) {
+    if (
+      trade.costsUnavailable &&
+      trade.status !== "open" &&
+      trade.closedAt &&
+      dayKeyOf(trade.closedAt, timeZone) === date
+    ) {
+      events.push({ t: trade.closedAt, pnl: trade.netPnl });
+      continue;
+    }
     const totalExitQty = trade.exits.reduce((total, exit) => total + exit.quantity, 0);
     for (const exit of trade.exits) {
       const t = executionTimes.get(exit.executionId);

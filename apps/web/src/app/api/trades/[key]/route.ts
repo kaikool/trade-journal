@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { db, trades, playbooks, accounts } from "@/db";
 import { bad, handler, ok, requireValue } from "@/server/api";
 import { deleteExecutionsForTrades, listExecutions } from "@/server/executions";
+import { annotateSourceTrade } from "@/server/the5ers/journal";
 import { nowIso } from "@/server/ids";
 import { getTradeByKey, rowToTrade } from "@/server/trades-query";
 import { getTimeZone } from "@/server/settings";
@@ -22,11 +23,14 @@ export const GET = handler(async (_request: Request, { params }: Params) => {
       .where(eq(accounts.id, row.accountId))
       .limit(1),
   ]);
-  const fills = await listExecutions(row.accountId, trade.executionIds);
+  const fills =
+    row.source === "the5ers" ? [] : await listExecutions(row.accountId, trade.executionIds);
   return ok({
     timeZone,
     trade: {
       ...row,
+      grossPnl: row.costsUnavailable ? null : row.grossPnl,
+      fees: row.costsUnavailable ? null : row.fees,
       status: trade.status,
       riskAmount: tradeRisk(trade),
       realizedR: tradeR(trade),
@@ -96,7 +100,9 @@ export const PATCH = handler(async (request: Request, { params }: Params) => {
   if (body.reviewed !== undefined) patch.reviewedAt = body.reviewed ? nowIso() : null;
 
   if (!Object.keys(patch).length) return ok({ updated: true });
-  await db.update(trades).set(patch).where(eq(trades.key, decoded));
+  if (row.source === "the5ers")
+    await db.transaction((tx) => annotateSourceTrade(tx, decoded, patch));
+  else await db.update(trades).set(patch).where(eq(trades.key, decoded));
   return ok({ updated: true });
 });
 
@@ -105,6 +111,8 @@ export const DELETE = handler(async (_request: Request, { params }: Params) => {
   const row = await getTradeByKey(key);
   if (!row) return bad("Trade not found", 404);
   // Deleting a trade means deleting its executions; the rebuild removes the row.
-  await deleteExecutionsForTrades(row.accountId, JSON.parse(row.executionIdsJson) as string[]);
+  if (row.source === "the5ers")
+    await db.transaction((tx) => annotateSourceTrade(tx, key, { excluded: true }));
+  else await deleteExecutionsForTrades(row.accountId, JSON.parse(row.executionIdsJson) as string[]);
   return ok({ deleted: true });
 });

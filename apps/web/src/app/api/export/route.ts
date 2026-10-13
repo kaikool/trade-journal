@@ -22,6 +22,7 @@ import {
   importBatches,
 } from "@/db";
 import { readFilters } from "@luxalgo/journal-core";
+import { sourceTradeRows } from "@/server/the5ers/journal";
 import { queryTrades } from "@/server/trades-query";
 import {
   getJournalDefaults,
@@ -57,8 +58,8 @@ export const GET = handler(async (request: Request) => {
         row.quantity,
         row.avgEntry,
         row.avgExit ?? "",
-        row.grossPnl,
-        row.fees,
+        row.costsUnavailable ? "" : row.grossPnl,
+        row.costsUnavailable ? "" : row.fees,
         row.netPnl,
         row.tagsJson ?? "[]",
         row.notes ?? "",
@@ -145,6 +146,11 @@ export const GET = handler(async (request: Request) => {
     importSourceAliases: importSourceAliasesRows,
     importBatches: importBatchesRows,
     trades: tradesRows,
+    reportedPositions: (await sourceTradeRows()).map((row) => ({
+      ...row,
+      grossPnl: null,
+      fees: null,
+    })),
     journalDays: journalDaysRows,
     notes: notesRows,
     folders: foldersRows,

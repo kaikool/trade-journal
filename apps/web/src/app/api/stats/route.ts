@@ -26,14 +26,19 @@ import { queryTrades, type TradeFilters } from "@/server/trades-query";
 export const GET = handler(async (request: Request) => {
   const url = new URL(request.url);
   const filters: TradeFilters = readFilters(url.searchParams);
-  const [timeZone, { trades: originalTrades }, accountRows, conversion, playbookRows] =
-    await Promise.all([
-      getTimeZone(),
-      queryTrades(filters),
-      db.select().from(accounts).orderBy(asc(accounts.createdAt)),
-      getCurrencyConversion(),
-      db.select({ id: playbooks.id, name: playbooks.name }).from(playbooks),
-    ]);
+  const [
+    timeZone,
+    { trades: originalTrades, sourceCoverage },
+    accountRows,
+    conversion,
+    playbookRows,
+  ] = await Promise.all([
+    getTimeZone(),
+    queryTrades(filters),
+    db.select().from(accounts).orderBy(asc(accounts.createdAt)),
+    getCurrencyConversion(),
+    db.select({ id: playbooks.id, name: playbooks.name }).from(playbooks),
+  ]);
   const selected = filters.accounts
     ? accountRows.filter((a) =>
         filters
@@ -63,6 +68,7 @@ export const GET = handler(async (request: Request) => {
   );
   return ok({
     timeZone,
+    sourceCoverage,
     currencies: currencyScope.monetary
       ? [currencyScope.currency ?? "USD"]
       : currencyScope.sourceCurrencies,

@@ -3,6 +3,10 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { sourceStatus, defaultSourceVisible } from "@/lib/the5ers-status";
 import { useApi, postJson } from "@/lib/use-api";
+import { Badge } from "./ui/badge";
+import { normalizePurchase, sourceInstant, sourceObject } from "@/lib/the5ers-normalize";
+import { fromMinor } from "@/lib/prop-firms";
+import { fmtMoney } from "@/lib/utils";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Checkbox } from "./ui/checkbox";
@@ -10,6 +14,7 @@ import { Input } from "./ui/input";
 import { MonetaryValue, usePrivacy } from "./privacy";
 import type { SourceAccount, Selection, SourceSnapshot } from "@/server/the5ers/data";
 interface Overview {
+  timeZone?: string;
   configured: boolean;
   connected: boolean;
   canRefresh: boolean;
@@ -39,6 +44,101 @@ const cash = (value: unknown, currency?: string) => {
     ? new Intl.NumberFormat("en", { style: "currency", currency }).format(amount)
     : `${amount} (currency unavailable)`;
 };
+export function formatSourceDate(value: unknown, timeZone: string) {
+  const instant = sourceInstant(value);
+  return instant
+    ? new Intl.DateTimeFormat("en-GB", {
+        timeZone,
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        hourCycle: "h23",
+      }).format(new Date(instant))
+    : "Date unavailable";
+}
+export function The5ersBalance({ value, currency }: { value: unknown; currency?: string }) {
+  const envelope = sourceObject(value),
+    data = sourceObject(envelope.data ?? envelope);
+  const code = typeof envelope.currency === "string" ? envelope.currency : undefined;
+  return (
+    <dl className="grid grid-cols-2 gap-3 text-sm">
+      {[
+        ["Balance", data.balance],
+        ["Equity", data.equity],
+        ["Effective balance", data.equity === undefined ? data.effectiveBalance : undefined],
+        ["Net P&L", data.profitAndLoss],
+        ["Today", data.dailyProfitAndLoss],
+      ]
+        .filter(([, amount]) => amount !== undefined)
+        .map(([label, amount]) => (
+          <div key={String(label)}>
+            <dt className="text-xs text-muted-foreground">{String(label)}</dt>
+            <dd className="tnum mt-1 font-medium">
+              <MonetaryValue>{cash(amount, code)}</MonetaryValue>
+            </dd>
+          </div>
+        ))}
+    </dl>
+  );
+}
+export function The5ersPurchases({ value, timeZone }: { value: unknown; timeZone: string }) {
+  const privacy = usePrivacy();
+  if (privacy) return <p>Turn off privacy mode to view source data.</p>;
+  const history = sourceObject(value);
+  const pages = Array.isArray(history.pages) ? history.pages : [value];
+  const orders = pages.flatMap((page) => {
+    const envelope = sourceObject(page),
+      body = sourceObject(envelope.data ?? envelope);
+    return Array.isArray(body.purchases) ? body.purchases : [];
+  });
+  return (
+    <div className="space-y-3">
+      {typeof history.imported === "number" && (
+        <p className="text-sm text-muted-foreground">
+          {history.imported} added to spending · {String(history.pending ?? 0)} need review
+        </p>
+      )}
+      {orders.map((order, index) => {
+        const purchase = normalizePurchase(order);
+        return (
+          <div key={index} className="rounded-md border p-3">
+            <div className="flex items-start justify-between gap-3">
+              <p className="min-w-0 text-sm font-medium">{purchase?.name ?? "Program purchase"}</p>
+              <Badge variant="secondary">{heading(purchase?.status ?? "Unknown")}</Badge>
+            </div>
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs text-muted-foreground">
+                {formatSourceDate(purchase?.placedAt, timeZone)} · {timeZone}
+              </p>
+              <p className="tnum text-sm font-medium">
+                {purchase && purchase.cashVerified
+                  ? fmtMoney(
+                      Number(fromMinor(purchase.amountMinor, purchase.currency)),
+                      purchase.currency,
+                    )
+                  : "Amount needs review"}
+              </p>
+            </div>
+            {purchase?.refunded && (
+              <p className="mt-2 text-xs text-muted-foreground">
+                Contains refunded items. Refund date needs review.
+              </p>
+            )}
+            <details className="mt-2 text-xs text-muted-foreground">
+              <summary className="cursor-pointer">Order details</summary>
+              <div className="mt-2">
+                <SourceValue value={order} />
+              </div>
+            </details>
+          </div>
+        );
+      })}
+      {!orders.length && <p className="text-sm text-muted-foreground">No purchases found.</p>}
+    </div>
+  );
+}
 function useSource() {
   const state = useApi<Overview>("/api/the5ers");
   const [busy, setBusy] = useState(false),
@@ -356,14 +456,13 @@ export function The5ersAccounts({ onLinked }: { onLinked?: () => void }) {
               </select>
             </div>
             {!coverage.complete && (
-              <div
-                role="alert"
-                className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100"
-              >
-                <p className="font-medium">Some accounts could not be loaded</p>
-                <p className="mt-1">
-                  You can browse the accounts below. Retry loading the list before saving your
-                  links. Your saved links are unchanged.
+              <details className="rounded-md border p-3 text-sm text-muted-foreground">
+                <summary className="cursor-pointer">
+                  {inventory.length} accounts loaded · Some additional accounts may be unavailable
+                </summary>
+                <p className="mt-2">
+                  You can save the accounts shown here. Each selected account is checked again
+                  before linking.
                 </p>
                 <Button
                   className="mt-3"
@@ -372,13 +471,13 @@ export function The5ersAccounts({ onLinked }: { onLinked?: () => void }) {
                   disabled={state.busy}
                   onClick={() => void load()}
                 >
-                  Retry loading
+                  Refresh list
                 </Button>
                 <details className="mt-2">
                   <summary className="cursor-pointer">Technical details</summary>
                   <p className="mt-1 break-words">{coverage.warnings.join(" ")}</p>
                 </details>
-              </div>
+              </details>
             )}
             <p className="text-sm text-muted-foreground">
               Showing {rows.length} of {inventory.length} loaded accounts · {chosen.length} of 10
@@ -405,9 +504,7 @@ export function The5ersAccounts({ onLinked }: { onLinked?: () => void }) {
                         {a.program ?? a.platform} · {a.createdAt.slice(0, 10)}
                       </p>
                     </div>
-                    <span className="shrink-0 rounded-full bg-muted px-2 py-1 text-xs">
-                      {heading(a.status ?? "Unknown")}
-                    </span>
+                    <Badge variant="secondary">{heading(a.status ?? "Unknown")}</Badge>
                   </div>
                   <dl className="grid grid-cols-2 gap-3 text-sm">
                     <div className="min-w-0">
@@ -488,10 +585,10 @@ export function The5ersAccounts({ onLinked }: { onLinked?: () => void }) {
               Automatically refresh active accounts daily
             </label>
             <Button
-              disabled={state.busy || !coverage.complete}
+              disabled={state.busy}
               onClick={() =>
                 void state.run(async () => {
-                  await postJson("/api/the5ers", {
+                  const saved = await postJson<{ selection: Selection[] }>("/api/the5ers", {
                     action: "select",
                     ids: chosen,
                     autoSync: auto,
@@ -500,19 +597,45 @@ export function The5ersAccounts({ onLinked }: { onLinked?: () => void }) {
                       Object.entries(links).filter(([id, target]) => chosen.includes(id) && target),
                     ),
                   });
-                  state.refresh();
+                  setLinks(
+                    Object.fromEntries(
+                      saved.selection
+                        .filter((a) => a.journalAccountId)
+                        .map((a) => [a.id, a.journalAccountId!]),
+                    ),
+                  );
                   onLinked?.();
                   window.dispatchEvent(new Event("journal-accounts-changed"));
+                  state.setNotice("Links saved. Refreshing account history…");
+                  let failed = 0,
+                    skipped = 0;
+                  for (const account of saved.selection) {
+                    try {
+                      const result = await postJson<{ snapshot: SourceSnapshot }>("/api/the5ers", {
+                        action: "sync",
+                        id: account.id,
+                      });
+                      skipped += result.snapshot.skippedPositions ?? 0;
+                    } catch {
+                      failed++;
+                    }
+                  }
+                  state.refresh();
+                  window.dispatchEvent(new Event("journal-data-changed"));
                   state.setNotice(
-                    "Selected accounts linked to journal filters. Existing records were preserved.",
+                    failed
+                      ? `Links saved. ${failed} account histories could not refresh; retry from the account card.`
+                      : skipped
+                        ? `Links saved. ${skipped} positions need review before they can be included in analytics.`
+                        : "Links saved and account history refreshed.",
                   );
                 })
               }
             >
-              {state.busy ? "Please wait…" : `Save links (${chosen.length})`}
+              {state.busy ? "Saving and refreshing…" : `Save links (${chosen.length})`}
             </Button>
             <div className="text-xs text-muted-foreground">
-              Linked accounts appear in your journal filters. Trade history is not imported yet.
+              Linked accounts appear in your journal filters and analytics.
               <details className="mt-2">
                 <summary className="cursor-pointer">About balances</summary>
                 <p className="mt-1">
@@ -553,13 +676,18 @@ function SnapshotPanels({
   const read = (resource: string, title: string, id?: string, key?: string) =>
     state.run(async () => {
       const result = await postJson<{ data: unknown }>("/api/the5ers", {
-        action: "read",
+        action: resource === "purchases" ? "purchases.sync" : "read",
         resource,
         ...(id ? { id } : {}),
         ...(key ? { positionKey: key } : {}),
       });
       setDetail({ title, data: result.data });
+      if (resource === "purchases") window.dispatchEvent(new Event("journal-data-changed"));
     });
+  useEffect(() => {
+    if (view === "prop" && section === "ledger" && state.data?.connected && !selected.length)
+      void read("purchases", "Purchases & fees");
+  }, [view, section, query, state.data?.connected]);
   return (
     <div className="space-y-3">
       {(view === "prop" && ["ledger", "benefits", "activity"].includes(section)
@@ -592,8 +720,10 @@ function SnapshotPanels({
               </CardHeader>
               <CardContent className="space-y-3">
                 <p className="text-xs text-muted-foreground">
-                  {snapshot ? `Source retrieved ${snapshot.retrievedAt}` : "Not refreshed yet"} ·{" "}
-                  {a.autoSync ? "Daily refresh" : "Manual refresh"}
+                  {snapshot
+                    ? `Updated ${formatSourceDate(snapshot.retrievedAt, state.data?.timeZone ?? "UTC")}`
+                    : "Not refreshed yet"}{" "}
+                  · {a.autoSync ? "Daily refresh" : "Manual refresh"}
                 </p>
                 {view !== "dashboard" && (
                   <Button
@@ -604,6 +734,7 @@ function SnapshotPanels({
                       void state.run(async () => {
                         await postJson("/api/the5ers", { action: "sync", id: a.id });
                         state.refresh();
+                        window.dispatchEvent(new Event("journal-data-changed"));
                       })
                     }
                   >
@@ -629,7 +760,21 @@ function SnapshotPanels({
                           )
                         </h4>
                         {sections[name].available ? (
-                          <SourceValue value={sections[name].data} />
+                          name === "balance" ? (
+                            <The5ersBalance
+                              value={sections[name].data}
+                              currency={account?.currency}
+                            />
+                          ) : (
+                            <details>
+                              <summary className="cursor-pointer text-sm">
+                                View {heading(name).toLowerCase()}
+                              </summary>
+                              <div className="mt-3">
+                                <SourceValue value={sections[name].data} />
+                              </div>
+                            </details>
+                          )
                         ) : (
                           <p className="text-sm">{sections[name].error}</p>
                         )}
@@ -639,8 +784,8 @@ function SnapshotPanels({
                 {view === "trades" && (
                   <>
                     <p className="text-xs text-muted-foreground">
-                      Provider positions and executions. These records have not been included in
-                      journal trading metrics.
+                      Verified positions already appear in your journal trade table. These source
+                      details help review records with missing or unsupported facts.
                     </p>
                     {positions?.slice(0, 100).map((p) => (
                       <div key={p.key} className="space-y-2 rounded-md border p-3">
@@ -758,14 +903,24 @@ function SnapshotPanels({
           <CardContent className="space-y-3">
             {view === "prop" && (section === "ledger" || section === "payouts") && (
               <p className="text-xs text-muted-foreground">
-                Source records awaiting reconciliation. They do not count as posted spending or
-                received cash in the totals above.
+                {section === "ledger"
+                  ? "Verified completed purchases are included in your spending. Records needing review remain separate."
+                  : "Payout requests are not cash received. This source omits cancelled and reversed requests."}
               </p>
             )}
             {obj(detail.data).complete === false && (
               <p className="text-xs">Source history is partial.</p>
             )}
-            <SourceValue value={detail.data} />
+            {detail.title === "Purchases & fees" ? (
+              <The5ersPurchases value={detail.data} timeZone={state.data?.timeZone ?? "UTC"} />
+            ) : (
+              <details>
+                <summary className="cursor-pointer text-sm">View records</summary>
+                <div className="mt-3">
+                  <SourceValue value={detail.data} />
+                </div>
+              </details>
+            )}
           </CardContent>
         </Card>
       )}
@@ -784,14 +939,29 @@ export function The5ersSource({
   const state = useSource();
   if (!state.data?.connected && !state.error) return null;
   if (view === "dashboard" && !state.data?.snapshots.length) return null;
+  if (view === "trades") {
+    if (
+      !state.data?.snapshots.some(
+        (snapshot) => snapshot.skippedPositions || snapshot.journaledPositions === undefined,
+      )
+    )
+      return null;
+    return (
+      <details className="m-4 rounded-md border p-3">
+        <summary className="cursor-pointer text-sm text-muted-foreground">
+          Connected records needing review
+        </summary>
+        <div className="mt-3">
+          <Messages state={state} />
+          <SnapshotPanels view="trades" state={state} query={query} />
+        </div>
+      </details>
+    );
+  }
   return (
     <section className="space-y-3 p-4" aria-label="The5ers source records">
       <h2 className="text-base font-semibold">
-        {view === "trades"
-          ? "Connected account positions"
-          : view === "dashboard"
-            ? "Connected account balances"
-            : "The5ers program records"}
+        {view === "dashboard" ? "Connected account balances" : "The5ers program records"}
       </h2>
       <Messages state={state} />
       <SnapshotPanels view={view} section={section} state={state} query={query} />

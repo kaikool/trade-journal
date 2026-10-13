@@ -14,7 +14,7 @@ export interface ImportReview {
   conflicts: string[];
   warnings: string[];
   needsCompleteHistory: boolean;
-  totals: { closedTrades: number; openTrades: number; netPnl: number; fees: number } | null;
+  totals: { closedTrades: number; openTrades: number; netPnl: number; fees: number | null } | null;
   multipliers: { symbol: string; value: number | null }[];
   currency: string;
   token: string | null;

@@ -138,7 +138,12 @@ export class The5ersMcp {
     await (this.initializing ??= this.initialize());
     const result = await this.rpc("tools/call", {
       name: definition.name,
-      arguments: { ...args, operation, contract_version: "1.0" },
+      arguments: {
+        ...args,
+        request_context: { timezone: "UTC", locale: "en" },
+        operation,
+        contract_version: "1.0",
+      },
     });
     if (result.isError)
       throw new RequestError(

@@ -8,7 +8,7 @@ const filtersFrom = (url: URL): TradeFilters => readFilters(url.searchParams);
 
 export const GET = handler(async (request: Request) => {
   const url = new URL(request.url);
-  const [{ rows, trades }, timeZone] = await Promise.all([
+  const [{ rows, trades, sourceCoverage }, timeZone] = await Promise.all([
     queryTrades(filtersFrom(url)),
     getTimeZone(),
   ]);
@@ -16,10 +16,13 @@ export const GET = handler(async (request: Request) => {
   const listView = url.searchParams.get("view") === "list";
   return ok({
     timeZone,
+    sourceCoverage,
     trades: rows.map((row, index) => {
       const { notes, exitsJson, executionIdsJson, tagsJson, mistakesJson, ...summary } = row;
       return {
         ...(listView ? summary : row),
+        grossPnl: row.costsUnavailable ? null : row.grossPnl,
+        fees: row.costsUnavailable ? null : row.fees,
         contractMultiplier: trades[index]!.contractMultiplier ?? null,
         tags: trades[index]!.annotations?.tags ?? [],
         mistakes: trades[index]!.annotations?.mistakes ?? [],

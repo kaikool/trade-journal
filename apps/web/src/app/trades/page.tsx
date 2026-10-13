@@ -42,8 +42,12 @@ interface TradeRow {
   quantity: number;
   avgEntry: number;
   avgExit: number | null;
-  grossPnl: number;
-  fees: number;
+  grossPnl: number | null;
+  fees: number | null;
+  source?: "the5ers";
+  quantityUnitsUnknown?: boolean;
+  reportedFee?: number;
+  reportedSwap?: number;
   netPnl: number;
   executionCount: number;
   durationMs: number | null;
@@ -75,6 +79,7 @@ function Trades() {
   const { query } = useFilters();
   const { data, error, refresh } = useApi<{
     trades: TradeRow[];
+    sourceCoverage?: { complete: boolean }[];
     metrics: TradeMetrics;
     timeZone: string;
   }>(`/api/trades?view=list&${query}`);
@@ -303,6 +308,11 @@ function Trades() {
           </div>
         }
       />
+      {data?.sourceCoverage?.some((c) => !c.complete) && (
+        <p role="status" className="px-4 pt-3 text-sm text-muted-foreground">
+          Some connected positions are unavailable. Showing verified history.
+        </p>
+      )}
       <The5ersSource view="trades" query={query} />
       <div className="space-y-3 p-4">
         {m && (

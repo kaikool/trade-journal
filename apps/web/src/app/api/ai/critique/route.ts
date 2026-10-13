@@ -10,9 +10,9 @@ export const POST = handler(async (request: Request) => {
   const row = await getTradeByKey(key);
   if (!row) return bad("Trade not found", 404);
   const trade = await rowToTrade(row);
-  const fills = (await listExecutions(row.accountId, trade.executionIds)).sort((a, b) =>
-    a.executedAt.localeCompare(b.executedAt),
-  );
+  const fills = (
+    row.source === "the5ers" ? [] : await listExecutions(row.accountId, trade.executionIds)
+  ).sort((a, b) => a.executedAt.localeCompare(b.executedAt));
 
   const critique = await runAi(
     `Critique this single trade in under 150 words. Focus on execution quality visible in the
@@ -21,7 +21,7 @@ and the trader's own tags/mistakes. End with one concrete instruction for the ne
 occurrence of this setup.
 
 Trade: ${trade.symbol} ${trade.direction}, status ${trade.status}
-Net P&L: ${trade.netPnl.toFixed(2)} (gross ${trade.grossPnl.toFixed(2)}, fees ${trade.fees.toFixed(2)})
+Net P&L: ${trade.netPnl.toFixed(2)} (gross ${trade.costsUnavailable ? "unavailable" : trade.grossPnl.toFixed(2)}, fees ${trade.costsUnavailable ? "unavailable; source fee/swap already included in net" : trade.fees.toFixed(2)})
 Avg entry ${trade.avgEntry} → avg exit ${trade.avgExit ?? "still open"}
 Planned stop: ${row.stopLoss ?? "none recorded"} | target: ${row.profitTarget ?? "none recorded"}
 Rating: ${row.rating ?? "unrated"} | tags: ${(trade.annotations?.tags ?? []).join(", ") || "none"} | mistakes: ${(trade.annotations?.mistakes ?? []).join(", ") || "none"}

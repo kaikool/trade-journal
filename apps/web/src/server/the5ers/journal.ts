@@ -1,0 +1,271 @@
+import { createHash } from "node:crypto";
+import { and, eq, like } from "drizzle-orm";
+import { accounts, db, propEntries, settings } from "@/db";
+import type { JournalExecutor } from "@/db/postgres";
+import type { TradeRow } from "@/server/trades-query";
+import { getSetting, setSetting } from "@/server/settings";
+import { requireValue } from "@/server/api";
+import { mutatePropInTransaction } from "@/server/prop-firms";
+import { fromMinor } from "@/lib/prop-firms";
+import { dayKeyOf } from "@luxalgo/journal-core";
+import {
+  normalizePosition,
+  normalizePurchase,
+  sourceObject,
+  type SourcePosition,
+} from "@/lib/the5ers-normalize";
+
+export const JOURNAL_SOURCE_PREFIX = "the5ers:journal:";
+const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+export const positionIdentity = (position: SourcePosition) =>
+  hash([position.symbol, position.direction, position.openedAt]);
+interface JournalSource {
+  sourceAccountId: string;
+  currency: string;
+  retrievedAt: string;
+  complete: boolean;
+  positions: SourcePosition[];
+}
+export type SourceTradeRow = TradeRow & {
+  source?: "the5ers";
+  costsUnavailable?: boolean;
+  quantityUnitsUnknown?: boolean;
+  reportedFee?: number;
+  reportedSwap?: number;
+  programValid?: boolean;
+};
+
+/** Store reported positions, never manufacture atomic executions or prices from P&L. */
+export async function saveJournalPositions(
+  tx: JournalExecutor,
+  sourceAccountId: string,
+  currency: string,
+  retrievedAt: string,
+  rows: unknown[],
+  complete: boolean,
+) {
+  const parsed = rows.map(normalizePosition);
+  const valid = parsed.filter((p): p is SourcePosition => Boolean(p));
+  const identities = valid.map(positionIdentity);
+  requireValue(
+    new Set(identities).size === identities.length,
+    "Some The5ers positions have indistinguishable identities. Previous journal history was preserved.",
+  );
+  const saved = await getSetting(`${JOURNAL_SOURCE_PREFIX}${sourceAccountId}`, tx);
+  const previous = saved ? (JSON.parse(saved) as JournalSource) : undefined;
+  requireValue(
+    !previous || previous.currency === currency,
+    "The5ers history currency changed. Review the journal account before syncing.",
+  );
+  const merged = new Map((previous?.positions ?? []).map((p) => [positionIdentity(p), p]));
+  for (const position of valid) {
+    const old = merged.get(positionIdentity(position));
+    requireValue(
+      !old || (old.quantity === position.quantity && old.entry === position.entry),
+      "A The5ers position changed its entry or size. Previous journal history was preserved.",
+    );
+    requireValue(
+      !old?.closedAt || Boolean(position.closedAt),
+      "A closed The5ers position became open. Previous journal history was preserved.",
+    );
+    merged.set(positionIdentity(position), position);
+  }
+  requireValue(merged.size <= 10_000, "The5ers journal history reached its record limit.");
+  const history: JournalSource = {
+    sourceAccountId,
+    currency,
+    retrievedAt,
+    complete:
+      complete &&
+      valid.length === rows.length &&
+      (previous?.positions.every((p) => identities.includes(positionIdentity(p))) ?? true),
+    positions: [...merged.values()],
+  };
+  requireValue(
+    Buffer.byteLength(JSON.stringify(history)) <= 4 * 1024 * 1024,
+    "The5ers journal history exceeded its size limit.",
+  );
+  await setSetting(`${JOURNAL_SOURCE_PREFIX}${sourceAccountId}`, JSON.stringify(history), tx);
+  return { journaledPositions: valid.length, skippedPositions: rows.length - valid.length };
+}
+
+/** Project into the existing trade reader so all journal filters and net analytics apply. */
+export async function sourceJournalData() {
+  const [stored, mapping, native, annotations] = await Promise.all([
+    db
+      .select()
+      .from(settings)
+      .where(like(settings.key, `${JOURNAL_SOURCE_PREFIX}%`)),
+    getSetting("the5ers:journal-links"),
+    db.select().from(accounts),
+    db.select().from(settings).where(like(settings.key, "the5ers:annotation:%")),
+  ]);
+  const links = JSON.parse(mapping ?? "{}") as Record<string, string>;
+  const annotationMap = new Map(
+    annotations.map((row) => [
+      row.key.slice("the5ers:annotation:".length),
+      sourceObject(JSON.parse(row.value)),
+    ]),
+  );
+  const result: SourceTradeRow[] = [];
+  const coverage: {
+    accountId: string;
+    complete: boolean;
+    retrievedAt: string;
+    positions: number;
+  }[] = [];
+  for (const row of stored) {
+    const history = JSON.parse(row.value) as JournalSource;
+    const accountId = links[history.sourceAccountId];
+    if (!accountId || !native.some((a) => a.id === accountId && a.currency === history.currency))
+      continue;
+    coverage.push({
+      accountId,
+      complete: history.complete,
+      retrievedAt: history.retrievedAt,
+      positions: history.positions.length,
+    });
+    for (const position of history.positions) {
+      const key = `the5ers_${hash([history.sourceAccountId, positionIdentity(position)])}`;
+      const annotation = annotationMap.get(key) ?? {};
+      if (annotation.excluded === true) continue;
+      const closed = Boolean(position.closedAt);
+      result.push({
+        key,
+        accountId,
+        symbol: position.symbol,
+        assetClass: null,
+        direction: position.direction,
+        status: closed
+          ? position.netPnl > 0
+            ? "win"
+            : position.netPnl < 0
+              ? "loss"
+              : "breakeven"
+          : "open",
+        openedAt: position.openedAt,
+        closedAt: position.closedAt,
+        quantity: position.quantity,
+        openQuantity: closed ? 0 : position.quantity,
+        avgEntry: position.entry,
+        avgExit: position.exit,
+        // Internal net-only projection; costsUnavailable suppresses gross/cost aggregates.
+        grossPnl: position.netPnl,
+        fees: 0,
+        netPnl: position.netPnl,
+        executionCount: 0,
+        executionIdsJson: "[]",
+        exitsJson: "[]",
+        durationMs: position.closedAt
+          ? Date.parse(position.closedAt) - Date.parse(position.openedAt)
+          : null,
+        notes: typeof annotation.notes === "string" ? annotation.notes : null,
+        tagsJson: JSON.stringify(annotation.tags ?? []),
+        mistakesJson: JSON.stringify(annotation.mistakes ?? []),
+        playbookId: typeof annotation.playbookId === "string" ? annotation.playbookId : null,
+        rating: typeof annotation.rating === "number" ? annotation.rating : null,
+        stopLoss: typeof annotation.stopLoss === "number" ? annotation.stopLoss : null,
+        profitTarget: typeof annotation.profitTarget === "number" ? annotation.profitTarget : null,
+        reviewedAt: typeof annotation.reviewedAt === "string" ? annotation.reviewedAt : null,
+        source: "the5ers",
+        costsUnavailable: true,
+        quantityUnitsUnknown: true,
+        reportedFee: position.fee,
+        reportedSwap: position.swap,
+        programValid: position.isValid,
+      });
+    }
+  }
+  return { rows: result, coverage };
+}
+export async function sourceTradeRows(): Promise<SourceTradeRow[]> {
+  return (await sourceJournalData()).rows;
+}
+
+export async function reconcilePurchases(tx: JournalExecutor, values: unknown[], timeZone: string) {
+  const parsed = values.map(normalizePurchase);
+  const canonical = parsed.filter((p): p is NonNullable<typeof p> => Boolean(p));
+  const identity = (p: (typeof canonical)[number]) => hash([p.placedAt, p.currency, p.name]);
+  const ids = canonical.map(identity);
+  requireValue(
+    new Set(ids).size === ids.length,
+    "Some The5ers purchases cannot be distinguished. No duplicate cash entries were created.",
+  );
+  let imported = 0,
+    matched = 0,
+    pending = values.length - canonical.length;
+  for (const purchase of canonical) {
+    if (purchase.status !== "completed" || purchase.refunded || !purchase.cashVerified) {
+      pending++;
+      continue;
+    }
+    const id = `the5ers_purchase_${identity(purchase)}`;
+    const existing = await tx.select().from(propEntries).where(eq(propEntries.id, id));
+    if (existing.length) {
+      if (
+        existing[0]!.amountMinor !== purchase.amountMinor ||
+        existing[0]!.currency !== purchase.currency
+      )
+        pending++;
+      else matched++;
+      continue;
+    }
+    const occurredOn = dayKeyOf(purchase.placedAt, timeZone);
+    const candidates = (
+      await tx
+        .select()
+        .from(propEntries)
+        .where(
+          and(
+            eq(propEntries.firm, "The5ers"),
+            eq(propEntries.currency, purchase.currency),
+            eq(propEntries.occurredOn, occurredOn),
+          ),
+        )
+    ).filter((e) => !e.voided && e.kind === "expense" && e.amountMinor === purchase.amountMinor);
+    // Equal economics without a shared stable order ID cannot prove which manual entry it is.
+    if (candidates.length) {
+      pending++;
+      continue;
+    }
+    await mutatePropInTransaction(tx, {
+      action: "entry.save",
+      id,
+      revision: 0,
+      firm: "The5ers",
+      accountId: null,
+      kind: "expense",
+      category: purchase.category,
+      currency: purchase.currency,
+      amount: String(fromMinor(purchase.amountMinor, purchase.currency)),
+      occurredOn,
+      reference: id,
+      notes: `${purchase.name}\nThe5ers order placed ${purchase.placedAt}`,
+    });
+    imported++;
+  }
+  return { imported, matched, pending };
+}
+
+/** Annotation/exclusion only: source economics cannot be edited through journal actions. */
+export async function annotateSourceTrade(
+  tx: JournalExecutor,
+  key: string,
+  patch: Record<string, unknown> | ((saved: Record<string, unknown>) => Record<string, unknown>),
+) {
+  const settingKey = `the5ers:annotation:${key}`;
+  await tx.insert(settings).values({ key: settingKey, value: "{}" }).onConflictDoNothing();
+  const [row] = await tx.select().from(settings).where(eq(settings.key, settingKey)).for("update");
+  const annotation = JSON.parse(row!.value);
+  const decoded = { ...(typeof patch === "function" ? patch(annotation) : patch) };
+  for (const [json, name] of [
+    ["tagsJson", "tags"],
+    ["mistakesJson", "mistakes"],
+  ]) {
+    if (typeof decoded[json!] === "string") {
+      decoded[name!] = JSON.parse(decoded[json!] as string);
+      delete decoded[json!];
+    }
+  }
+  await setSetting(settingKey, JSON.stringify({ ...annotation, ...decoded }), tx);
+}

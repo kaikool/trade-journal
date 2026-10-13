@@ -47,7 +47,7 @@ ${accountContext(dayTrades, scope)}
 
 Day stats: net P&L ${metrics.netPnl.toFixed(2)}, ${metrics.closedTrades} trades,
 win rate ${metrics.winRate === null ? "n/a" : (metrics.winRate * 100).toFixed(0)}%,
-fees ${metrics.fees.toFixed(2)}.
+fees ${metrics.fees?.toFixed(2) ?? "unavailable"}.
 
 Trades:
 ${tradeLines}

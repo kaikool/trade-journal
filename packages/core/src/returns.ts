@@ -2,6 +2,7 @@ import type { RoundTrip } from "./types";
 
 type ReturnInputs = Pick<RoundTrip, "netPnl" | "avgEntry" | "quantity"> & {
   assetClass?: string | null;
+  quantityUnitsUnknown?: boolean;
   contractMultiplier?: number | null;
 };
 
@@ -10,6 +11,7 @@ type ReturnInputs = Pick<RoundTrip, "netPnl" | "avgEntry" | "quantity"> & {
  * Unknown derivative multipliers and unusable notionals have no defined return.
  */
 export function netReturnOnEntry(trade: ReturnInputs): number | null {
+  if (trade.quantityUnitsUnknown) return null;
   const multiplier =
     trade.contractMultiplier ??
     (["futures", "option", "forex", "cfd"].includes(trade.assetClass ?? "") ? null : 1);

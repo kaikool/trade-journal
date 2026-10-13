@@ -105,6 +105,10 @@ export interface RoundTrip {
   avgEntry: number;
   /** Quantity-weighted average exit price (undefined until at least one exit). */
   avgExit?: number;
+  /** Source position has net P&L but no verified gross/cost convention. */
+  costsUnavailable?: boolean;
+  /** Reported size is not a verified contract/unit notional. */
+  quantityUnitsUnknown?: boolean;
   /** Realized P&L before fees, in account currency. */
   grossPnl: number;
   /** All fees across the cycle's executions. */

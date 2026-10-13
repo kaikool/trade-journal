@@ -1,6 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { and, eq, like, sql } from "drizzle-orm";
 import { db, settings, accounts as journalAccounts, propAccounts, propAudit } from "@/db";
+import { saveJournalPositions, reconcilePurchases } from "./journal";
+import { sourceCurrency } from "@/lib/the5ers-normalize";
+import { getTimeZone } from "@/server/settings";
 import { isActiveSource } from "@/lib/the5ers-status";
 import { parseTimestamp } from "@luxalgo/journal-importers";
 import { RequestError, requireValue } from "@/server/api";
@@ -11,6 +14,7 @@ import { PROP_PROGRAMS, PROP_STATES, currencyDigits } from "@/lib/prop-firms";
 import { The5ersMcp } from "./mcp";
 import {
   accessConnection,
+  CONNECTION_KEY,
   assertConnection,
   connectionSummary,
   SELECTION_KEY,
@@ -44,6 +48,8 @@ export interface SourceSnapshot {
   sections: Record<string, { available: boolean; data?: unknown; error?: string }>;
   warnings: string[];
   importedExecutions: 0;
+  journaledPositions?: number;
+  skippedPositions?: number;
 }
 interface PositionRefs {
   connectionId: string;
@@ -179,23 +185,28 @@ async function inventoryResult(client: The5ersMcp): Promise<AccountInventory> {
       new Set(parsed.accounts.map((a) => a.ref)).size === parsed.accounts.length,
       "The5ers returned ambiguous account references.",
     );
-    if (ids.some((id) => seenIds.has(id)) || parsed.accounts.some((a) => seenRefs.has(a.ref)))
-      return partial(
-        "The5ers repeated or overlapped an account page. The account list is incomplete.",
-      );
+    const novel = parsed.accounts.filter((a) => !seenIds.has(a.id));
+    requireValue(
+      novel.every((a) => !seenRefs.has(a.ref)),
+      "The5ers reused one account reference for different account identities.",
+    );
+    if (parsed.accounts.length && !novel.length)
+      return partial("The5ers repeated a page. Some additional accounts may be unavailable.");
     if (parsed.total !== undefined) {
       if (total !== undefined && total !== parsed.total)
         return partial("The5ers account total changed during retrieval. Refresh the list.");
       total = parsed.total;
     }
-    if (rawCount + parsed.rawCount > 1000)
+    if (rawCount + parsed.rawCount - (parsed.accounts.length - novel.length) > 1000)
       return partial("The account list reached its 1,000-record safety limit and is incomplete.");
     bytes += Buffer.byteLength(JSON.stringify(parsed.accounts));
     requireValue(bytes <= 4 * 1024 * 1024, "The5ers account inventory exceeded its size limit.");
-    rawCount += parsed.rawCount;
-    all.push(...parsed.accounts);
+    rawCount += parsed.rawCount - (parsed.accounts.length - novel.length);
+    all.push(...novel);
     ids.forEach((id) => seenIds.add(id));
     parsed.accounts.forEach((a) => seenRefs.add(a.ref));
+    if (total !== undefined && rawCount === total)
+      return { accounts: all, complete: true, warnings: [] };
     if (parsed.hasMore === false)
       return total === undefined || rawCount === total
         ? { accounts: all, complete: true, warnings: [] }
@@ -273,7 +284,9 @@ export async function selectSourceAccounts(
     Object.keys(journalLinks).length <= 10 &&
       Object.entries(journalLinks).every(
         ([source, target]) =>
-          (ids as string[]).includes(source) && /^[a-zA-Z0-9_-]{1,100}$/.test(target),
+          (ids as string[]).includes(source) &&
+          typeof target === "string" &&
+          /^[a-zA-Z0-9_-]{1,100}$/.test(target),
       ),
     "Choose valid existing journal accounts.",
   );
@@ -282,7 +295,7 @@ export async function selectSourceAccounts(
     string
   >;
   const { connection, client } = await sourceClient();
-  const available = await inventory(client);
+  const available = (await inventoryResult(client)).accounts;
   const selected = ids.map((id) => {
     const account = available.find((a) => a.id === id);
     requireValue(account, "An account is no longer available. Refresh the account list.");
@@ -459,20 +472,28 @@ async function positions(client: The5ersMcp, account: ProviderAccount) {
   const rows: { key: string; hasDetails: boolean; source: unknown }[] = [],
     refs: Record<string, string> = {},
     seen = new Set<string>();
+  let currency: string | undefined,
+    currencyVerified = true;
   for (let page = 1; page <= 10; page++) {
-    const result = pageData(
-      await client.read("positions", "list", {
-        account_ref: account.ref,
-        view: "all",
-        page,
-        limit: 100,
-      }),
-      "positions",
+    const response = await client.read("positions", "list", {
+      account_ref: account.ref,
+      view: "all",
+      page,
+      limit: 100,
+    });
+    const envelope = record(response);
+    const pageCurrency = sourceCurrency(envelope.currency);
+    currencyVerified &&= Boolean(pageCurrency);
+    requireValue(
+      !currency || !pageCurrency || currency === pageCurrency,
+      "The5ers position currency changed across pages.",
     );
+    currency = pageCurrency ?? currency;
+    const result = pageData(response, "positions");
     for (const item of result.rows) {
       const row = record(item),
         key = randomUUID(),
-        ref = row.position_ref;
+        ref = row.ref ?? row.position_ref;
       if (reference(ref)) {
         requireValue(!seen.has(ref), "The5ers repeated a position page.");
         seen.add(ref);
@@ -482,13 +503,14 @@ async function positions(client: The5ersMcp, account: ProviderAccount) {
     }
     if (Buffer.byteLength(JSON.stringify(rows)) > 2 * 1024 * 1024)
       throw new RequestError("The5ers position history exceeded the snapshot size limit.");
-    if (!result.hasMore) return { rows, refs, complete: true };
+    if (!result.hasMore)
+      return { rows, refs, currency: currencyVerified ? currency : undefined, complete: true };
     requireValue(
       result.rows.length > 0,
       "The5ers returned an empty position page with more pages indicated.",
     );
   }
-  return { rows, refs, complete: false };
+  return { rows, refs, currency: currencyVerified ? currency : undefined, complete: false };
 }
 class InactiveSource extends RequestError {}
 export async function syncSourceAccount(
@@ -501,7 +523,7 @@ export async function syncSourceAccount(
     "Select this The5ers account before syncing it.",
   );
   const { connection, client } = await sourceClient(signal);
-  const account = (await inventory(client)).find((a) => a.id === id);
+  const account = (await inventoryResult(client)).accounts.find((a) => a.id === id);
   requireValue(
     account,
     "The selected The5ers account identity changed or is unavailable. Refresh and select it again.",
@@ -517,7 +539,7 @@ export async function syncSourceAccount(
     complete: true,
     sections: {},
     warnings: [
-      "The5ers source records are kept separate from journal executions until fill identities, price/size units and cost conventions have been verified.",
+      "Journal analytics use reported position net P&L; no atomic fills are reconstructed and fee/swap are not deducted twice.",
     ],
     importedExecutions: 0,
   };
@@ -543,13 +565,26 @@ export async function syncSourceAccount(
     }
   }
   let positionCache: PositionRefs | undefined;
+  let journalPositions: { rows: unknown[]; currency: string; complete: boolean } | undefined;
   try {
     const found = await positions(client, account);
     snapshot.complete &&= found.complete;
     snapshot.sections.positions = {
       available: true,
-      data: { rows: found.rows, complete: found.complete },
+      data: { rows: found.rows, currency: found.currency, complete: found.complete },
     };
+    if (found.currency && found.currency === account.currency)
+      journalPositions = {
+        rows: found.rows.map((r) => r.source),
+        currency: found.currency,
+        complete: found.complete,
+      };
+    else {
+      snapshot.complete = false;
+      snapshot.warnings.push(
+        "Position currency is missing or differs from the journal. Reported positions were not included in analytics.",
+      );
+    }
     if (!found.complete)
       snapshot.warnings.push(
         "Position history reached the 1,000-row limit. This source snapshot is partial.",
@@ -583,6 +618,29 @@ export async function syncSourceAccount(
         (JSON.parse(currentSelection) as Selection[]).some((selected) => selected.id === id),
       "The5ers selection changed during sync.",
     );
+    if (journalPositions) {
+      try {
+        // Pure validation happens before the one storage write; invalid positions retain prior history.
+        const outcome = await saveJournalPositions(
+          tx,
+          id,
+          journalPositions.currency,
+          snapshot.retrievedAt,
+          journalPositions.rows,
+          journalPositions.complete,
+        );
+        Object.assign(snapshot, outcome);
+        if (outcome.skippedPositions) snapshot.complete = false;
+        if (outcome.skippedPositions)
+          snapshot.warnings.push(
+            `${outcome.skippedPositions} positions omitted invalid timestamps, size, prices or net P&L.`,
+          );
+      } catch (error) {
+        if (!(error instanceof RequestError)) throw error;
+        snapshot.complete = false;
+        snapshot.warnings.push(error.message);
+      }
+    }
     await setSetting(`${SNAPSHOT_PREFIX}${id}`, JSON.stringify(snapshot), tx);
     if (positionCache) {
       requireValue(
@@ -602,6 +660,7 @@ export async function sourceOverview() {
     .where(like(settings.key, `${SNAPSHOT_PREFIX}%`));
   return {
     ...(await connectionSummary()),
+    timeZone: await getTimeZone(),
     selection,
     snapshots: stored
       .filter((row) => selection.some((account) => row.key === `${SNAPSHOT_PREFIX}${account.id}`))
@@ -673,7 +732,7 @@ export async function readSourceSection(resource: string, id?: string, positionK
       await client.read(read.tool, read.operation, { position_ref: cache.refs[positionKey] }),
     );
   }
-  const account = (await inventory(client)).find((a) => a.id === id);
+  const account = (await inventoryResult(client)).accounts.find((a) => a.id === id);
   requireValue(account, "This The5ers account is no longer available.");
   if (resource === "payoutHistory")
     return paginatedSource(client, read.tool, read.operation, "payouts", {
@@ -696,7 +755,7 @@ export async function syncScheduledThe5ers(deadline = Date.now() + 240_000) {
     return { checked: eligible.length, synced: 0, failed: eligible.length };
   let available: SourceAccount[];
   try {
-    available = await listSourceAccounts();
+    available = (await listSourceInventory()).accounts;
   } catch (error) {
     console.error("[cron] The5ers inventory unavailable", {
       errorName: error instanceof Error ? error.name : "UnknownError",
@@ -729,7 +788,26 @@ export async function syncScheduledThe5ers(deadline = Date.now() + 240_000) {
       });
     }
   }
-  return { checked: selected.length - skipped, synced, failed };
+  let purchases: { synced: boolean; pending?: number } | undefined;
+  if (synced > 0 && Date.now() < deadline) {
+    try {
+      const outcome = await syncSourcePurchases(
+        AbortSignal.timeout(Math.max(1, deadline - Date.now())),
+      );
+      purchases = { synced: true, pending: outcome.pending };
+    } catch (error) {
+      purchases = { synced: false };
+      console.error("[cron] The5ers purchases unavailable", {
+        errorName: error instanceof Error ? error.name : "UnknownError",
+      });
+    }
+  }
+  return {
+    checked: selected.length - skipped,
+    synced,
+    failed,
+    ...(purchases ? { purchases } : {}),
+  };
 }
 
 /** Preserve every page envelope (currency/coverage), rather than silently merging money. */
@@ -742,7 +820,8 @@ async function paginatedSource(
 ) {
   const pages: unknown[] = [];
   const seen = new Set<string>();
-  let bytes = 0;
+  let bytes = 0,
+    count = 0;
   for (let page = 1; page <= 50; page++) {
     const result = record(await client.read(tool, operation, { ...args, page, limit: 20 }));
     const body = result.data && !Array.isArray(result.data) ? record(result.data) : result;
@@ -758,24 +837,60 @@ async function paginatedSource(
       body.history ??
       (Array.isArray(result.data) ? result.data : undefined);
     requireValue(
-      Array.isArray(values) && values.length <= 20,
+      Array.isArray(values) && values.length <= 1000,
       "The5ers returned an unsupported paginated source format.",
     );
     const safe = publicData(result);
-    const fingerprint = JSON.stringify(values);
-    requireValue(
-      !seen.has(fingerprint) && (!pagination.has_more || values.length > 0),
-      "The5ers repeated or omitted a source page. No cash records were posted.",
-    );
+    const fingerprint = JSON.stringify(publicData(values));
+    if (seen.has(fingerprint) || (pagination.has_more && !values.length))
+      return {
+        pages,
+        complete: false,
+        warning: "The5ers repeated or omitted a page. Showing available records.",
+      };
+    count += values.length;
+    if (count > 1000)
+      return { pages, complete: false, warning: "Source history reached its record limit." };
     seen.add(fingerprint);
     bytes += Buffer.byteLength(JSON.stringify(safe));
     requireValue(bytes <= 4 * 1024 * 1024, "The5ers source exceeded its size limit.");
     pages.push(safe);
-    if (!pagination.has_more) return { pages, complete: true };
+    if (!pagination.has_more)
+      return {
+        pages,
+        complete: collection !== "payouts" || record(body.coverage ?? {}).complete === true,
+      };
   }
   return {
     pages,
     complete: false,
     warning: "Source history reached its page limit; additional records may exist.",
   };
+}
+
+/** Import verified order cash into the existing audited ledger and retain a source history. */
+export async function syncSourcePurchases(signal?: AbortSignal) {
+  const { connection, client } = await sourceClient(signal);
+  const history = await paginatedSource(client, "purchase", "list", "purchases");
+  const values = history.pages.flatMap((page) => {
+    const envelope = record(page),
+      body = record(envelope.data ?? envelope);
+    return Array.isArray(body.purchases) ? body.purchases : [];
+  });
+  return db.transaction(async (tx) => {
+    await assertConnection(connection.id, tx);
+    // Serialize source imports so concurrent refresh/cron cannot duplicate ledger writes.
+    await tx.select().from(settings).where(eq(settings.key, CONNECTION_KEY)).for("update");
+    const result = await reconcilePurchases(
+      tx,
+      values,
+      (await getSetting("timeZone", tx)) ?? "UTC",
+    );
+    await setSetting(
+      "the5ers:purchases",
+      JSON.stringify({ ...history, ...result, retrievedAt: new Date().toISOString() }),
+      tx,
+    );
+    return { ...history, ...result };
+  });
 }

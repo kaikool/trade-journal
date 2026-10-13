@@ -32,7 +32,11 @@ export const GET = handler(async (request: Request, { params }: Params) => {
   return ok({
     date,
     metrics: computeMetrics(dayTrades, { timeZone }),
-    trades: dayTradeIndexes.map(({ index }) => rows[index]),
+    trades: dayTradeIndexes.map(({ index }) => ({
+      ...rows[index],
+      grossPnl: rows[index]!.costsUnavailable ? null : rows[index]!.grossPnl,
+      fees: rows[index]!.costsUnavailable ? null : rows[index]!.fees,
+    })),
     intraday: intradayCurve(dayTrades, times, date, timeZone),
     note: note?.note ?? "",
   });

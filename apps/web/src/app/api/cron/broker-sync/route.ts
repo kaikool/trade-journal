@@ -58,7 +58,12 @@ export async function GET(request: Request): Promise<Response> {
   synced += the5ers.synced;
   failed += the5ers.failed;
   return Response.json(
-    { checked: enabled.length + the5ers.checked, synced, failed },
-    { status: failed ? 500 : 200 },
+    {
+      checked: enabled.length + the5ers.checked,
+      synced,
+      failed,
+      ...(the5ers.purchases ? { the5ersPurchases: the5ers.purchases } : {}),
+    },
+    { status: failed || the5ers.purchases?.synced === false ? 500 : 200 },
   );
 }

@@ -137,7 +137,7 @@ export function accountContext(
           trades.filter((t) => t.accountId === account.id),
           { timeZone: scope.timeZone },
         );
-        return `${JSON.stringify(account.name)} (${account.currency}): ${m.closedTrades} closed trades, net ${m.netPnl.toFixed(2)}, fees ${m.fees.toFixed(2)}`;
+        return `${JSON.stringify(account.name)} (${account.currency}): ${m.closedTrades} closed trades, net ${m.netPnl.toFixed(2)}, fees ${m.fees?.toFixed(2) ?? "unavailable"}`;
       })
       .join("\n") +
     (new Set(scope.accounts.map((a) => a.currency)).size > 1

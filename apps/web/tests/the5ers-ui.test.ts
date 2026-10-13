@@ -2,7 +2,11 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 const state = vi.hoisted(() => ({ privacy: false }));
-vi.mock("../src/components/privacy", () => ({ usePrivacy: () => state.privacy }));
+vi.mock("../src/components/privacy", () => ({
+  usePrivacy: () => state.privacy,
+  MonetaryValue: ({ children }: { children: React.ReactNode }) =>
+    state.privacy ? "Hidden" : children,
+}));
 vi.mock("../src/lib/use-api", () => ({
   postJson: vi.fn(),
   useApi: () => ({
@@ -31,15 +35,15 @@ vi.mock("../src/lib/use-api", () => ({
     },
   }),
 }));
-import { The5ersConnection, The5ersSource } from "../src/components/the5ers";
+import { The5ersConnection, The5ersSource, The5ersBalance } from "../src/components/the5ers";
 afterEach(() => {
   state.privacy = false;
 });
 it("renders reported financial values as text and shows partial coverage", () => {
   const html = renderToStaticMarkup(createElement(The5ersSource, { view: "dashboard" }));
-  expect(html).toContain("12345.67");
+  expect(html).toContain("12,345.67");
   expect(html).toContain("snapshot is partial");
-  expect(html).toContain("&lt;script&gt;");
+  expect(html).not.toContain("alert(1)");
   expect(html).not.toContain("<script>");
   expect(html).not.toContain("Unsupported platform");
 });
@@ -48,7 +52,7 @@ it("hides source financial values while journal privacy mode is enabled", () => 
   const html = renderToStaticMarkup(createElement(The5ersSource, { view: "dashboard" }));
   expect(html).not.toContain("12345.67");
   expect(html).not.toContain("alert(1)");
-  expect(html).toContain("Source financial data hidden");
+  expect(html).toContain("Hidden");
 });
 
 it("keeps financial data out of connection settings and provides links to existing sections", () => {
@@ -62,4 +66,14 @@ it("scopes source balances to the same journal account filter", () => {
     createElement(The5ersSource, { view: "dashboard", query: "accounts=other-account" }),
   );
   expect(html).not.toContain("12345.67");
+});
+
+it("labels effective balance separately and does not invent equity when the provider omitted it", () => {
+  const html = renderToStaticMarkup(
+    createElement(The5ersBalance, {
+      value: { currency: "USD", data: { balance: 100, effectiveBalance: 105 } },
+    }),
+  );
+  expect(html).toContain("Effective balance");
+  expect(html).not.toContain("Equity");
 });

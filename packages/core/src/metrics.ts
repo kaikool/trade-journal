@@ -16,8 +16,8 @@ export interface TradeMetrics {
   losses: number;
   breakevens: number;
   netPnl: number;
-  grossPnl: number;
-  fees: number;
+  grossPnl: number | null;
+  fees: number | null;
   /** wins / (wins + losses + breakevens), null with no closed trades. */
   winRate: number | null;
   /** Winning days / total trading days. */
@@ -120,8 +120,12 @@ const metricsFromOverview = (
     losses: losses.length,
     breakevens: breakevens.length,
     netPnl,
-    grossPnl: closed.reduce((total, t) => total + t.grossPnl, 0),
-    fees: closed.reduce((total, t) => total + t.fees, 0),
+    grossPnl: closed.some((t) => t.costsUnavailable)
+      ? null
+      : closed.reduce((total, t) => total + t.grossPnl, 0),
+    fees: closed.some((t) => t.costsUnavailable)
+      ? null
+      : closed.reduce((total, t) => total + t.fees, 0),
     winRate,
     dayWinRate: days.length > 0 ? winningDays / days.length : null,
     tradingDays: days.length,

@@ -62,12 +62,16 @@ const responseData = (name: string, args: Record<string, unknown>): unknown => {
     };
   if (name === "the5ers_positions" && operation === "list")
     return {
+      currency: "USD",
       data: {
         positions: [
           {
             position_ref: `opaque-position-${epoch}-${args.page}`,
             symbol: "EURUSD",
-            direction: "Buy",
+            side: "Buy",
+            isClosed: true,
+            openDate: new Date(Date.UTC(2026, 1, Number(args.page), 10)).toISOString(),
+            closeDate: new Date(Date.UTC(2026, 1, Number(args.page), 11)).toISOString(),
             quantity: 1,
             entry: 1.1,
             exit: 1.11,
@@ -89,6 +93,8 @@ const responseData = (name: string, args: Record<string, unknown>): unknown => {
       freshness: { status: "fresh" },
       data: { balance: 10097, equity: 10097 },
     };
+  if (name === "the5ers_purchase" && operation === "list")
+    return { data: { purchases: [] }, pagination: { has_more: false } };
   return {
     currency: "USD",
     data: {
@@ -503,7 +509,12 @@ describe("The5ers transport and cron boundaries", () => {
       }),
     );
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ checked: 1, synced: 1, failed: 0 });
+    expect(await response.json()).toEqual({
+      checked: 1,
+      synced: 1,
+      failed: 0,
+      the5ersPurchases: { synced: true, pending: 0 },
+    });
   });
 });
 
@@ -930,7 +941,7 @@ it("accepts an unpaginated list when its reported total confirms complete covera
   expect(parsed.hasMore).toBe(false);
   expect(parsed.total).toBe(2);
 });
-it("reports incomplete coverage and prevents linking when the reported total is not retrieved", async () => {
+it("links freshly verified selected accounts even when other inventory pages are unavailable", async () => {
   await connect();
   const original = fetch;
   vi.stubGlobal(
@@ -961,11 +972,13 @@ it("reports incomplete coverage and prevents linking when the reported total is 
   const data = await response.json();
   expect(data.complete).toBe(false);
   expect(data.accounts).toHaveLength(2);
-  await expect(selectSourceAccounts([data.accounts[0].id], true, true)).rejects.toThrow(
-    "incomplete",
-  );
+  const linked = await selectSourceAccounts([data.accounts[0].id], true, true);
+  expect(linked[0]?.journalAccountId).toBe(`the5ers_${data.accounts[0].id}`);
   const { accounts } = await import("../src/db");
-  expect(await db.select().from(accounts)).toHaveLength(0);
+  expect(await db.select().from(accounts)).toHaveLength(1);
+  await expect(selectSourceAccounts(["f".repeat(64)], true, true)).rejects.toThrow(
+    "no longer available",
+  );
 });
 it("stops repeated pages while returning visible records with an incomplete warning", async () => {
   await connect();
@@ -1013,4 +1026,186 @@ it("keeps available and disabled accounts selectable but enables cron only for a
   expect((await sourceOverview()).selection).toHaveLength(3);
   const snapshot = await syncSourceAccount(listed[2]!.id);
   expect(snapshot.account.status).toBe("disabled");
+});
+
+it("syncs the official ref/side/date position shape into authenticated Trades and Dashboard, once", async () => {
+  await connect();
+  const first = (await listSourceAccounts())[0]!;
+  const selection = await POST(
+    request({ action: "select", ids: [first.id], autoSync: false, linkJournalAccounts: true }),
+  );
+  expect(selection.status).toBe(200);
+  const original = fetch;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === MCP_URL) {
+        const rpc = JSON.parse(String(init?.body));
+        if (
+          rpc.method === "tools/call" &&
+          rpc.params.name === "the5ers_positions" &&
+          rpc.params.arguments.operation === "list"
+        )
+          return json({
+            jsonrpc: "2.0",
+            id: rpc.id,
+            result: {
+              structuredContent: {
+                currency: "USD",
+                pagination: { has_more: false },
+                data: {
+                  positions: [
+                    {
+                      ref: `position-${epoch}`,
+                      symbol: "EURUSD",
+                      side: "Buy",
+                      isClosed: true,
+                      openDate: "2026-02-01T23:30:00Z",
+                      closeDate: "2026-02-02T00:30:00Z",
+                      entry: 1.1,
+                      exit: 1.11,
+                      quantity: 0.2,
+                      profitAndLoss: 97,
+                      fee: -2,
+                      swap: 1,
+                    },
+                  ],
+                },
+              },
+            },
+          });
+      }
+      return original(url, init);
+    }),
+  );
+  expect((await POST(request({ action: "sync", id: first.id }))).status).toBe(200);
+  epoch++;
+  expect((await POST(request({ action: "sync", id: first.id }))).status).toBe(200);
+  const { GET: getTrades } = await import("../src/app/api/trades/route");
+  const { GET: getStats } = await import("../src/app/api/stats/route");
+  const { GET: getTrade } = await import("../src/app/api/trades/[key]/route");
+  const list = await (
+    await getTrades(new Request("https://journal.example/api/trades?view=list"))
+  ).json();
+  expect(list.trades).toHaveLength(1);
+  expect(list.trades[0]).toMatchObject({
+    netPnl: 97,
+    fees: null,
+    grossPnl: null,
+    source: "the5ers",
+  });
+  const stats = await (await getStats(new Request("https://journal.example/api/stats"))).json();
+  expect(stats.metrics).toMatchObject({ netPnl: 97, closedTrades: 1, fees: null, grossPnl: null });
+  const detail = await (
+    await getTrade(new Request("https://journal.example/api/trades/position"), {
+      params: Promise.resolve({ key: list.trades[0].key }),
+    })
+  ).json();
+  expect(detail.executions).toEqual([]);
+  expect(detail.trade).toMatchObject({ reportedFee: -2, reportedSwap: 1, netPnl: 97 });
+  const snapshot = (await sourceOverview()).snapshots[0]!;
+  const positions = snapshot.sections.positions!.data as { rows: { hasDetails: boolean }[] };
+  expect(positions.rows[0]!.hasDetails).toBe(true);
+});
+
+it("imports completed order cash through the authenticated endpoint without charging its USD conversion twice", async () => {
+  await connect();
+  const original = fetch;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === MCP_URL) {
+        const rpc = JSON.parse(String(init?.body));
+        if (rpc.method === "tools/call" && rpc.params.name === "the5ers_purchase")
+          return json({
+            jsonrpc: "2.0",
+            id: rpc.id,
+            result: {
+              structuredContent: {
+                pagination: { has_more: false },
+                data: {
+                  purchases: [
+                    {
+                      ref: `purchase-${epoch}`,
+                      status: "completed",
+                      placedAt: "2026-02-01T10:00:00Z",
+                      price: 180,
+                      priceUsd: 211.65,
+                      currency: "EUR",
+                    },
+                  ],
+                },
+              },
+            },
+          });
+      }
+      return original(url, init);
+    }),
+  );
+  const first = await POST(request({ action: "purchases.sync" }));
+  expect(first.status).toBe(200);
+  expect((await first.json()).data).toMatchObject({ imported: 1, matched: 0 });
+  epoch++;
+  expect((await (await POST(request({ action: "purchases.sync" }))).json()).data).toMatchObject({
+    imported: 0,
+    matched: 1,
+  });
+  const { propEntries } = await import("../src/db");
+  const ledger = await db.select().from(propEntries);
+  expect(ledger).toHaveLength(1);
+  expect(ledger[0]).toMatchObject({ amountMinor: 18000, currency: "EUR" });
+});
+
+it("does not inherit currency for a position page whose envelope omitted it", async () => {
+  await connect();
+  const first = (await listSourceAccounts())[0]!;
+  await selectSourceAccounts([first.id], false, true);
+  const original = fetch;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === MCP_URL) {
+        const rpc = JSON.parse(String(init?.body));
+        if (
+          rpc.method === "tools/call" &&
+          rpc.params.name === "the5ers_positions" &&
+          rpc.params.arguments.operation === "list"
+        ) {
+          const page = rpc.params.arguments.page;
+          return json({
+            jsonrpc: "2.0",
+            id: rpc.id,
+            result: {
+              structuredContent: {
+                ...(page === 1 ? { currency: "USD" } : {}),
+                pagination: { has_more: page === 1 },
+                data: {
+                  positions: [
+                    {
+                      ref: `page-${page}`,
+                      symbol: "EURUSD",
+                      side: "Buy",
+                      isClosed: true,
+                      openDate: new Date(Date.UTC(2026, 1, page, 10)).toISOString(),
+                      closeDate: new Date(Date.UTC(2026, 1, page, 11)).toISOString(),
+                      entry: 1.1,
+                      exit: 1.11,
+                      quantity: 0.2,
+                      profitAndLoss: 97,
+                    },
+                  ],
+                },
+              },
+            },
+          });
+        }
+      }
+      return original(url, init);
+    }),
+  );
+  const snapshot = await syncSourceAccount(first.id);
+  expect(snapshot.complete).toBe(false);
+  expect(snapshot.warnings.join(" ")).toContain("Position currency is missing");
+  const { queryTrades } = await import("../src/server/trades-query");
+  expect((await queryTrades()).trades).toHaveLength(0);
 });

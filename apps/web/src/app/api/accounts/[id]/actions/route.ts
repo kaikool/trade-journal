@@ -1,6 +1,7 @@
 import { and, eq, inArray } from "drizzle-orm";
 import {
   accounts,
+  settings,
   db,
   executions,
   trades,
@@ -12,6 +13,8 @@ import {
   importBatches,
 } from "@/db";
 import { bad, handler, ok, requireValue } from "@/server/api";
+import { getSetting } from "@/server/settings";
+import { JOURNAL_SOURCE_PREFIX } from "@/server/the5ers/journal";
 import { nowIso } from "@/server/ids";
 import { rebuildAccountInTransaction } from "@/server/rebuild";
 import { syncAccount } from "@/server/sync";
@@ -40,6 +43,13 @@ export const POST = handler(async (request: Request, { params }: Params) => {
       return ok({ archived: false });
     case "clear":
       await db.transaction(async (tx) => {
+        const links = JSON.parse((await getSetting("the5ers:journal-links", tx)) ?? "{}") as Record<
+          string,
+          string
+        >;
+        for (const [source, target] of Object.entries(links))
+          if (target === id)
+            await tx.delete(settings).where(eq(settings.key, `${JOURNAL_SOURCE_PREFIX}${source}`));
         await tx.delete(trades).where(eq(trades.accountId, id));
         await tx.delete(executions).where(eq(executions.accountId, id));
         await tx.update(accounts).set({ ibkrSyncTimeZone: null }).where(eq(accounts.id, id));
@@ -48,6 +58,14 @@ export const POST = handler(async (request: Request, { params }: Params) => {
     case "sync":
       return ok({ sync: await syncAccount(id) });
     case "transfer": {
+      const sourceLinks = JSON.parse((await getSetting("the5ers:journal-links")) ?? "{}") as Record<
+        string,
+        string
+      >;
+      requireValue(
+        !Object.values(sourceLinks).includes(id),
+        "Change this The5ers account's journal link in Accounts instead of transferring execution history.",
+      );
       if (!body.toAccountId) return bad("toAccountId is required");
       const destinationId = body.toAccountId;
       requireValue(destinationId !== id, "Choose a different destination account.");

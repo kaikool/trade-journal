@@ -6,7 +6,8 @@ export const cn = (...inputs: ClassValue[]) => twMerge(clsx(inputs));
 const currencyFormatters = new Map<string, Intl.NumberFormat>();
 
 /** Signed money — the sign is ALWAYS in the text; color never carries P&L alone. */
-export const fmtMoney = (value: number, currency = "USD"): string => {
+export const fmtMoney = (value: number | null | undefined, currency = "USD"): string => {
+  if (value == null || !Number.isFinite(value)) return "Unavailable";
   let formatter = currencyFormatters.get(currency);
   if (!formatter) {
     formatter = new Intl.NumberFormat("en-US", {

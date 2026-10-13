@@ -26,6 +26,10 @@ export const POST = handler(
     const { key } = await params;
     const row = await getTradeByKey(key);
     if (!row) return bad("Trade not found", 404);
+    requireValue(
+      !row.quantityUnitsUnknown,
+      "Market excursion estimates need verified execution sizes. The5ers reported positions do not provide those units.",
+    );
     const body = await request.json();
     requireValue(body && typeof body.provider === "string", "Choose a market data provider.");
     requireValue(

@@ -1,6 +1,7 @@
 import { and, eq } from "drizzle-orm";
-import { db, attachments, trades, notes, missedTrades, propAccounts, propEntries } from "@/db";
+import { db, attachments, notes, missedTrades, propAccounts, propEntries } from "@/db";
 import { handler, ok, requireValue } from "@/server/api";
+import { getTradeByKey } from "@/server/trades-query";
 import { newId, nowIso } from "@/server/ids";
 import {
   createAttachmentUpload,
@@ -32,9 +33,7 @@ async function owner(type: string, id: string) {
     )[0];
   }
   if (type === "trade") {
-    return !!(
-      await db.select({ key: trades.key }).from(trades).where(eq(trades.key, id)).limit(1)
-    )[0];
+    return Boolean(await getTradeByKey(id));
   }
   if (type === "note") {
     return !!(await db.select({ id: notes.id }).from(notes).where(eq(notes.id, id)).limit(1))[0];

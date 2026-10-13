@@ -60,8 +60,13 @@ interface TradeDetail {
   quantity: number;
   avgEntry: number;
   avgExit: number | null;
-  grossPnl: number;
-  fees: number;
+  grossPnl: number | null;
+  fees: number | null;
+  source?: "the5ers";
+  quantityUnitsUnknown?: boolean;
+  reportedFee?: number;
+  reportedSwap?: number;
+  programValid?: boolean;
   netPnl: number;
   durationMs: number | null;
   exitsJson: string;
@@ -136,7 +141,9 @@ function TradeView({ tradeKey }: { tradeKey: string }) {
     return exits
       .map((exit) => ({
         t: times.get(exit.executionId) ?? trade.openedAt,
-        pnl: exit.grossPnl - (totalExitQty > 0 ? trade.fees * (exit.quantity / totalExitQty) : 0),
+        pnl:
+          exit.grossPnl -
+          (totalExitQty > 0 ? (trade.fees ?? 0) * (exit.quantity / totalExitQty) : 0),
       }))
       .sort((a, b) => Date.parse(a.t) - Date.parse(b.t))
       .map((event) => ({
@@ -180,8 +187,57 @@ function TradeView({ tradeKey }: { tradeKey: string }) {
               >
                 {trade.status.toUpperCase()}
               </Badge>
-              <Meta label="Gross" value={fmtMoney(trade.grossPnl)} monetary />
-              <Meta label="Fees" value={fmtMoney(trade.fees)} monetary />
+              {trade.source === "the5ers" && (
+                <p className="text-xs text-muted-foreground">
+                  The5ers reported position. Net P&L includes commission and swap; execution-level
+                  history is unavailable.
+                </p>
+              )}
+              {trade.source === "the5ers" && (
+                <>
+                  <Meta
+                    label={`Opened (${timeZone})`}
+                    value={new Intl.DateTimeFormat("en-GB", {
+                      timeZone,
+                      dateStyle: "medium",
+                      timeStyle: "short",
+                      hourCycle: "h23",
+                    }).format(new Date(trade.openedAt))}
+                  />
+                  <Meta
+                    label={`Closed (${timeZone})`}
+                    value={
+                      trade.closedAt
+                        ? new Intl.DateTimeFormat("en-GB", {
+                            timeZone,
+                            dateStyle: "medium",
+                            timeStyle: "short",
+                            hourCycle: "h23",
+                          }).format(new Date(trade.closedAt))
+                        : "Open"
+                    }
+                  />
+                  {trade.programValid === false && (
+                    <Meta label="Program objectives" value="Excluded by provider rules" />
+                  )}
+                </>
+              )}
+              <Meta label="Gross" value={fmtMoney(trade.grossPnl, trade.currency)} monetary />
+              <Meta label="Fees" value={fmtMoney(trade.fees, trade.currency)} monetary />
+              {trade.source === "the5ers" && (
+                <>
+                  <Meta
+                    label="Reported fee"
+                    value={fmtMoney(trade.reportedFee, trade.currency)}
+                    monetary
+                  />
+                  <Meta
+                    label="Reported swap"
+                    value={fmtMoney(trade.reportedSwap, trade.currency)}
+                    monetary
+                  />
+                </>
+              )}
               <Meta label="Volume" value={fmtNumber(trade.quantity, 4)} />
               <Meta label="Avg entry" value={fmtNumber(trade.avgEntry)} monetary />
               <Meta
@@ -202,7 +258,7 @@ function TradeView({ tradeKey }: { tradeKey: string }) {
             </CardContent>
           </Card>
 
-          <TradeMarketData trade={trade} executions={executions} />
+          {!trade.quantityUnitsUnknown && <TradeMarketData trade={trade} executions={executions} />}
 
           {runningPnl.length > 1 && (
             <Card>
@@ -470,7 +526,7 @@ function AnnotationsCard({
               lines: [
                 `Status: ${trade.status} | Quantity: ${trade.quantity}`,
                 `Entry: ${trade.avgEntry} | Exit: ${trade.avgExit ?? "Open"}`,
-                `Net P&L: ${trade.netPnl.toFixed(2)} | Fees: ${trade.fees.toFixed(2)}`,
+                `Net P&L: ${trade.netPnl.toFixed(2)} | Fees: ${trade.fees?.toFixed(2) ?? "unavailable"}`,
                 `Stop: ${stopLoss || "Unspecified"} | Target: ${profitTarget || "Unspecified"}`,
                 `Tags: ${tags || "None"} | Mistakes: ${mistakes || "None"}`,
                 "",

@@ -57,10 +57,15 @@ export const useApi = <T>(url: string | null): ApiState<T> => {
   }, [url, tick]);
 
   useEffect(() => {
-    if (!url?.startsWith("/api/accounts")) return;
+    if (!url) return;
     const changed = () => setTick((value) => value + 1);
-    window.addEventListener("journal-accounts-changed", changed);
-    return () => window.removeEventListener("journal-accounts-changed", changed);
+    window.addEventListener("journal-data-changed", changed);
+    if (url.startsWith("/api/accounts"))
+      window.addEventListener("journal-accounts-changed", changed);
+    return () => {
+      window.removeEventListener("journal-data-changed", changed);
+      window.removeEventListener("journal-accounts-changed", changed);
+    };
   }, [url]);
 
   const refresh = useCallback(() => setTick((value) => value + 1), []);

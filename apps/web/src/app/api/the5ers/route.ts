@@ -6,6 +6,7 @@ import { AUTH_COOKIE } from "@/server/auth";
 import { startAuthorization, disconnectThe5ers } from "@/server/the5ers/oauth";
 import {
   listSourceInventory,
+  syncSourcePurchases,
   sourceOverview,
   selectSourceAccounts,
   syncSourceAccount,
@@ -57,6 +58,8 @@ export const POST = handler(async (request: Request) => {
     case "disconnect":
       await disconnectThe5ers();
       return ok({ disconnected: true });
+    case "purchases.sync":
+      return ok({ data: await syncSourcePurchases() });
     case "accounts":
       return ok(await listSourceInventory());
     case "select":

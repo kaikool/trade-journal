@@ -45,6 +45,7 @@ export const readFilters = (params: { get(key: string): string | null }): Analys
 
 /** Planned risk uses the weighted entry and total entry quantity, not peak concurrent exposure. */
 export function tradeRisk(trade: AnnotatedTrade): number | null {
+  if (trade.quantityUnitsUnknown) return null;
   const stop = trade.annotations?.stopLoss;
   const multiplier =
     trade.contractMultiplier ??
