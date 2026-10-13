@@ -265,7 +265,7 @@ export function The5ersAccounts({ onLinked }: { onLinked?: () => void }) {
   if (!state.data?.connected)
     return (
       <p className="px-4 text-sm text-muted-foreground">
-        <Link href="/settings?section=the5ers" className="underline">
+        <Link href="/settings#the5ers" className="underline">
           Connect The5ers in Settings
         </Link>{" "}
         to add your Hub accounts.{state.error && <span role="alert"> {state.error}</span>}
@@ -287,7 +287,7 @@ export function The5ersAccounts({ onLinked }: { onLinked?: () => void }) {
           <Button variant="outline" disabled={state.busy} onClick={() => void load()}>
             Refresh account list
           </Button>
-          <Link href="/settings?section=the5ers" className="self-center text-sm underline">
+          <Link href="/settings#the5ers" className="self-center text-sm underline">
             Connection settings
           </Link>
         </div>

@@ -50,10 +50,9 @@ const sections = [
   },
   {
     id: "the5ers",
-    label: "The5ers",
+    label: "Connections",
     icon: Globe,
-    description:
-      "Connect authorized Hub accounts and refresh source performance and program records.",
+    description: "Manage The5ers authorization and the read-only connection.",
   },
   {
     id: "ai-settings",
