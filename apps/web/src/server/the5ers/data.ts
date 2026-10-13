@@ -1,13 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
-import { and, eq, like, sql } from "drizzle-orm";
-import { db, settings, accounts as journalAccounts, propAccounts, propAudit } from "@/db";
-import { saveJournalPositions, reconcilePurchases } from "./journal";
+import { and, eq, like, sql, count } from "drizzle-orm";
+import { db, settings, accounts as journalAccounts, propAccounts, propAudit, trades } from "@/db";
+import { saveJournalPositions, reconcilePurchases, positionIdentity } from "./journal";
 import { payoutKey, sourceRecords, recordPayoutReceipt } from "./payouts";
 import {
   sourceCurrency,
   sourceFields,
   sourceProgram,
   sourcePropStatus,
+  normalizePosition,
 } from "@/lib/the5ers-normalize";
 import { getTimeZone } from "@/server/settings";
 import { isActiveSource } from "@/lib/the5ers-status";
@@ -61,6 +62,7 @@ export interface SourceSnapshot {
   unchangedPositions?: number;
   canImportSnapshot?: boolean;
   normalizationVersion?: number;
+  storedTrades?: number;
 }
 interface PositionRefs {
   connectionId: string;
@@ -501,7 +503,7 @@ export function snapshotCurrency(snapshot: SourceSnapshot): string | undefined {
     }),
   ].filter((value): value is string => typeof value === "string");
   if (
-    reported.length < 2 ||
+    reported.length < 1 ||
     reported.some((value) => !sourceCurrency(value)) ||
     new Set(reported).size !== 1
   )
@@ -588,7 +590,41 @@ export async function importSavedSnapshot(id: string) {
       string,
       string
     >;
-    requireValue(links[id], "Link this The5ers account to a journal account in Accounts first.");
+    if (!links[id]) {
+      const journalAccountId = `the5ers_${id}`;
+      await tx
+        .insert(journalAccounts)
+        .values({
+          id: journalAccountId,
+          name: `The5ers · ${snapshot.account.label}`,
+          broker: "The5ers",
+          kind: "import",
+          currency,
+          initialBalance: 0,
+          autoSync: false,
+          createdAt: new Date().toISOString(),
+        })
+        .onConflictDoNothing();
+      const [native] = await tx
+        .select()
+        .from(journalAccounts)
+        .where(eq(journalAccounts.id, journalAccountId));
+      requireValue(
+        native && native.broker === "The5ers" && native.currency === currency,
+        "The existing journal account has a conflicting provider or currency.",
+      );
+      links[id] = journalAccountId;
+      await setSetting("the5ers:journal-links", JSON.stringify(links), tx);
+      await setSetting(
+        SELECTION_KEY,
+        JSON.stringify(
+          selected.map((account) =>
+            account.id === id ? { ...account, journalAccountId } : account,
+          ),
+        ),
+        tx,
+      );
+    }
     const outcome = await saveJournalPositions(
       tx,
       id,
@@ -603,10 +639,19 @@ export async function importSavedSnapshot(id: string) {
       (warning) => !warning.startsWith("Position currency is missing"),
     );
     snapshot.canImportSnapshot = false;
-    snapshot.normalizationVersion = 2;
+    snapshot.normalizationVersion = 3;
     await setSetting(`${SNAPSHOT_PREFIX}${id}`, JSON.stringify(snapshot), tx);
     return snapshot;
   });
+}
+
+function detailPositionKey(accountId: string, value: unknown) {
+  const position = normalizePosition(value);
+  const digest = createHash("sha256")
+    .update(JSON.stringify([accountId, position ? positionIdentity(position) : publicData(value)]))
+    .digest("hex")
+    .slice(0, 32);
+  return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-${digest.slice(12, 16)}-${digest.slice(16, 20)}-${digest.slice(20)}`;
 }
 
 async function positions(
@@ -640,11 +685,15 @@ async function positions(
     const result = pageData(response, "positions");
     for (const item of result.rows) {
       const row = record(item),
-        key = randomUUID(),
+        key = detailPositionKey(account.id, row),
         ref = row.ref ?? row.position_ref;
       if (reference(ref)) {
         requireValue(!seen.has(ref), "The5ers repeated a position page.");
         seen.add(ref);
+        requireValue(
+          !Object.hasOwn(refs, key),
+          "The5ers returned indistinguishable position references. Previous journal history was retained.",
+        );
         refs[key] = ref;
       }
       rows.push({ key, hasDetails: Boolean(refs[key]), source: publicData(row) });
@@ -783,7 +832,7 @@ export async function syncSourceAccount(
         >;
         if (links[id])
           await saveSnapshotPropAccount(tx, snapshot, links[id]!, journalPositions.currency);
-        Object.assign(snapshot, outcome, { normalizationVersion: 2 });
+        Object.assign(snapshot, outcome, { normalizationVersion: 3 });
         if (outcome.skippedPositions) snapshot.complete = false;
         if (outcome.skippedPositions)
           snapshot.warnings.push(
@@ -829,6 +878,14 @@ export async function syncSourceAccount(
 }
 export async function sourceOverview() {
   const selection = await selectedAccounts();
+  const mappings = JSON.parse((await getSetting("the5ers:journal-links")) ?? "{}") as Record<
+    string,
+    string
+  >;
+  const counts = await db
+    .select({ accountId: trades.accountId, total: count() })
+    .from(trades)
+    .groupBy(trades.accountId);
   const payoutHistory = await db
     .select()
     .from(settings)
@@ -845,16 +902,15 @@ export async function sourceOverview() {
       .filter((row) => selection.some((account) => row.key === `${SNAPSHOT_PREFIX}${account.id}`))
       .map((row) => {
         const snapshot = JSON.parse(row.value) as SourceSnapshot;
+        snapshot.storedTrades =
+          counts.find((row) => row.accountId === mappings[snapshot.account.id])?.total ?? 0;
         const data = sourceFields(snapshot.sections.positions?.data);
         snapshot.canImportSnapshot =
-          snapshot.normalizationVersion !== 2 &&
+          snapshot.normalizationVersion !== 3 &&
           Boolean(snapshotCurrency(snapshot)) &&
           snapshot.sections.positions?.available === true &&
           Array.isArray(data.rows) &&
-          data.rows.length > 0 &&
-          Boolean(
-            selection.find((account) => account.id === snapshot.account.id)?.journalAccountId,
-          );
+          data.rows.length > 0;
         const payout = payoutHistory.find(
           (p) => p.key === `the5ers:payouts:${snapshot.account.id}`,
         );
@@ -916,18 +972,69 @@ export async function readSourceSection(resource: string, id?: string, positionK
       "Choose a position from the latest snapshot.",
     );
     const saved = await getSetting(`${REF_PREFIX}${id}`);
-    requireValue(saved, "Refresh positions before reading details.");
-    const cache = decryptJson<PositionRefs>(saved);
-    requireValue(
-      cache.connectionId === connection.id &&
-        cache.accountId === id &&
-        cache.expiresAt > Date.now() &&
-        Object.hasOwn(cache.refs, positionKey),
-      "Position details expired. Refresh the account snapshot and try again.",
-    );
-    return publicData(
-      await client.read(read.tool, read.operation, { position_ref: cache.refs[positionKey] }),
-    );
+    let cache = saved ? decryptJson<PositionRefs>(saved) : undefined;
+    const refreshReferences = async () => {
+      const stored = await getSetting(`${SNAPSHOT_PREFIX}${id}`);
+      requireValue(stored, "No saved position history exists for this account.");
+      const snapshot = JSON.parse(stored) as SourceSnapshot;
+      const rows = sourceFields(snapshot.sections.positions?.data).rows;
+      requireValue(Array.isArray(rows), "Saved position history is unavailable.");
+      const target = rows.find((row) => sourceFields(row).key === positionKey);
+      requireValue(target, "This position is no longer in the saved history. Reload the account.");
+      const source = sourceFields(target).source;
+      requireValue(
+        normalizePosition(source),
+        "This position has no verified identity for a detail refresh.",
+      );
+      const account = (await inventoryResult(client)).accounts.find((account) => account.id === id);
+      requireValue(account, "This The5ers account is no longer available.");
+      const fresh = await positions(client, account, snapshotCurrency(snapshot));
+      const stableKey = detailPositionKey(id, source);
+      requireValue(
+        Object.hasOwn(fresh.refs, stableKey),
+        "The5ers no longer provides details for this position. Saved journal history remains available.",
+      );
+      cache = {
+        connectionId: connection.id,
+        accountId: id,
+        expiresAt: Date.now() + 10 * 60_000,
+        refs: { ...fresh.refs, [positionKey]: fresh.refs[stableKey]! },
+      };
+      requireValue(
+        Buffer.byteLength(JSON.stringify(cache)) <= 2 * 1024 * 1024,
+        "The5ers position reference cache exceeded its size limit.",
+      );
+      await db.transaction(async (tx) => {
+        await assertConnection(connection.id, tx);
+        await setSetting(`${REF_PREFIX}${id}`, encryptJson(cache), tx);
+      });
+    };
+    if (
+      !cache ||
+      cache.connectionId !== connection.id ||
+      cache.accountId !== id ||
+      cache.expiresAt <= Date.now() ||
+      !Object.hasOwn(cache.refs, positionKey)
+    )
+      await refreshReferences();
+    const readDetails = async () => {
+      requireValue(cache, "Position references could not be refreshed.");
+      return publicData(
+        await client.read(read.tool, read.operation, { position_ref: cache.refs[positionKey] }),
+      );
+    };
+    try {
+      return await readDetails();
+    } catch (error) {
+      if (
+        !(error instanceof RequestError) ||
+        error.message !==
+          "The5ers could not provide this section. Check access and data availability."
+      )
+        throw error;
+      await refreshReferences();
+      return readDetails();
+    }
   }
   const account = (await inventoryResult(client)).accounts.find((a) => a.id === id);
   requireValue(account, "This The5ers account is no longer available.");

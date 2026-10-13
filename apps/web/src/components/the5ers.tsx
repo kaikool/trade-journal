@@ -995,6 +995,36 @@ function SnapshotPanels({
                     : "Not refreshed yet"}{" "}
                   · {a.autoSync ? "Daily refresh" : "Manual refresh"}
                 </p>
+                {snapshot?.storedTrades !== undefined && (
+                  <p className="text-xs text-muted-foreground">
+                    Stored in journal database: {snapshot.storedTrades} trades
+                  </p>
+                )}
+                {snapshot && (
+                  <details className="text-xs text-muted-foreground">
+                    <summary className="cursor-pointer">Sync diagnostics</summary>
+                    <div className="mt-2 space-y-2">
+                      <p>Importer version: {snapshot.normalizationVersion ?? "not imported"}</p>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          const blob = new Blob([JSON.stringify(snapshot, null, 2)], {
+                            type: "application/json",
+                          });
+                          const url = URL.createObjectURL(blob);
+                          const link = document.createElement("a");
+                          link.href = url;
+                          link.download = "the5ers-sync-diagnostics.json";
+                          link.click();
+                          setTimeout(() => URL.revokeObjectURL(url), 1000);
+                        }}
+                      >
+                        Download sync diagnostics
+                      </Button>
+                    </div>
+                  </details>
+                )}
                 {snapshot?.importedPositions !== undefined && (
                   <p className="text-xs text-muted-foreground">
                     {snapshot.importedPositions} new trades · {snapshot.updatedPositions ?? 0}{" "}
@@ -1118,7 +1148,7 @@ function SnapshotPanels({
                 {view === "prop" && section !== "ledger" && (
                   <div className="flex flex-wrap gap-2">
                     {(section === "payouts"
-                      ? [["payoutHistory", "Payout history / withdrawals"]]
+                      ? [["payoutHistory", "Payout history"]]
                       : [
                           ["health", "Account health"],
                           ["journey", "Program journey"],

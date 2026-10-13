@@ -536,19 +536,30 @@ it("retains source snapshots and records failures when the cron budget is exhaus
   spy.mockRestore();
 });
 
-it("rejects expired position references without exposing them or calling the provider", async () => {
+it("automatically renews expired position refs against the same stable position identity", async () => {
   await connect();
   const [first] = await listSourceAccounts();
   await selectSourceAccounts([first!.id], false);
   const snapshot = await syncSourceAccount(first!.id);
   const source = snapshot.sections.positions!.data as { rows: { key: string }[] };
   vi.mocked(fetch).mockClear();
+  calls = [];
+  epoch++;
   vi.useFakeTimers();
   vi.setSystemTime(Date.now() + 11 * 60_000);
-  await expect(readSourceSection("position", first!.id, source.rows[0]!.key)).rejects.toThrow(
-    "expired",
+  const details = await readSourceSection("position", first!.id, source.rows[0]!.key);
+  expect(JSON.stringify(details)).not.toContain("opaque-position");
+  expect(
+    calls.find((call) => call.tool === "the5ers_positions" && call.operation === "detail")?.args
+      .position_ref,
+  ).toBe("opaque-position-2-1");
+  expect(
+    calls.some((call) => call.operation === "balance" || call.operation === "statistics"),
+  ).toBe(false);
+  const next = await syncSourceAccount(first!.id);
+  expect((next.sections.positions!.data as { rows: { key: string }[] }).rows[0]!.key).toBe(
+    source.rows[0]!.key,
   );
-  expect(fetch).not.toHaveBeenCalled();
 });
 
 describe("automatic The5ers OAuth registration", () => {
@@ -1365,4 +1376,75 @@ it("imports old saved snapshot positions without refetching The5ers and rejects 
     .where(eq(settings.key, `${SNAPSHOT_PREFIX}${first.id}`));
   expect((await POST(request({ action: "snapshot.import", id: first.id }))).status).toBe(400);
   expect((await db.select().from(trades))[0]!.netPnl).toBe(-49.33);
+});
+
+it("imports a selected MT5 account with one authoritative currency and missing legacy journal link", async () => {
+  await connect();
+  const first = (await listSourceAccounts())[0]!;
+  await selectSourceAccounts([first.id], false);
+  const snapshot = await syncSourceAccount(first.id);
+  const { SNAPSHOT_PREFIX } = await import("../src/server/the5ers/oauth");
+  snapshot.normalizationVersion = 2;
+  snapshot.account.currency = undefined;
+  for (const name of ["performance", "rules", "positions"]) {
+    if (snapshot.sections[name]) {
+      const section = snapshot.sections[name]!.data as Record<string, unknown>;
+      delete section.currency;
+    }
+  }
+  await db
+    .update(settings)
+    .set({ value: JSON.stringify(snapshot) })
+    .where(eq(settings.key, `${SNAPSHOT_PREFIX}${first.id}`));
+  expect((await sourceOverview()).snapshots[0]!.canImportSnapshot).toBe(true);
+  const response = await POST(request({ action: "snapshot.import", id: first.id }));
+  expect(response.status).toBe(200);
+  expect(await db.select().from(trades)).toHaveLength(1);
+  expect((await sourceOverview()).snapshots[0]!.storedTrades).toBe(1);
+  expect((await sourceOverview()).selection[0]!.journalAccountId).toBe(`the5ers_${first.id}`);
+});
+
+it("renews refs once when the provider rejects a still-locally-valid position reference", async () => {
+  await connect();
+  const first = (await listSourceAccounts())[0]!;
+  await selectSourceAccounts([first.id], false);
+  const snapshot = await syncSourceAccount(first.id);
+  const key = (snapshot.sections.positions!.data as { rows: { key: string }[] }).rows[0]!.key;
+  const original = fetch;
+  let rejected = false;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === MCP_URL && init?.body) {
+        const rpc = JSON.parse(String(init.body));
+        if (
+          rpc.params?.name === "the5ers_positions" &&
+          rpc.params.arguments.operation === "detail" &&
+          !rejected
+        ) {
+          rejected = true;
+          epoch++;
+          return json({
+            jsonrpc: "2.0",
+            id: rpc.id,
+            result: { isError: true, content: [{ type: "text", text: "expired reference" }] },
+          });
+        }
+      }
+      return original(url, init);
+    }),
+  );
+  calls = [];
+  expect(JSON.stringify(await readSourceSection("position", first.id, key))).not.toContain(
+    "opaque-position",
+  );
+  expect(
+    calls.find((call) => call.tool === "the5ers_positions" && call.operation === "detail")?.args
+      .position_ref,
+  ).toBe("opaque-position-2-1");
+  vi.mocked(fetch).mockClear();
+  await expect(
+    readSourceSection("position", first.id, "0".repeat(8) + "-0000-0000-0000-" + "0".repeat(12)),
+  ).rejects.toThrow("no longer in the saved history");
+  expect(fetch).not.toHaveBeenCalled();
 });
