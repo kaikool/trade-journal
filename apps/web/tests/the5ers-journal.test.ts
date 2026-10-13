@@ -69,16 +69,16 @@ it("calculates net analytics, calendar and intraday from reported positions with
     closedTrades: 2,
     netPnl: 77,
     winRate: 0.5,
-    fees: null,
-    grossPnl: null,
+    fees: 2,
+    grossPnl: 79,
     maxDrawdown: 20,
   });
   expect(overview.days).toHaveLength(1);
   expect(overview.days[0]).toMatchObject({
     date: "2026-02-02",
     netPnl: 77,
-    fees: null,
-    grossPnl: null,
+    fees: 2,
+    grossPnl: 79,
   });
   expect(
     intradayCurve(result.trades, new Map(), "2026-02-02", "Asia/Ho_Chi_Minh").at(-1)?.cumNetPnl,
@@ -213,6 +213,8 @@ it("imports simultaneous MT5 positions separately using size/entry or provider I
   const second = { ...position, quantity: 0.3, entry: 1.101, profitAndLoss: -20 };
   await save([position]);
   const original = (await queryTrades()).trades[0]!.key;
+  await save([position]);
+  const legacyKey = (await queryTrades()).rows[0]!.key;
   expect(await save([position, second])).toMatchObject({
     importedPositions: 1,
     journaledPositions: 2,
@@ -251,4 +253,51 @@ it("keeps distinct MT5 tickets when each arrives in a separate window", async ()
   await save([{ ...position, ticket: "100", profitAndLoss: 95 }], false);
   expect((await getTradeByKey(firstKey))!.netPnl).toBe(95);
   expect(await db.select().from(trades)).toHaveLength(2);
+});
+
+it("reconstructs gross from signed commission and swap without changing net, including positive swap credits", async () => {
+  await save([
+    { ...position, symbol: "XAUUSD", profitAndLoss: -49.33, fee: -2.08, swap: 0 },
+    { ...position, symbol: "USDJPY", fee: 2, swap: 5 },
+  ]);
+  const rows = (await queryTrades()).rows;
+  const gold = rows.find((r) => r.symbol === "XAUUSD")!;
+  expect(gold.netPnl).toBe(-49.33);
+  expect(gold.grossPnl).toBeCloseTo(-47.25);
+  expect(gold.fees).toBe(2.08);
+  const credited = rows.find((r) => r.symbol === "USDJPY")!;
+  expect(credited.fees).toBe(-3);
+  expect(credited.grossPnl).toBe(94);
+  await save([{ ...position, symbol: "GBPUSD", swap: undefined }], false);
+  expect((await queryTrades()).rows.find((r) => r.symbol === "GBPUSD")!.costsUnavailable).toBe(
+    true,
+  );
+});
+
+it("distinguishes positions with identical entry time, price and volume by verified close time and exit price, without reordering duplicates", async () => {
+  const second = { ...position, closeDate: "2026-02-02T01:30:00Z", exit: 1.12, profitAndLoss: 110 };
+  await save([position]);
+  const legacyKey = (await queryTrades()).rows[0]!.key;
+  expect(await save([position, second])).toMatchObject({
+    journaledPositions: 2,
+    ambiguousPositions: 0,
+  });
+  const keys = (await queryTrades()).rows.map((r) => r.key).sort();
+  expect(keys).toContain(legacyKey);
+  await save([second, position]);
+  expect((await queryTrades()).rows.map((r) => r.key).sort()).toEqual(keys);
+  expect(await db.select().from(trades)).toHaveLength(2);
+});
+
+it("calculates entry ROI when the owner has configured a verified contract size", async () => {
+  await save([position]);
+  const { rowToTrade } = await import("../src/server/trades-query");
+  const row = (await queryTrades()).rows[0]!;
+  const defaults = (await import("../src/server/settings")).getJournalDefaults;
+  const calculated = await rowToTrade(row, {
+    multipliers: { EURUSD: 100000 },
+    defaults: await defaults(),
+  });
+  expect(calculated.quantityUnitsUnknown).toBe(false);
+  expect(netReturnOnEntry(calculated)).toBeCloseTo(97 / (1.1 * 0.2 * 100000));
 });

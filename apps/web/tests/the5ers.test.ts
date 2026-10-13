@@ -1125,12 +1125,12 @@ it("syncs the official ref/side/date position shape into authenticated Trades an
   expect(list.trades).toHaveLength(1);
   expect(list.trades[0]).toMatchObject({
     netPnl: 97,
-    fees: null,
-    grossPnl: null,
+    fees: 1,
+    grossPnl: 98,
     source: "the5ers",
   });
   const stats = await (await getStats(new Request("https://journal.example/api/stats"))).json();
-  expect(stats.metrics).toMatchObject({ netPnl: 97, closedTrades: 1, fees: null, grossPnl: null });
+  expect(stats.metrics).toMatchObject({ netPnl: 97, closedTrades: 1, fees: 1, grossPnl: 98 });
   const detail = await (
     await getTrade(new Request("https://journal.example/api/trades/position"), {
       params: Promise.resolve({ key: list.trades[0].key }),

@@ -148,7 +148,7 @@ export const intradayCurve = (
   const events: { t: string; pnl: number }[] = [];
   for (const trade of trades) {
     if (
-      trade.costsUnavailable &&
+      (trade.costsUnavailable || trade.exits.length === 0) &&
       trade.status !== "open" &&
       trade.closedAt &&
       dayKeyOf(trade.closedAt, timeZone) === date

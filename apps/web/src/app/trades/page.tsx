@@ -1,9 +1,9 @@
 "use client";
+import { The5ersSource } from "@/components/the5ers";
 
 import Link from "next/link";
-import { The5ersSource } from "@/components/the5ers";
 import { useRouter } from "next/navigation";
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import {
   createSortedRowModel,
   rowSelectionFeature,
@@ -132,11 +132,16 @@ function Trades() {
         id: "symbol",
         accessorKey: "symbol",
         header: "Symbol",
-        cell: ({ row, getValue }) => (
-          <span className="flex items-center gap-2 font-medium">
-            {getValue<string>()}
-            <span className="text-xs text-muted-foreground">{row.original.direction}</span>
-          </span>
+        cell: ({ getValue }) => <span className="font-medium">{getValue<string>()}</span>,
+      },
+      {
+        id: "direction",
+        accessorKey: "direction",
+        header: "Position",
+        cell: ({ getValue }) => (
+          <Badge variant="secondary" className="text-sm">
+            {getValue<string>() === "long" ? "Long" : "Short"}
+          </Badge>
         ),
       },
       {
@@ -199,7 +204,12 @@ function Trades() {
       },
       {
         id: "fees",
-        accessorKey: "fees",
+        accessorFn: (row) =>
+          row.source === "the5ers"
+            ? row.reportedFee === undefined
+              ? undefined
+              : Math.abs(row.reportedFee)
+            : row.fees,
         header: "Fees",
         cell: ({ getValue }) => (
           <span className="tnum text-muted-foreground">
@@ -273,9 +283,17 @@ function Trades() {
     getRowId: (row) => row.key,
     initialState: {
       sorting: [{ id: "closedAt", desc: true }],
-      columnVisibility: { fees: false, executionCount: false, rating: false },
+      columnVisibility: { executionCount: false, rating: false },
     },
   });
+
+  const initialRoiVisibility = useRef(false);
+  useEffect(() => {
+    if (!data?.trades.length || initialRoiVisibility.current) return;
+    initialRoiVisibility.current = true;
+    if (data.trades.every((row) => row.source === "the5ers" && netReturnOnEntry(row) === null))
+      table.getColumn("roi")?.toggleVisibility(false);
+  }, [data, table]);
 
   const selectedKeys = table.getSelectedRowModel().rows.map((row) => row.original.key);
   const sortedRows = table.getRowModel().rows;
@@ -308,11 +326,6 @@ function Trades() {
           </div>
         }
       />
-      {data?.sourceCoverage?.some((c) => !c.complete) && (
-        <p role="status" className="px-4 pt-3 text-sm text-muted-foreground">
-          Some connected positions are unavailable. Showing verified history.
-        </p>
-      )}
       <The5ersSource view="trades" query={query} />
       <div className="space-y-3 p-4">
         {m && (

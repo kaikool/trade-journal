@@ -1,7 +1,7 @@
 "use client";
+import { The5ersSource } from "@/components/the5ers";
 
 import Link from "next/link";
-import { The5ersSource } from "@/components/the5ers";
 import { Suspense, useState } from "react";
 import type {
   CalendarMonth,
@@ -101,11 +101,6 @@ function Dashboard() {
   return (
     <>
       <FilterBar title="Dashboard" actions={<AddTradeDialog onSaved={refresh} />} />
-      {data?.sourceCoverage?.some((c) => !c.complete) && (
-        <p role="status" className="px-4 pt-3 text-sm text-muted-foreground">
-          Connected account history is incomplete. Statistics include available reported positions.
-        </p>
-      )}
       <The5ersSource view="dashboard" query={query} />
       <DashboardContent
         data={data}

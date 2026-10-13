@@ -188,12 +188,6 @@ function TradeView({ tradeKey }: { tradeKey: string }) {
                 {trade.status.toUpperCase()}
               </Badge>
               {trade.source === "the5ers" && (
-                <p className="text-xs text-muted-foreground">
-                  The5ers reported position. Net P&L includes commission and swap; execution-level
-                  history is unavailable.
-                </p>
-              )}
-              {trade.source === "the5ers" && (
                 <>
                   <Meta
                     label={`Opened (${timeZone})`}
@@ -223,20 +217,18 @@ function TradeView({ tradeKey }: { tradeKey: string }) {
                 </>
               )}
               <Meta label="Gross" value={fmtMoney(trade.grossPnl, trade.currency)} monetary />
-              <Meta label="Fees" value={fmtMoney(trade.fees, trade.currency)} monetary />
-              {trade.source === "the5ers" && (
-                <>
-                  <Meta
-                    label="Reported fee"
-                    value={fmtMoney(trade.reportedFee, trade.currency)}
-                    monetary
-                  />
-                  <Meta
-                    label="Reported swap"
-                    value={fmtMoney(trade.reportedSwap, trade.currency)}
-                    monetary
-                  />
-                </>
+              <Meta
+                label={trade.source === "the5ers" ? "Commission" : "Fees"}
+                value={fmtMoney(
+                  trade.source === "the5ers" && trade.reportedFee !== undefined
+                    ? Math.abs(trade.reportedFee)
+                    : trade.fees,
+                  trade.currency,
+                )}
+                monetary
+              />
+              {trade.source === "the5ers" && trade.reportedSwap !== undefined && (
+                <Meta label="Swap" value={fmtMoney(trade.reportedSwap, trade.currency)} monetary />
               )}
               <Meta label="Volume" value={fmtNumber(trade.quantity, 4)} />
               <Meta label="Avg entry" value={fmtNumber(trade.avgEntry)} monetary />
@@ -246,7 +238,15 @@ function TradeView({ tradeKey }: { tradeKey: string }) {
                 value={trade.avgExit === null ? "open" : fmtNumber(trade.avgExit)}
               />
               <Meta label="Duration" value={fmtDuration(trade.durationMs)} />
-              <Meta label="Net / entry notional" value={fmtPercent(netReturnOnEntry(trade), 2)} />
+              {!trade.quantityUnitsUnknown && (
+                <Meta label="Net ROI" value={fmtPercent(netReturnOnEntry(trade), 2)} />
+              )}
+              {trade.quantityUnitsUnknown && (
+                <p className="text-xs text-muted-foreground">
+                  ROI requires contract size for this instrument. Set it in Settings to calculate
+                  ROI.
+                </p>
+              )}
               <Meta
                 label="Planned R"
                 value={trade.plannedR === null ? "–" : `${fmtNumber(trade.plannedR)}R`}
@@ -272,48 +272,52 @@ function TradeView({ tradeKey }: { tradeKey: string }) {
             </Card>
           )}
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Executions</CardTitle>
-              <p className="text-xs text-muted-foreground">Times in {timeZone}</p>
-            </CardHeader>
-            <CardContent>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Time</TableHead>
-                    <TableHead>Side</TableHead>
-                    <TableHead>Quantity</TableHead>
-                    <TableHead>Price</TableHead>
-                    <TableHead>Fee</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {executions
-                    .sort((a, b) => a.executedAt.localeCompare(b.executedAt))
-                    .map((execution) => (
-                      <TableRow key={execution.id}>
-                        <TableCell className="text-muted-foreground">
-                          {formatTimestamp(execution.executedAt, timeZone)}
-                        </TableCell>
-                        <TableCell>
-                          <span className={execution.side === "buy" ? "text-profit" : "text-loss"}>
-                            {execution.side === "buy" ? "▲ BUY" : "▼ SELL"}
-                          </span>
-                        </TableCell>
-                        <TableCell className="tnum">{fmtNumber(execution.quantity, 4)}</TableCell>
-                        <TableCell className="tnum">
-                          <MonetaryValue>{fmtNumber(execution.price)}</MonetaryValue>
-                        </TableCell>
-                        <TableCell className="tnum text-muted-foreground">
-                          <MonetaryValue>{fmtMoney(execution.fee)}</MonetaryValue>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
+          {executions.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Executions</CardTitle>
+                <p className="text-xs text-muted-foreground">Times in {timeZone}</p>
+              </CardHeader>
+              <CardContent>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Time</TableHead>
+                      <TableHead>Side</TableHead>
+                      <TableHead>Quantity</TableHead>
+                      <TableHead>Price</TableHead>
+                      <TableHead>Fee</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {executions
+                      .sort((a, b) => a.executedAt.localeCompare(b.executedAt))
+                      .map((execution) => (
+                        <TableRow key={execution.id}>
+                          <TableCell className="text-muted-foreground">
+                            {formatTimestamp(execution.executedAt, timeZone)}
+                          </TableCell>
+                          <TableCell>
+                            <span
+                              className={execution.side === "buy" ? "text-profit" : "text-loss"}
+                            >
+                              {execution.side === "buy" ? "▲ BUY" : "▼ SELL"}
+                            </span>
+                          </TableCell>
+                          <TableCell className="tnum">{fmtNumber(execution.quantity, 4)}</TableCell>
+                          <TableCell className="tnum">
+                            <MonetaryValue>{fmtNumber(execution.price)}</MonetaryValue>
+                          </TableCell>
+                          <TableCell className="tnum text-muted-foreground">
+                            <MonetaryValue>{fmtMoney(execution.fee)}</MonetaryValue>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          )}
         </div>
 
         <div className="min-w-0 space-y-3">

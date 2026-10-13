@@ -24,6 +24,7 @@ export const GET = handler(async (request: Request) => {
         grossPnl: row.costsUnavailable ? null : row.grossPnl,
         fees: row.costsUnavailable ? null : row.fees,
         contractMultiplier: trades[index]!.contractMultiplier ?? null,
+        quantityUnitsUnknown: trades[index]!.quantityUnitsUnknown,
         tags: trades[index]!.annotations?.tags ?? [],
         mistakes: trades[index]!.annotations?.mistakes ?? [],
         reviewed: row.reviewedAt !== null,

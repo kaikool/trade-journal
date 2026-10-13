@@ -334,10 +334,28 @@ export function The5ersProgramSummary({ value }: { value: unknown }) {
     ([key]) =>
       !["name", "currency", "freshness", "warnings", "complete"].includes(key.toLowerCase()),
   );
-  const display = (raw: unknown): string | null => {
+  const display = (raw: unknown, key: string): string | null => {
     if (typeof raw === "boolean") return raw ? "Yes" : "No";
     if (typeof raw === "string") return raw;
-    if (typeof raw === "number") return String(raw);
+    if (typeof raw === "number") {
+      const field = key.replace(/[_ ]/g, "").toLowerCase();
+      if (field === "winrate") return `${(raw * 100).toFixed(1)}%`;
+      if (
+        [
+          "grossprofit",
+          "grossloss",
+          "totalnetprofit",
+          "bestprofit",
+          "biggestloss",
+          "avgprofit",
+          "avgloss",
+          "expectancy",
+          "totalfees",
+        ].includes(field)
+      )
+        return cash(raw, currency);
+      return new Intl.NumberFormat("en", { maximumFractionDigits: 2 }).format(raw);
+    }
     const item = sourceFields(raw);
     if (typeof item.value !== "number") return null;
     if (item.unit === "percent") return `${item.value}%`;
@@ -350,23 +368,17 @@ export function The5ersProgramSummary({ value }: { value: unknown }) {
       {typeof data.name === "string" && <p className="text-sm font-medium">{data.name}</p>}
       <dl className="grid grid-cols-2 gap-3">
         {fields.map(([key, raw]) => {
-          const text = display(raw);
+          const text = display(raw, key);
           return text === null ? null : (
-            <div key={key}>
+            <div key={key} className="min-w-0">
               <dt className="text-xs text-muted-foreground">{heading(key)}</dt>
-              <dd className="mt-1 text-sm font-medium">
+              <dd className="mt-1 break-words text-sm font-medium tnum">
                 <MonetaryValue>{text}</MonetaryValue>
               </dd>
             </div>
           );
         })}
       </dl>
-      <details className="text-xs text-muted-foreground">
-        <summary className="cursor-pointer">Source details</summary>
-        <div className="mt-2">
-          <SourceValue value={value} />
-        </div>
-      </details>
     </div>
   );
 }
@@ -1018,42 +1030,6 @@ function SnapshotPanels({
                     : "Not refreshed yet"}{" "}
                   · {a.autoSync ? "Daily refresh" : "Manual refresh"}
                 </p>
-                {snapshot?.storedTrades !== undefined && (
-                  <p className="text-xs text-muted-foreground">
-                    Stored in journal database: {snapshot.storedTrades} trades
-                  </p>
-                )}
-                {snapshot && (
-                  <details className="text-xs text-muted-foreground">
-                    <summary className="cursor-pointer">Sync diagnostics</summary>
-                    <div className="mt-2 space-y-2">
-                      <p>Importer version: {snapshot.normalizationVersion ?? "not imported"}</p>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => {
-                          const blob = new Blob([JSON.stringify(snapshot, null, 2)], {
-                            type: "application/json",
-                          });
-                          const url = URL.createObjectURL(blob);
-                          const link = document.createElement("a");
-                          link.href = url;
-                          link.download = "the5ers-sync-diagnostics.json";
-                          link.click();
-                          setTimeout(() => URL.revokeObjectURL(url), 1000);
-                        }}
-                      >
-                        Download sync diagnostics
-                      </Button>
-                    </div>
-                  </details>
-                )}
-                {snapshot?.importedPositions !== undefined && (
-                  <p className="text-xs text-muted-foreground">
-                    {snapshot.importedPositions} new trades · {snapshot.updatedPositions ?? 0}{" "}
-                    updated · {snapshot.unchangedPositions ?? 0} unchanged
-                  </p>
-                )}
                 {view !== "dashboard" && !cashView && (
                   <Button
                     variant="outline"
@@ -1070,21 +1046,6 @@ function SnapshotPanels({
                     Refresh source
                   </Button>
                 )}
-                {snapshot && !snapshot.complete && (
-                  <p className="text-xs text-muted-foreground">
-                    This source snapshot is partial. Some sections or history may be unavailable.
-                  </p>
-                )}
-                {snapshot?.warnings?.length ? (
-                  <details className="text-xs text-muted-foreground">
-                    <summary className="cursor-pointer">Sync details</summary>
-                    <ul className="mt-2 space-y-1">
-                      {snapshot.warnings.map((warning, index) => (
-                        <li key={index}>{warning}</li>
-                      ))}
-                    </ul>
-                  </details>
-                ) : null}
                 {visible.map(
                   (name) =>
                     sections[name] && (
@@ -1168,7 +1129,7 @@ function SnapshotPanels({
                     )}
                   </>
                 )}
-                {view === "prop" && section !== "ledger" && (
+                {view === "prop" && section === "payouts" && (
                   <div className="flex flex-wrap gap-2">
                     {(section === "payouts"
                       ? [["payoutHistory", "Payout history"]]
@@ -1284,30 +1245,15 @@ export function The5ersSource({
 }) {
   const state = useSource();
   if (!state.data?.connected && !state.error) return null;
-  if (view === "dashboard" && !state.data?.snapshots.length) return null;
-  if (view === "trades") {
-    if (
-      !state.data?.snapshots.some(
-        (snapshot) => snapshot.skippedPositions || snapshot.journaledPositions === undefined,
-      )
-    )
-      return null;
-    return (
-      <details className="m-4 rounded-md border p-3">
-        <summary className="cursor-pointer text-sm text-muted-foreground">
-          Connected records needing review
-        </summary>
-        <div className="mt-3">
-          <Messages state={state} />
-          <SnapshotPanels view="trades" state={state} query={query} />
-        </div>
-      </details>
-    );
-  }
+  if (view === "dashboard" || view === "trades") return null;
   return (
     <section className="space-y-3 p-4" aria-label="The5ers source records">
       <h2 className="text-base font-semibold">
-        {view === "dashboard" ? "Connected account balances" : "The5ers program records"}
+        {section === "payouts"
+          ? "The5ers payouts"
+          : section === "ledger"
+            ? "The5ers expenses"
+            : "The5ers"}
       </h2>
       <Messages state={state} />
       <SnapshotPanels view={view} section={section} state={state} query={query} />

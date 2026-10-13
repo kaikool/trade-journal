@@ -40,8 +40,12 @@ export const rowToTrade = async (
   const notional = missingMultiplier
     ? 0
     : Math.abs(row.avgEntry * row.quantity * (multiplier ?? 1));
+  const quantityUnitsUnknown = Boolean(
+    row.quantityUnitsUnknown &&
+    !(multiplier != null && Number.isFinite(multiplier) && multiplier > 0),
+  );
   const tolerance =
-    row.quantityUnitsUnknown && defaults.breakevenMode === "percent"
+    quantityUnitsUnknown && defaults.breakevenMode === "percent"
       ? 0
       : defaults.breakevenMode === "percent"
         ? (notional * defaults.breakeven) / 100
@@ -61,9 +65,9 @@ export const rowToTrade = async (
     assetClass: (row.assetClass ?? undefined) as AnnotatedTrade["assetClass"],
     direction: row.direction,
     status,
-    contractMultiplier: row.quantityUnitsUnknown ? undefined : multiplier,
+    contractMultiplier: quantityUnitsUnknown ? undefined : multiplier,
     costsUnavailable: row.costsUnavailable,
-    quantityUnitsUnknown: row.quantityUnitsUnknown,
+    quantityUnitsUnknown,
     openedAt: row.openedAt,
     closedAt: row.closedAt ?? undefined,
     quantity: row.quantity,

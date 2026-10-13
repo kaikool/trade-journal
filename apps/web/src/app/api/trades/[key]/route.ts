@@ -36,6 +36,7 @@ export const GET = handler(async (_request: Request, { params }: Params) => {
       realizedR: tradeR(trade),
       plannedR: plannedR(trade),
       contractMultiplier: trade.contractMultiplier ?? null,
+      quantityUnitsUnknown: trade.quantityUnitsUnknown,
       currency: account?.currency ?? "USD",
     },
     executions: fills,

@@ -641,7 +641,7 @@ export async function importSavedSnapshot(id: string) {
       (warning) => !warning.startsWith("Position currency is missing"),
     );
     snapshot.canImportSnapshot = false;
-    snapshot.normalizationVersion = 4;
+    snapshot.normalizationVersion = 5;
     await setSetting(`${SNAPSHOT_PREFIX}${id}`, JSON.stringify(snapshot), tx);
     return snapshot;
   });
@@ -870,7 +870,7 @@ export async function syncSourceAccount(
         >;
         if (links[id])
           await saveSnapshotPropAccount(tx, snapshot, links[id]!, journalPositions.currency);
-        Object.assign(snapshot, outcome, { normalizationVersion: 4 });
+        Object.assign(snapshot, outcome, { normalizationVersion: 5 });
         if (outcome.skippedPositions) snapshot.complete = false;
         if (outcome.skippedPositions)
           snapshot.warnings.push(
@@ -972,7 +972,7 @@ export async function sourceOverview() {
           counts.find((row) => row.accountId === mappings[snapshot.account.id])?.total ?? 0;
         const data = sourceFields(snapshot.sections.positions?.data);
         snapshot.canImportSnapshot =
-          (snapshot.normalizationVersion !== 4 || !mappings[snapshot.account.id]) &&
+          (snapshot.normalizationVersion !== 5 || !mappings[snapshot.account.id]) &&
           Boolean(snapshotCurrency(snapshot)) &&
           snapshot.sections.positions?.available === true &&
           Array.isArray(data.rows) &&

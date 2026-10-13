@@ -4,6 +4,10 @@ import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import TradesPage from "../src/app/trades/page";
 
+vi.mock("@/components/privacy", () => ({
+  usePrivacy: () => false,
+  MonetaryValue: ({ children }: { children: React.ReactNode }) => children,
+}));
 const state = vi.hoisted(() => ({ trades: [] as Record<string, unknown>[] }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock("@/components/filter-bar", () => ({
@@ -85,4 +89,23 @@ it("sorts numerical returns in both directions with unavailable returns last", a
   expect(roiValues()).toEqual(["10.00%", "0.00%", "-10.00%", "–", "–"]);
   await act(async () => sort.click());
   expect(roiValues()).toEqual(["-10.00%", "0.00%", "10.00%", "–", "–"]);
+});
+
+it("shows position and commission clearly and hides an unavailable ROI column for The5ers lots", async () => {
+  await render([
+    {
+      source: "the5ers",
+      quantityUnitsUnknown: true,
+      direction: "short",
+      reportedFee: -2.08,
+      fees: null,
+    },
+  ]);
+  const headers = [...container.querySelectorAll("thead th")].map((header) => header.textContent);
+  expect(headers).toContain("Position");
+  expect(headers).toContain("Fees");
+  expect(headers).not.toContain("Net ROI");
+  expect(container.textContent).toContain("Short");
+  expect(container.textContent).toContain("$2.08");
+  expect(container.textContent).not.toContain("Connected records");
 });

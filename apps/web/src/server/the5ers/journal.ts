@@ -64,9 +64,16 @@ function journalTradeRow(
     openQuantity: closed ? 0 : position.quantity,
     avgEntry: position.entry,
     avgExit: position.exit,
-    // Internal net-only projection; costsUnavailable suppresses gross/cost aggregates.
-    grossPnl: position.netPnl,
-    fees: 0,
+    // Provider net already includes signed swap and commission. Reverse costs for gross only.
+    grossPnl:
+      position.netPnl +
+      (position.fee !== undefined && position.swap !== undefined
+        ? Math.abs(position.fee) - position.swap
+        : 0),
+    fees:
+      position.fee !== undefined && position.swap !== undefined
+        ? Math.abs(position.fee) - position.swap
+        : 0,
     netPnl: position.netPnl,
     executionCount: 0,
     executionIdsJson: "[]",
@@ -83,7 +90,7 @@ function journalTradeRow(
     profitTarget: typeof annotation.profitTarget === "number" ? annotation.profitTarget : null,
     reviewedAt: typeof annotation.reviewedAt === "string" ? annotation.reviewedAt : null,
     source: "the5ers",
-    costsUnavailable: true,
+    costsUnavailable: position.fee === undefined || position.swap === undefined,
     quantityUnitsUnknown: true,
     reportedFee: position.fee,
     reportedSwap: position.swap,
@@ -122,9 +129,19 @@ export async function saveJournalPositions(
       valid.push(group[0]!);
       continue;
     }
-    const discriminators = group.map((p) =>
+    let discriminators = group.map((p) =>
       p.providerId ? `provider:${p.providerId}` : `entry:${hash([p.quantity, p.entry])}`,
     );
+    if (
+      new Set(discriminators).size !== discriminators.length &&
+      group.every((p) => p.closedAt && p.exit !== null)
+    ) {
+      discriminators = group.map((p) =>
+        p.providerId
+          ? `provider:${p.providerId}`
+          : `closed:${hash([p.quantity, p.entry, p.closedAt, p.exit])}`,
+      );
+    }
     if (new Set(discriminators).size !== discriminators.length) {
       ambiguousPositions += group.length;
       continue;
@@ -132,11 +149,15 @@ export async function saveJournalPositions(
     // Migrate only an exactly matching prior position, preserving its annotations and trade key.
     for (let index = 0; index < group.length; index++) {
       const p = group[index]!;
-      const matches = earlier.filter((old) =>
+      let matches = earlier.filter((old) =>
         old.providerId && p.providerId
           ? old.providerId === p.providerId
-          : old.quantity === p.quantity && old.entry === p.entry,
+          : old.quantity === p.quantity &&
+            old.entry === p.entry &&
+            (!old.closedAt || !p.closedAt || (old.closedAt === p.closedAt && old.exit === p.exit)),
       );
+      if (matches.length > 1)
+        matches = matches.filter((old) => old.closedAt === p.closedAt && old.exit === p.exit);
       p.identityDiscriminator =
         matches.length === 1 ? matches[0]!.identityDiscriminator : discriminators[index];
       valid.push(p);

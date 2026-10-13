@@ -62,20 +62,17 @@ import {
 afterEach(() => {
   state.privacy = false;
 });
-it("renders reported financial values as text and shows partial coverage", () => {
-  const html = renderToStaticMarkup(createElement(The5ersSource, { view: "dashboard" }));
-  expect(html).toContain("12,345.67");
-  expect(html).toContain("snapshot is partial");
-  expect(html).not.toContain("alert(1)");
-  expect(html).not.toContain("<script>");
-  expect(html).not.toContain("Unsupported platform");
+it("keeps connected technical panels off Dashboard and Trades", () => {
+  for (const view of ["dashboard", "trades"] as const) {
+    expect(renderToStaticMarkup(createElement(The5ersSource, { view }))).toBe("");
+  }
 });
 it("hides source financial values while journal privacy mode is enabled", () => {
   state.privacy = true;
   const html = renderToStaticMarkup(createElement(The5ersSource, { view: "dashboard" }));
   expect(html).not.toContain("12345.67");
   expect(html).not.toContain("alert(1)");
-  expect(html).toContain("Hidden");
+  expect(html).toBe("");
 });
 
 it("keeps financial data out of connection settings and provides links to existing sections", () => {
@@ -101,7 +98,7 @@ it("labels effective balance separately and does not invent equity when the prov
   expect(html).not.toContain("Equity");
 });
 
-it("renders program rules as compact labelled metrics with raw records collapsed", () => {
+it("renders program rules as compact labelled metrics without raw records", () => {
   const html = renderToStaticMarkup(
     createElement(The5ersProgramSummary, {
       value: {
@@ -118,7 +115,7 @@ it("renders program rules as compact labelled metrics with raw records collapsed
   expect(html).toContain("$50K High Stakes - 2");
   expect(html).toContain("$2,500.00");
   expect(html).toContain("4%");
-  expect(html).toContain("Source details");
+  expect(html).not.toContain("Source details");
   expect(html).not.toContain("<details open");
 });
 
@@ -140,4 +137,27 @@ it("shows cached payouts from unselected historical accounts and applies present
     createElement(The5ersSource, { view: "prop", section: "payouts", query: "accounts=other" }),
   );
   expect(other).not.toContain("Closed funded account");
+});
+
+it("formats provider percentages and money without floating point tails or overflowing values", () => {
+  const html = renderToStaticMarkup(
+    createElement(The5ersProgramSummary, {
+      value: {
+        currency: "USD",
+        data: {
+          winRate: 0.22807017543859648,
+          totalNetProfit: -1288.7300000000023,
+          profitFactor: 0.8102383781662812,
+          totalQuantity: 13.940000000000001,
+          totalFees: -115.98999999999997,
+        },
+      },
+    }),
+  );
+  expect(html).toContain("22.8%");
+  expect(html).toContain("-$1,288.73");
+  expect(html).toContain("0.81");
+  expect(html).toContain("13.94");
+  expect(html).not.toContain("000000000");
+  expect(html).not.toContain("Source details");
 });
