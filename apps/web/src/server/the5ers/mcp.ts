@@ -125,6 +125,49 @@ export class The5ersMcp {
     await response.body?.cancel();
     if (!response.ok) throw new RequestError("The5ers connection initialization failed.");
   }
+  /** Discover the provider's actual payout/withdrawal read contract, without executing tools. */
+  async payoutContract() {
+    await (this.initializing ??= this.initialize());
+    const tools: Record<string, unknown>[] = [];
+    const cursors = new Set<string>();
+    let cursor: string | undefined;
+    for (let page = 0; page < 10; page++) {
+      const result = await this.rpc("tools/list", cursor ? { cursor } : {});
+      if (!Array.isArray(result.tools) || result.tools.length > 200)
+        throw new RequestError("The5ers returned an unsupported tool catalog.");
+      for (const item of result.tools) {
+        const tool = record(item);
+        if (typeof tool.name !== "string")
+          throw new RequestError("The5ers returned an invalid tool name.");
+        if (
+          tool.name.startsWith("the5ers_") &&
+          /payout|withdraw|payment|wallet/i.test(
+            `${tool.name} ${typeof tool.description === "string" ? tool.description : ""}`,
+          )
+        ) {
+          tools.push({
+            name: tool.name,
+            description: tool.description,
+            inputSchema: tool.inputSchema,
+            outputSchema: tool.outputSchema,
+          });
+        }
+      }
+      if (tools.length > 40 || JSON.stringify(tools).length > 2 * 1024 * 1024)
+        throw new RequestError("The5ers payout contract exceeded its size limit.");
+      if (result.nextCursor === undefined) return { tools, complete: true };
+      if (
+        typeof result.nextCursor !== "string" ||
+        !result.nextCursor ||
+        result.nextCursor.length > 4096 ||
+        cursors.has(result.nextCursor)
+      )
+        throw new RequestError("The5ers repeated or returned an invalid catalog cursor.");
+      cursor = result.nextCursor;
+      cursors.add(cursor);
+    }
+    throw new RequestError("The5ers tool catalog exceeded its page limit.");
+  }
   async read(
     tool: ReadTool,
     operation: string,

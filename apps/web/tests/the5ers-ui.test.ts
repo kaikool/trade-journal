@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-const state = vi.hoisted(() => ({ privacy: false, hasPayouts: true }));
+const state = vi.hoisted(() => ({ privacy: false, hasPayouts: true, cashComplete: true }));
 vi.mock("../src/components/privacy", () => ({
   usePrivacy: () => state.privacy,
   MonetaryValue: ({ children }: { children: React.ReactNode }) =>
@@ -18,7 +18,7 @@ vi.mock("../src/lib/use-api", () => ({
       connected: true,
       canRefresh: true,
       selection: [{ id: "account", label: "Account •1234", autoSync: true }],
-      cash: { complete: true, failures: [] },
+      cash: { complete: state.cashComplete, failures: [] },
       cashSelection: [
         ...Array.from({ length: 108 }, (_, i) => ({
           id: `empty-${i}`,
@@ -87,6 +87,7 @@ import {
 afterEach(() => {
   state.privacy = false;
   state.hasPayouts = true;
+  state.cashComplete = true;
 });
 it("keeps connected technical panels off Dashboard and Trades", () => {
   for (const view of ["dashboard", "trades"] as const) {
@@ -194,7 +195,17 @@ it("renders one empty state instead of hundreds of empty account cards", () => {
   const html = renderToStaticMarkup(
     createElement(The5ersSource, { view: "prop", section: "payouts" }),
   );
-  expect(html.match(/No payouts to display/g)).toHaveLength(1);
+  expect(html.match(/No payout records were returned/g)).toHaveLength(1);
   expect(html).not.toContain("Empty account");
   expect(html).not.toContain("Closed funded account");
+});
+
+it("does not interpret failed retrieval as an empty payout history", () => {
+  state.hasPayouts = false;
+  state.cashComplete = false;
+  const html = renderToStaticMarkup(
+    createElement(The5ersSource, { view: "prop", section: "payouts" }),
+  );
+  expect(html).toContain("Payout history could not be fully loaded.");
+  expect(html).not.toContain("No payout records were returned.");
 });

@@ -14,10 +14,15 @@ import {
   readSourceSection,
   confirmSourcePayout,
   importSavedSnapshot,
+  inspectPayoutContract,
 } from "@/server/the5ers/data";
 
 export const maxDuration = 120;
-export const GET = handler(async () => ok(await sourceOverview()));
+export const GET = handler(async (request: Request) => {
+  if (request && new URL(request.url).searchParams.get("view") === "payout-contract")
+    return ok(await inspectPayoutContract());
+  return ok(await sourceOverview());
+});
 export const POST = handler(async (request: Request) => {
   const origin = request.headers.get("origin");
   requireValue(

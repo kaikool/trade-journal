@@ -992,9 +992,11 @@ function SnapshotPanels({
         <p className="text-sm text-muted-foreground" role="status">
           {state.busy
             ? "Checking payout history…"
-            : selected.length
-              ? "No payouts for this account."
-              : "No payouts to display."}
+            : state.error || state.data.cash?.complete === false
+              ? "Payout history could not be fully loaded."
+              : selected.length
+                ? "No payouts for this account."
+                : "No payout records were returned."}
         </p>
       )}
       {(view === "prop" && ["ledger", "benefits", "activity"].includes(section)

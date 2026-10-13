@@ -81,6 +81,6 @@ OAuth implementation follows the [MCP authorization specification](https://model
 
 Account cards expose the actual database trade count and a collapsed Sync diagnostics download. The exported snapshot is already sanitized provider data and excludes OAuth tokens and encrypted reference caches. Use this snapshot to diagnose a production response contract; synthetic tests alone do not establish successful production ingestion.
 
-Payout history is account-scoped. An empty `payouts` response for a selected evaluation account does not establish that another funded account has no received payouts; select that account to inspect its history.
+The current payout importer requests history with an account ref. This does not establish that account-scoped history covers the user’s complete withdrawal history. The authenticated `GET /api/the5ers?view=payout-contract` reads the provider’s current `tools/list` catalog (including pagination) and returns the payout/withdrawal/payment/wallet tool descriptions and schemas, without executing their operations. Use that contract to verify the correct source and required arguments before changing money imports. A failed or partial retrieval is not an empty payout history.
 
 Position pagination stops when the reported total is satisfied, even if a provider incorrectly keeps `has_more` true. Repeated complete page payloads do not append duplicate records; absent proof of full coverage, the retained history is marked partial. The snapshot records reported totals and repeated-page evidence for troubleshooting.

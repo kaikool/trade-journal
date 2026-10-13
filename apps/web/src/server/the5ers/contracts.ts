@@ -17,7 +17,7 @@ export const READ_SCOPES = [
   "purchases",
   "affiliate",
 ].map((scope) => `mcp:${scope}.read`);
-/** Verified against the official public tools/list contract. No caller-supplied tool names. */
+/** Pinned read-only allowlist. Inspect current provider schemas with tools/list; no caller-supplied tool names. */
 export const READ_TOOLS = {
   account: {
     name: "the5ers_account",

@@ -267,6 +267,10 @@ async function sourceClient(signal?: AbortSignal) {
     ),
   };
 }
+export async function inspectPayoutContract() {
+  const { client } = await sourceClient();
+  return client.payoutContract();
+}
 export async function listSourceAccounts(): Promise<SourceAccount[]> {
   const { client } = await sourceClient();
   return (await inventory(client)).map(({ ref: _ref, ...account }) => account);

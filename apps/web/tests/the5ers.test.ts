@@ -193,7 +193,7 @@ describe("The5ers OAuth and journal access", () => {
     "blocks all new routes before data access with password %s",
     async (password) => {
       vi.stubEnv("JOURNAL_PASSWORD", password);
-      expect((await GET()).status).toBe(503);
+      expect((await GET(new Request("https://journal.example/api/the5ers"))).status).toBe(503);
       expect((await POST(request({ action: "accounts" }))).status).toBe(503);
       expect(
         (await callback(new Request("https://journal.example/api/the5ers/callback"))).status,
@@ -203,7 +203,7 @@ describe("The5ers OAuth and journal access", () => {
   );
   it("rejects forged journal sessions and cross-origin changes", async () => {
     session.token = "forged";
-    expect((await GET()).status).toBe(401);
+    expect((await GET(new Request("https://journal.example/api/the5ers"))).status).toBe(401);
     expect((await POST(request({ action: "connect" }))).status).toBe(401);
     session.token = sessionToken();
     expect((await POST(request({ action: "connect" }, "https://evil.example"))).status).toBe(400);
@@ -228,7 +228,7 @@ describe("The5ers OAuth and journal access", () => {
     expect(completed.headers.get("location")).toBe(
       "https://journal.example/accounts?connected=the5ers",
     );
-    const overview = await (await GET()).json();
+    const overview = await (await GET(new Request("https://journal.example/api/the5ers"))).json();
     expect(overview.connected).toBe(true);
     expect(JSON.stringify(overview)).not.toMatch(
       /synthetic-access-token|synthetic-refresh-token|synthetic-client-secret/,
@@ -1639,4 +1639,68 @@ it("keeps cash syncing when purchases fail and preserves each failed account's s
     purchases: { synced: false },
   });
   expect((await sourceOverview()).cashSnapshots).toHaveLength(2);
+});
+
+it("reads the actual payout and withdrawal tool schemas through the authenticated connection without calling any payout operation", async () => {
+  await connect();
+  const original = fetch;
+  const read = vi.fn();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === MCP_URL && init?.body) {
+        const rpc = JSON.parse(String(init.body));
+        if (rpc.method === "tools/list") {
+          read(rpc.params);
+          return json({
+            jsonrpc: "2.0",
+            id: rpc.id,
+            result: rpc.params.cursor
+              ? {
+                  tools: [
+                    {
+                      name: "the5ers_wallet",
+                      inputSchema: { properties: { operation: { enum: ["overview"] } } },
+                    },
+                  ],
+                }
+              : {
+                  tools: [
+                    {
+                      name: "the5ers_payout",
+                      inputSchema: {
+                        properties: {
+                          account_ref: { type: "string" },
+                          operation: { enum: ["history"] },
+                        },
+                        required: ["operation"],
+                      },
+                    },
+                    { name: "the5ers_positions", inputSchema: {} },
+                  ],
+                  nextCursor: "next-page",
+                },
+          });
+        }
+      }
+      return original(url, init);
+    }),
+  );
+  calls = [];
+  const response = await GET(
+    new Request("https://journal.example/api/the5ers?view=payout-contract"),
+  );
+  expect(response.status).toBe(200);
+  const result = await response.json();
+  expect(result.tools.map((t: { name: string }) => t.name)).toEqual([
+    "the5ers_payout",
+    "the5ers_wallet",
+  ]);
+  expect(result.tools[0].inputSchema.properties.account_ref).toEqual({ type: "string" });
+  expect(read.mock.calls).toEqual([[{}], [{ cursor: "next-page" }]]);
+  expect(calls).toEqual([]);
+  session.token = undefined;
+  expect(
+    (await GET(new Request("https://journal.example/api/the5ers?view=payout-contract"))).status,
+  ).toBe(401);
 });
