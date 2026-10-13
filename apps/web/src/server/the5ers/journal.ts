@@ -18,7 +18,9 @@ import {
 export const JOURNAL_SOURCE_PREFIX = "the5ers:journal:";
 const hash = (value: unknown) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 export const positionIdentity = (position: SourcePosition) =>
-  hash([position.symbol, position.direction, position.openedAt]);
+  position.identityDiscriminator
+    ? hash([position.symbol, position.direction, position.openedAt, position.identityDiscriminator])
+    : hash([position.symbol, position.direction, position.openedAt]);
 interface JournalSource {
   sourceAccountId: string;
   currency: string;
@@ -99,14 +101,63 @@ export async function saveJournalPositions(
   complete: boolean,
 ) {
   const parsed = rows.map(normalizePosition);
-  const valid = parsed.filter((p): p is SourcePosition => Boolean(p));
-  const identities = valid.map(positionIdentity);
-  requireValue(
-    new Set(identities).size === identities.length,
-    "Some The5ers positions have indistinguishable identities. Previous journal history was preserved.",
-  );
   const saved = await getSetting(`${JOURNAL_SOURCE_PREFIX}${sourceAccountId}`, tx);
   const previous = saved ? (JSON.parse(saved) as JournalSource) : undefined;
+  const candidates = parsed.filter((p): p is SourcePosition => Boolean(p));
+  const base = (p: SourcePosition) => hash([p.symbol, p.direction, p.openedAt]);
+  const groups = new Map<string, SourcePosition[]>();
+  for (const p of candidates) groups.set(base(p), [...(groups.get(base(p)) ?? []), p]);
+  const valid: SourcePosition[] = [];
+  let ambiguousPositions = 0;
+  for (const [key, group] of groups) {
+    const earlier = (previous?.positions ?? []).filter((p) => base(p) === key);
+    if (
+      group.length === 1 &&
+      !earlier.some((p) => p.identityDiscriminator) &&
+      !(
+        group[0]!.providerId &&
+        earlier.some((old) => old.providerId && old.providerId !== group[0]!.providerId)
+      )
+    ) {
+      valid.push(group[0]!);
+      continue;
+    }
+    const discriminators = group.map((p) =>
+      p.providerId ? `provider:${p.providerId}` : `entry:${hash([p.quantity, p.entry])}`,
+    );
+    if (new Set(discriminators).size !== discriminators.length) {
+      ambiguousPositions += group.length;
+      continue;
+    }
+    // Migrate only an exactly matching prior position, preserving its annotations and trade key.
+    for (let index = 0; index < group.length; index++) {
+      const p = group[index]!;
+      const matches = earlier.filter((old) =>
+        old.providerId && p.providerId
+          ? old.providerId === p.providerId
+          : old.quantity === p.quantity && old.entry === p.entry,
+      );
+      p.identityDiscriminator =
+        matches.length === 1 ? matches[0]!.identityDiscriminator : discriminators[index];
+      valid.push(p);
+    }
+  }
+  const frequencies = new Map<string, number>();
+  for (const position of valid) {
+    const key = positionIdentity(position);
+    frequencies.set(key, (frequencies.get(key) ?? 0) + 1);
+  }
+  for (let index = valid.length - 1; index >= 0; index--) {
+    if ((frequencies.get(positionIdentity(valid[index]!)) ?? 0) > 1) {
+      valid.splice(index, 1);
+      ambiguousPositions++;
+    }
+  }
+  const accepted = new Set(valid);
+  const skippedPositionIndexes = parsed.flatMap((position, index) =>
+    position && accepted.has(position) ? [] : [index],
+  );
+  const identities = valid.map(positionIdentity);
   requireValue(
     !previous || previous.currency === currency,
     "The5ers history currency changed. Review the journal account before syncing.",
@@ -219,6 +270,8 @@ export async function saveJournalPositions(
   return {
     journaledPositions: valid.length,
     skippedPositions: rows.length - valid.length,
+    ambiguousPositions,
+    skippedPositionIndexes,
     importedPositions,
     updatedPositions,
     unchangedPositions,

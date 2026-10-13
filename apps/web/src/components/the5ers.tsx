@@ -315,7 +315,12 @@ export function The5ersPayouts({
           )}
         </div>
       ))}
-      {!rows.length && <p className="text-sm">No payout records returned.</p>}
+      {!rows.length && (
+        <p className="text-sm">
+          No payouts returned for this selected account. Choose the account that received your
+          payout to check its payment history.
+        </p>
+      )}
     </div>
   );
 }
@@ -981,7 +986,11 @@ function SnapshotPanels({
             { key: string; hasDetails: boolean; source: unknown }[] | undefined;
           const positions =
             view === "trades" && snapshot?.journaledPositions !== undefined
-              ? sourcePositions?.filter((position) => !normalizePosition(position.source))
+              ? sourcePositions?.filter((position, index) =>
+                  snapshot.skippedPositionIndexes
+                    ? snapshot.skippedPositionIndexes.includes(index)
+                    : !normalizePosition(position.source),
+                )
               : sourcePositions;
           return (
             <Card key={a.id}>

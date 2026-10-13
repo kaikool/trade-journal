@@ -94,9 +94,10 @@ it("retains history across partial windows, updates a position once, and rejects
   expect((await getTradeByKey(key))?.netPnl).toBe(95);
   await save([], false);
   expect((await queryTrades()).trades).toHaveLength(1);
-  await expect(save([position, { ...position, profitAndLoss: 5 }])).rejects.toThrow(
-    "indistinguishable",
-  );
+  expect(await save([position, { ...position, profitAndLoss: 5 }])).toMatchObject({
+    ambiguousPositions: 2,
+    skippedPositions: 2,
+  });
   await expect(save([{ ...position, quantity: 0.3 }])).rejects.toThrow("changed its entry or size");
   expect((await getTradeByKey(key))?.netPnl).toBe(95);
 });
@@ -206,4 +207,48 @@ it("does not duplicate manual costs, post pending/refunded cash, or merge indist
     db.transaction((tx) => reconcilePurchases(tx, [purchase, purchase], "UTC")),
   ).rejects.toThrow("cannot be distinguished");
   expect(await db.select().from(propEntries)).toHaveLength(1);
+});
+
+it("imports simultaneous MT5 positions separately using size/entry or provider IDs and retains keys across partial windows", async () => {
+  const second = { ...position, quantity: 0.3, entry: 1.101, profitAndLoss: -20 };
+  await save([position]);
+  const original = (await queryTrades()).trades[0]!.key;
+  expect(await save([position, second])).toMatchObject({
+    importedPositions: 1,
+    journaledPositions: 2,
+  });
+  const rows = (await queryTrades()).trades;
+  expect(rows).toHaveLength(2);
+  expect(rows.find((row) => row.quantity === 0.2)!.key).toBe(original);
+  const secondKey = rows.find((row) => row.quantity === 0.3)!.key;
+  await save([{ ...second, profitAndLoss: -25 }], false);
+  expect((await getTradeByKey(secondKey))!.netPnl).toBe(-25);
+  await save([second, position]);
+  expect(await db.select().from(trades)).toHaveLength(2);
+  const third = { ...position, symbol: "XAUUSD", ticket: "100" };
+  await save([third, { ...third, ticket: "101" }]);
+  expect((await queryTrades()).trades).toHaveLength(4);
+});
+it("retains ambiguous raw records for review while importing unrelated valid positions", async () => {
+  const outcome = await save([
+    position,
+    { ...position, profitAndLoss: 5 },
+    { ...position, symbol: "XAUUSD" },
+  ]);
+  expect(outcome).toMatchObject({
+    journaledPositions: 1,
+    skippedPositions: 2,
+    ambiguousPositions: 2,
+  });
+  expect((await queryTrades()).trades.map((row) => row.symbol)).toEqual(["XAUUSD"]);
+});
+
+it("keeps distinct MT5 tickets when each arrives in a separate window", async () => {
+  await save([{ ...position, ticket: "100" }]);
+  const firstKey = (await queryTrades()).trades[0]!.key;
+  await save([{ ...position, ticket: "101", profitAndLoss: 50 }], false);
+  expect((await queryTrades()).trades).toHaveLength(2);
+  await save([{ ...position, ticket: "100", profitAndLoss: 95 }], false);
+  expect((await getTradeByKey(firstKey))!.netPnl).toBe(95);
+  expect(await db.select().from(trades)).toHaveLength(2);
 });

@@ -105,6 +105,8 @@ export function sourceMoney(value: unknown, currency: string): number | undefine
   }
 }
 export interface SourcePosition {
+  identityDiscriminator?: string;
+  providerId?: string;
   symbol: string;
   direction: "long" | "short";
   openedAt: string;
@@ -145,7 +147,12 @@ export function normalizePosition(value: unknown): SourcePosition | undefined {
       (!closedAt || exit === undefined || Date.parse(closedAt) < Date.parse(openedAt)))
   )
     return;
+  const providerId = row.positionid ?? row.ticket ?? row.id;
   return {
+    providerId:
+      typeof providerId === "string" || typeof providerId === "number"
+        ? String(providerId)
+        : undefined,
     symbol,
     direction,
     openedAt,

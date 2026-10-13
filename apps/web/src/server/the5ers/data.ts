@@ -57,6 +57,8 @@ export interface SourceSnapshot {
   importedExecutions: 0;
   journaledPositions?: number;
   skippedPositions?: number;
+  ambiguousPositions?: number;
+  skippedPositionIndexes?: number[];
   importedPositions?: number;
   updatedPositions?: number;
   unchangedPositions?: number;
@@ -639,7 +641,7 @@ export async function importSavedSnapshot(id: string) {
       (warning) => !warning.startsWith("Position currency is missing"),
     );
     snapshot.canImportSnapshot = false;
-    snapshot.normalizationVersion = 3;
+    snapshot.normalizationVersion = 4;
     await setSetting(`${SNAPSHOT_PREFIX}${id}`, JSON.stringify(snapshot), tx);
     return snapshot;
   });
@@ -648,7 +650,14 @@ export async function importSavedSnapshot(id: string) {
 function detailPositionKey(accountId: string, value: unknown) {
   const position = normalizePosition(value);
   const digest = createHash("sha256")
-    .update(JSON.stringify([accountId, position ? positionIdentity(position) : publicData(value)]))
+    .update(
+      JSON.stringify([
+        accountId,
+        position
+          ? [positionIdentity(position), position.providerId, position.quantity, position.entry]
+          : publicData(value),
+      ]),
+    )
     .digest("hex")
     .slice(0, 32);
   return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-${digest.slice(12, 16)}-${digest.slice(16, 20)}-${digest.slice(20)}`;
@@ -662,6 +671,7 @@ async function positions(
   const rows: { key: string; hasDetails: boolean; source: unknown }[] = [],
     refs: Record<string, string> = {},
     seen = new Set<string>();
+  const seenPages = new Set<string>();
   let currency: string | undefined,
     currencyVerified = true;
   for (let page = 1; page <= 10; page++) {
@@ -683,6 +693,19 @@ async function positions(
     );
     currency = pageCurrency ?? currency;
     const result = pageData(response, "positions");
+    const fingerprint = JSON.stringify(
+      result.rows.map((row) => JSON.stringify(publicData(row))).sort(),
+    );
+    if (seenPages.has(fingerprint))
+      return {
+        rows,
+        refs,
+        currency: currencyVerified ? currency : undefined,
+        complete: result.total === rows.length,
+        repeatedPage: true,
+        reportedTotal: result.total,
+      };
+    seenPages.add(fingerprint);
     for (const item of result.rows) {
       const row = record(item),
         key = detailPositionKey(account.id, row),
@@ -690,18 +713,27 @@ async function positions(
       if (reference(ref)) {
         requireValue(!seen.has(ref), "The5ers repeated a position page.");
         seen.add(ref);
-        requireValue(
-          !Object.hasOwn(refs, key),
-          "The5ers returned indistinguishable position references. Previous journal history was retained.",
-        );
+        if (Object.hasOwn(refs, key)) {
+          // Preserve the raw record for reconciliation instead of aborting the whole account.
+          const alternate = randomUUID();
+          rows.push({ key: alternate, hasDetails: true, source: publicData(row) });
+          refs[alternate] = ref;
+          continue;
+        }
         refs[key] = ref;
       }
       rows.push({ key, hasDetails: Boolean(refs[key]), source: publicData(row) });
     }
     if (Buffer.byteLength(JSON.stringify(rows)) > 2 * 1024 * 1024)
       throw new RequestError("The5ers position history exceeded the snapshot size limit.");
-    if (!result.hasMore)
-      return { rows, refs, currency: currencyVerified ? currency : undefined, complete: true };
+    if (!result.hasMore || result.total === rows.length)
+      return {
+        rows,
+        refs,
+        currency: currencyVerified ? currency : undefined,
+        complete: result.total === undefined || result.total === rows.length,
+        reportedTotal: result.total,
+      };
     requireValue(
       result.rows.length > 0,
       "The5ers returned an empty position page with more pages indicated.",
@@ -768,7 +800,13 @@ export async function syncSourceAccount(
     snapshot.complete &&= found.complete;
     snapshot.sections.positions = {
       available: true,
-      data: { rows: found.rows, currency: found.currency, complete: found.complete },
+      data: {
+        rows: found.rows,
+        currency: found.currency,
+        complete: found.complete,
+        reportedTotal: "reportedTotal" in found ? found.reportedTotal : undefined,
+        repeatedPage: "repeatedPage" in found ? found.repeatedPage : false,
+      },
     };
     if (found.currency && found.currency === (account.currency ?? snapshotCurrency(snapshot)))
       journalPositions = {
@@ -784,7 +822,7 @@ export async function syncSourceAccount(
     }
     if (!found.complete)
       snapshot.warnings.push(
-        "Position history reached the 1,000-row limit. This source snapshot is partial.",
+        "Position history is incomplete: pagination stopped before all source records could be verified.",
       );
     positionCache = {
       connectionId: connection.id,
@@ -832,11 +870,11 @@ export async function syncSourceAccount(
         >;
         if (links[id])
           await saveSnapshotPropAccount(tx, snapshot, links[id]!, journalPositions.currency);
-        Object.assign(snapshot, outcome, { normalizationVersion: 3 });
+        Object.assign(snapshot, outcome, { normalizationVersion: 4 });
         if (outcome.skippedPositions) snapshot.complete = false;
         if (outcome.skippedPositions)
           snapshot.warnings.push(
-            `${outcome.skippedPositions} positions omitted invalid timestamps, size, prices or net P&L.`,
+            `${outcome.skippedPositions} positions need review: ${outcome.ambiguousPositions} have no distinguishable stable identity; others are missing required trade facts. Other valid positions were imported.`,
           );
       } catch (error) {
         if (!(error instanceof RequestError)) throw error;
@@ -906,7 +944,7 @@ export async function sourceOverview() {
           counts.find((row) => row.accountId === mappings[snapshot.account.id])?.total ?? 0;
         const data = sourceFields(snapshot.sections.positions?.data);
         snapshot.canImportSnapshot =
-          snapshot.normalizationVersion !== 3 &&
+          (snapshot.normalizationVersion !== 4 || !mappings[snapshot.account.id]) &&
           Boolean(snapshotCurrency(snapshot)) &&
           snapshot.sections.positions?.available === true &&
           Array.isArray(data.rows) &&
@@ -990,6 +1028,10 @@ export async function readSourceSection(resource: string, id?: string, positionK
       requireValue(account, "This The5ers account is no longer available.");
       const fresh = await positions(client, account, snapshotCurrency(snapshot));
       const stableKey = detailPositionKey(id, source);
+      requireValue(
+        fresh.rows.filter((row) => detailPositionKey(id, row.source) === stableKey).length === 1,
+        "These positions have identical entry facts and no stable ticket. Their saved source records remain available, but details cannot be matched safely.",
+      );
       requireValue(
         Object.hasOwn(fresh.refs, stableKey),
         "The5ers no longer provides details for this position. Saved journal history remains available.",

@@ -1448,3 +1448,74 @@ it("renews refs once when the provider rejects a still-locally-valid position re
   ).rejects.toThrow("no longer in the saved history");
   expect(fetch).not.toHaveBeenCalled();
 });
+
+it("retains the complete MT5 response and imports cotemporal positions instead of aborting the account", async () => {
+  await connect();
+  const first = (await listSourceAccounts())[0]!;
+  await selectSourceAccounts([first.id], false, true);
+  const original = fetch;
+  const base = {
+    symbol: "XAUUSD",
+    side: "Buy",
+    isClosed: true,
+    openDate: "2026-10-13T02:32:20.337Z",
+    closeDate: "2026-10-13T02:33:48.020Z",
+    entry: 4169.26,
+    exit: 4167.37,
+    quantity: 0.25,
+    profitAndLoss: -49.33,
+    fee: -2.08,
+    swap: 0,
+  };
+  let ambiguous = false;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === MCP_URL && init?.body) {
+        const rpc = JSON.parse(String(init.body));
+        if (rpc.params?.name === "the5ers_positions" && rpc.params.arguments.operation === "list") {
+          const positions = [
+            base,
+            { ...base, quantity: ambiguous ? 0.25 : 0.5, profitAndLoss: -98.66 },
+            { ...base, symbol: "EURUSD", entry: 1.1, exit: 1.11, profitAndLoss: 10 },
+          ];
+          return json({
+            jsonrpc: "2.0",
+            id: rpc.id,
+            result: {
+              structuredContent: {
+                contract_version: "1.0",
+                operation: "positions.list",
+                status: "COMPLETE",
+                currency: "USD",
+                account: { label: first.label, platform: "meta-trader-5" },
+                pagination: { page: 1, limit: 100, total: positions.length, has_more: true },
+                data: {
+                  positions: positions.map((position, index) => ({
+                    ...position,
+                    ref: `position-${epoch}-${index}`,
+                  })),
+                },
+              },
+            },
+          });
+        }
+      }
+      return original(url, init);
+    }),
+  );
+  const snapshot = await syncSourceAccount(first.id);
+  expect(snapshot.sections.positions!.available).toBe(true);
+  expect(snapshot.journaledPositions).toBe(3);
+  expect(await db.select().from(trades)).toHaveLength(3);
+  epoch++;
+  await syncSourceAccount(first.id);
+  expect(await db.select().from(trades)).toHaveLength(3);
+  ambiguous = true;
+  const partial = await syncSourceAccount(first.id);
+  expect(partial.sections.positions!.available).toBe(true);
+  expect((partial.sections.positions!.data as { rows: unknown[] }).rows).toHaveLength(3);
+  expect(partial.skippedPositions).toBe(2);
+  expect(partial.journaledPositions).toBe(1);
+  expect(await db.select().from(trades)).toHaveLength(3);
+});
