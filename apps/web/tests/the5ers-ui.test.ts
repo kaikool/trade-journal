@@ -146,25 +146,19 @@ it("renders program rules as compact labelled metrics without raw records", () =
   expect(html).not.toContain("<details open");
 });
 
-it("shows cached payouts from unselected historical accounts and applies presentation filters only", () => {
-  const all = renderToStaticMarkup(
-    createElement(The5ersSource, { view: "prop", section: "payouts" }),
-  );
-  expect(all).toContain("Closed funded account");
-  expect(all).not.toContain("Empty account");
-  expect(all).not.toContain("No payouts returned");
-  const filtered = renderToStaticMarkup(
-    createElement(The5ersSource, {
-      view: "prop",
-      section: "payouts",
-      query: "accounts=historical",
-    }),
-  );
-  expect(filtered).toContain("Closed funded account");
-  const other = renderToStaticMarkup(
-    createElement(The5ersSource, { view: "prop", section: "payouts", query: "accounts=other" }),
-  );
-  expect(other).not.toContain("Closed funded account");
+it("uses the common prop ledger instead of rendering separate source finances", () => {
+  for (const section of ["overview", "accounts", "payouts", "ledger"]) {
+    const html = renderToStaticMarkup(createElement(The5ersSource, { view: "prop", section }));
+    expect(html).toBe("");
+  }
+});
+
+it("keeps financial sync controls in connection settings, without repeating source payments", () => {
+  const html = renderToStaticMarkup(createElement(The5ersConnection));
+  expect(html).toContain("Sync expenses");
+  expect(html).toContain("Sync finances");
+  expect(html).toContain("Download connection report");
+  expect(html).not.toContain("Closed funded account");
 });
 
 it("formats provider percentages and money without floating point tails or overflowing values", () => {
@@ -188,24 +182,4 @@ it("formats provider percentages and money without floating point tails or overf
   expect(html).toContain("13.94");
   expect(html).not.toContain("000000000");
   expect(html).not.toContain("Source details");
-});
-
-it("renders one empty state instead of hundreds of empty account cards", () => {
-  state.hasPayouts = false;
-  const html = renderToStaticMarkup(
-    createElement(The5ersSource, { view: "prop", section: "payouts" }),
-  );
-  expect(html.match(/No payout records were returned/g)).toHaveLength(1);
-  expect(html).not.toContain("Empty account");
-  expect(html).not.toContain("Closed funded account");
-});
-
-it("does not interpret failed retrieval as an empty payout history", () => {
-  state.hasPayouts = false;
-  state.cashComplete = false;
-  const html = renderToStaticMarkup(
-    createElement(The5ersSource, { view: "prop", section: "payouts" }),
-  );
-  expect(html).toContain("Payout history could not be fully loaded.");
-  expect(html).not.toContain("No payout records were returned.");
 });

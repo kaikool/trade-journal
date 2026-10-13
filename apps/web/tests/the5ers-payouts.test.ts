@@ -162,3 +162,93 @@ it("reads withdrawals and normalizes explicit net payment without using the gros
   expect(settledPayout({ ...withdrawal, netPaid: undefined })).toBeUndefined();
   expect(settledPayout({ ...withdrawal, status: "approved" })).toBeUndefined();
 });
+
+it("combines imported The5ers finances and another firm's manual records in one ledger and the same cash calculations", async () => {
+  await save(payout);
+  const { reconcilePurchases } = await import("../src/server/the5ers/journal");
+  await db.transaction(async (tx) => {
+    await reconcilePurchases(
+      tx,
+      [
+        {
+          placedAt: "2026-02-01T10:00:00Z",
+          status: "completed",
+          price: 100,
+          currency: "USD",
+          items: [
+            { name: "Evaluation", productType: "evaluation", creditsApplied: 0, netPaid: 100 },
+          ],
+        },
+      ],
+      "UTC",
+    );
+    await mutatePropInTransaction(tx, {
+      action: "account.save",
+      revision: 0,
+      id: "manual-funded",
+      firm: "FTMO",
+      name: "Manual funding",
+      currency: "USD",
+      program: "funded",
+      status: "active",
+      openedOn: "2026-01-01",
+    });
+    await mutatePropInTransaction(tx, {
+      action: "entry.save",
+      revision: 0,
+      id: "manual-expense",
+      firm: "FTMO",
+      accountId: "manual-funded",
+      kind: "expense",
+      category: "evaluation",
+      currency: "USD",
+      amount: "100",
+      occurredOn: "2026-02-01",
+    });
+    await mutatePropInTransaction(tx, {
+      action: "entry.save",
+      revision: 0,
+      id: "manual-payout",
+      firm: "FTMO",
+      accountId: "manual-funded",
+      kind: "payout",
+      currency: "USD",
+      amount: "220",
+      splitPercent: "100",
+      fee: "0",
+      status: "approved",
+      occurredOn: "2026-02-01",
+    });
+  });
+  let data = await propData();
+  const entry = data.entries.find((e) => e.id === "manual-payout")!;
+  await db.transaction((tx) =>
+    mutatePropInTransaction(tx, {
+      action: "receipt.add",
+      id: "manual-receipt",
+      payoutId: entry.id,
+      revision: entry.revision,
+      kind: "receipt",
+      amount: "220",
+      occurredOn: "2026-02-02",
+    }),
+  );
+  data = await propData();
+  const cash = cashMovements(data.entries, data.receipts);
+  expect(cashSummary(cash)).toMatchObject({ spent: 20000, received: 100000, net: 80000, roi: 4 });
+  expect(cashSummary(cash.filter((row) => row.firm === "The5ers"))).toMatchObject({
+    spent: 10000,
+    received: 78000,
+    net: 68000,
+  });
+  expect(cashSummary(cash.filter((row) => row.firm === "FTMO"))).toMatchObject({
+    spent: 10000,
+    received: 22000,
+    net: 12000,
+  });
+  expect(data.receipts).toHaveLength(2);
+  expect(await save(payout)).toBe("matched");
+  expect(
+    cashSummary(cashMovements((await propData()).entries, (await propData()).receipts)),
+  ).toMatchObject({ received: 100000 });
+});

@@ -29,7 +29,12 @@ interface Overview {
   snapshots: SourceSnapshot[];
   cashSnapshots?: SourceSnapshot[];
   cashSelection?: Selection[];
-  cash?: { complete: boolean; failures: { id: string; label: string }[] } | null;
+  cash?: {
+    complete: boolean;
+    failures: { id: string; label: string }[];
+    retrievedAt?: string;
+    synced?: number;
+  } | null;
   purchases?: unknown;
 }
 const heading = (name: string) =>
@@ -71,7 +76,7 @@ export function formatSourceDate(value: unknown, timeZone: string) {
 export function The5ersBalance({ value, currency }: { value: unknown; currency?: string }) {
   const envelope = sourceObject(value),
     data = sourceObject(envelope.data ?? envelope);
-  const code = typeof envelope.currency === "string" ? envelope.currency : undefined;
+  const code = typeof envelope.currency === "string" ? envelope.currency : currency;
   return (
     <dl className="grid grid-cols-2 gap-3 text-sm">
       {[
@@ -506,6 +511,7 @@ function SourceValue({ value, depth = 0 }: { value: unknown; depth?: number }) {
 export function The5ersConnection() {
   const state = useSource(),
     overview = state.data;
+  const privacy = usePrivacy();
   return (
     <Card>
       <CardHeader>
@@ -569,6 +575,96 @@ export function The5ersConnection() {
               Connected · {overview.selection.length} selected accounts
               {!overview.canRefresh ? " · Reconnect required when access expires" : ""}
             </p>
+            <div className="space-y-2 rounded-md border p-3">
+              <p className="text-sm font-medium">Financial sync</p>
+              <p className="text-xs text-muted-foreground">
+                Imported expenses and received payouts appear in the same Prop firms ledger as
+                manual records.
+              </p>
+              {overview.cash?.retrievedAt && (
+                <p className="text-xs text-muted-foreground">
+                  Last attempt:{" "}
+                  {formatSourceDate(overview.cash.retrievedAt, overview.timeZone ?? "UTC")}
+                </p>
+              )}
+              {overview.cash?.complete === false && (
+                <p className="text-sm">
+                  Financial sync is incomplete. Existing ledger records are retained.
+                </p>
+              )}
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={state.busy}
+                  onClick={() =>
+                    void state.run(async () => {
+                      const result = await postJson<{
+                        data: { imported: number; matched: number; pending: number };
+                      }>("/api/the5ers", { action: "purchases.sync" });
+                      state.refresh();
+                      window.dispatchEvent(new Event("journal-data-changed"));
+                      state.setNotice(
+                        `Expenses: ${result.data.imported} imported, ${result.data.matched} already linked, ${result.data.pending} not imported. Existing matching expenses are not duplicated.`,
+                      );
+                    })
+                  }
+                >
+                  Sync expenses
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={state.busy}
+                  onClick={() =>
+                    void state.run(async () => {
+                      const result = await postJson<{ data: { complete: boolean } }>(
+                        "/api/the5ers",
+                        { action: "cash.sync" },
+                      );
+                      state.refresh();
+                      window.dispatchEvent(new Event("journal-data-changed"));
+                      state.setNotice(
+                        result.data.complete
+                          ? "Financial sync completed. Open Prop firms to view the ledger."
+                          : "Financial sync is incomplete. Existing ledger records are retained.",
+                      );
+                    })
+                  }
+                >
+                  Sync finances
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={state.busy || privacy}
+                  onClick={() =>
+                    void state.run(async () => {
+                      const response = await fetch("/api/the5ers?view=payout-contract", {
+                        cache: "no-store",
+                      });
+                      const report = await response.json();
+                      if (!response.ok)
+                        throw new Error(
+                          typeof report.error === "string"
+                            ? report.error
+                            : "Could not read the payout contract.",
+                        );
+                      const url = URL.createObjectURL(
+                        new Blob([JSON.stringify(report, null, 2)], { type: "application/json" }),
+                      );
+                      const link = document.createElement("a");
+                      link.href = url;
+                      link.download = "the5ers-connection-report.json";
+                      link.click();
+                      setTimeout(() => URL.revokeObjectURL(url), 1000);
+                    })
+                  }
+                >
+                  Download connection report
+                </Button>
+              </div>
+            </div>
             <div className="flex flex-wrap gap-4 text-sm">
               <Link href="/accounts" className="underline">
                 Manage accounts
@@ -907,331 +1003,57 @@ export function The5ersAccounts({ onLinked }: { onLinked?: () => void }) {
     </Card>
   );
 }
-function SnapshotPanels({
-  view,
+/** Cached broker balances supplement journal accounts; source finance lists do not render here. */
+function LinkedAccountBalances({
   state,
-  section = "overview",
   query = "",
 }: {
-  view: "accounts" | "prop" | "trades" | "dashboard";
   state: ReturnType<typeof useSource>;
-  section?: string;
   query?: string;
 }) {
-  const [detail, setDetail] = useState<{ title: string; data: unknown; accountId?: string } | null>(
-    null,
-  );
-  useEffect(() => setDetail(null), [view, section, query]);
-  const params = new URLSearchParams(query);
-  const selected = params.get("accounts")?.split(",").filter(Boolean) ?? [];
-  const cashView = view === "prop" && ["payouts", "ledger"].includes(section);
-  const snapshots = (
-    cashView ? (state.data?.cashSnapshots ?? []) : (state.data?.snapshots ?? [])
-  ).filter(
-    (s) =>
-      !selected.length ||
-      selected.includes(
-        (cashView ? state.data?.cashSelection : state.data?.selection)?.find(
-          (a) => a.id === s.account.id,
-        )?.journalAccountId ?? `the5ers_${s.account.id}`,
-      ),
-  );
-  const payoutSnapshots = snapshots.filter((snapshot) => {
-    const history = snapshot.sections.payoutHistory;
-    return (
-      history?.available &&
-      Array.isArray(obj(history.data).rows) &&
-      (obj(history.data).rows as unknown[]).length > 0
-    );
+  const selected = new URLSearchParams(query).get("accounts")?.split(",").filter(Boolean) ?? [];
+  const snapshots = (state.data?.snapshots ?? []).filter((snapshot) => {
+    const linkedId =
+      state.data?.selection.find((a) => a.id === snapshot.account.id)?.journalAccountId ??
+      `the5ers_${snapshot.account.id}`;
+    return !selected.length || selected.includes(linkedId);
   });
-  const read = (resource: string, title: string, id?: string, key?: string) =>
-    state.run(async () => {
-      const result = await postJson<{ data: unknown }>("/api/the5ers", {
-        action: resource === "purchases" ? "purchases.sync" : "read",
-        resource,
-        ...(id ? { id } : {}),
-        ...(key ? { positionKey: key } : {}),
-      });
-      setDetail({ title, data: result.data, accountId: id });
-      if (resource === "purchases" || resource === "payoutHistory")
-        window.dispatchEvent(new Event("journal-data-changed"));
-    });
-  const cashLoaded = useRef(false);
-  const refreshCash = () =>
-    state.run(async () => {
-      await postJson("/api/the5ers", { action: "cash.sync" });
-      state.refresh();
-      window.dispatchEvent(new Event("journal-data-changed"));
-    });
-  useEffect(() => {
-    if (!cashView || !state.data?.connected || state.data.cash || cashLoaded.current) return;
-    cashLoaded.current = true;
-    void refreshCash();
-  }, [cashView, state.data]);
   return (
     <div className="space-y-3">
-      {cashView && state.data?.connected && (
-        <div className="space-y-2">
-          <Button variant="outline" disabled={state.busy} onClick={() => void refreshCash()}>
-            {state.busy ? "Refreshing…" : "Refresh"}
-          </Button>
-          {state.data.cash && !state.data.cash.complete && (
-            <p className="text-sm">
-              History is incomplete. Refresh to retry; saved payouts are retained.
-            </p>
-          )}
-          {section === "ledger" && state.data.purchases != null && (
-            <The5ersPurchases
-              value={state.data.purchases}
-              timeZone={state.data.timeZone ?? "UTC"}
-            />
-          )}
-        </div>
-      )}
-      {view === "prop" && section === "payouts" && state.data && !payoutSnapshots.length && (
-        <p className="text-sm text-muted-foreground" role="status">
-          {state.busy
-            ? "Checking payout history…"
-            : state.error || state.data.cash?.complete === false
-              ? "Payout history could not be fully loaded."
-              : selected.length
-                ? "No payouts for this account."
-                : "No payout records were returned."}
-        </p>
-      )}
-      {(view === "prop" && ["ledger", "benefits", "activity"].includes(section)
-        ? []
-        : cashView
-          ? (state.data?.cashSelection ?? [])
-          : (state.data?.selection ?? [])
-      )
-        .filter(
-          (a) => !selected.length || selected.includes(a.journalAccountId ?? `the5ers_${a.id}`),
-        )
-        .filter(
-          (a) =>
-            section !== "payouts" ||
-            view !== "prop" ||
-            payoutSnapshots.some((s) => s.account.id === a.id),
-        )
-        .map((a) => {
-          const snapshot = snapshots.find((s) => s.account.id === a.id);
-          const account = snapshot?.account;
-          const sections = snapshot?.sections ?? {};
-          const visible =
-            view === "accounts" || view === "dashboard"
-              ? ["balance"]
-              : view === "prop"
-                ? section === "payouts"
-                  ? ["payout", "payoutHistory"]
-                  : section === "ledger"
-                    ? []
-                    : ["rules", "consistency", "performance"]
-                : [];
-          const sourcePositions = obj(sections.positions?.data).rows as
-            { key: string; hasDetails: boolean; source: unknown }[] | undefined;
-          const positions =
-            view === "trades" && snapshot?.journaledPositions !== undefined
-              ? sourcePositions?.filter((position, index) =>
-                  snapshot.skippedPositionIndexes
-                    ? snapshot.skippedPositionIndexes.includes(index)
-                    : !normalizePosition(position.source),
-                )
-              : sourcePositions;
-          return (
-            <Card key={a.id}>
-              <CardHeader>
-                <CardTitle>{a.label}</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                {!cashView && (
-                  <p className="text-xs text-muted-foreground">
-                    {snapshot
-                      ? `Updated ${formatSourceDate(snapshot.retrievedAt, state.data?.timeZone ?? "UTC")}`
-                      : "Not refreshed yet"}{" "}
-                    · {a.autoSync ? "Daily refresh" : "Manual refresh"}
-                  </p>
-                )}
-                {view !== "dashboard" && !cashView && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={state.busy}
-                    onClick={() =>
-                      void state.run(async () => {
-                        await postJson("/api/the5ers", { action: "sync", id: a.id });
-                        state.refresh();
-                        window.dispatchEvent(new Event("journal-data-changed"));
-                      })
-                    }
-                  >
-                    Refresh source
-                  </Button>
-                )}
-                {visible.map(
-                  (name) =>
-                    sections[name] && (
-                      <div key={name} className="rounded-md border p-3">
-                        <h4 className="mb-2 text-sm font-medium">
-                          {heading(name)} (
-                          {String(
-                            obj(sections[name].data).currency ??
-                              account?.currency ??
-                              "currency unavailable",
-                          )}
-                          )
-                        </h4>
-                        {sections[name].available ? (
-                          name === "balance" ? (
-                            <The5ersBalance
-                              value={sections[name].data}
-                              currency={account?.currency}
-                            />
-                          ) : name === "payoutHistory" ? (
-                            <The5ersPayouts value={sections[name].data} sourceAccountId={a.id} />
-                          ) : ["rules", "consistency", "performance"].includes(name) ? (
-                            <The5ersProgramSummary value={sections[name].data} />
-                          ) : (
-                            <details>
-                              <summary className="cursor-pointer text-sm">
-                                View {heading(name).toLowerCase()}
-                              </summary>
-                              <div className="mt-3">
-                                <SourceValue value={sections[name].data} />
-                              </div>
-                            </details>
-                          )
-                        ) : (
-                          <p className="text-sm">{sections[name].error}</p>
-                        )}
-                      </div>
-                    ),
-                )}
-                {view === "trades" && (
-                  <>
-                    <p className="text-xs text-muted-foreground">
-                      {snapshot?.journaledPositions
-                        ? "Imported positions appear in Trades. The records below need additional information."
-                        : "These positions have not been imported into Trades yet. Check the sync details below."}
-                    </p>
-                    {positions?.slice(0, 100).map((p) => (
-                      <div key={p.key} className="space-y-2 rounded-md border p-3">
-                        <SourceValue value={p.source} />
-                        {p.hasDetails && (
-                          <div className="flex gap-2">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              disabled={state.busy}
-                              onClick={() => void read("position", "Position details", a.id, p.key)}
-                            >
-                              Details
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              disabled={state.busy}
-                              onClick={() => void read("fills", "Position executions", a.id, p.key)}
-                            >
-                              Executions
-                            </Button>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                    {!sections.positions?.available && (
-                      <p className="text-sm">
-                        {sections.positions?.error ?? "Refresh this account to retrieve positions."}
-                      </p>
-                    )}
-                    {(positions?.length ?? 0) > 100 && (
-                      <p className="text-xs">
-                        Showing 100 of {positions?.length} source positions.
-                      </p>
-                    )}
-                  </>
-                )}
-                {view === "accounts" && account && (
-                  <p className="text-xs text-muted-foreground">
-                    Source status:{" "}
-                    {account.status ?? String(accountValue(account, "status") ?? "Unavailable")} ·
-                    Starting capital is maintained independently.
-                  </p>
-                )}
-              </CardContent>
-            </Card>
-          );
-        })}
-      {view === "prop" && state.data?.connected && (
-        <div className="flex flex-wrap gap-2">
-          {(section === "ledger"
-            ? [["purchases", "Purchases & fees"]]
-            : section === "benefits"
-              ? [
-                  ["wallet", "Credits"],
-                  ["coupons", "Coupons"],
-                  ["achievements", "Achievements"],
-                ]
-              : section === "activity"
-                ? [
-                    ["alerts", "Notifications"],
-                    ["affiliate", "Affiliate"],
-                  ]
-                : []
-          ).map(([resource, title]) => (
-            <Button
-              key={resource}
-              variant="outline"
-              disabled={state.busy}
-              onClick={() => void read(resource!, title!)}
-            >
-              {title}
-            </Button>
-          ))}
-        </div>
-      )}
-      {view === "prop" &&
-        selected.length > 0 &&
-        ["ledger", "benefits", "activity"].includes(section) && (
-          <p className="text-xs text-muted-foreground">
-            Hub-wide records cannot yet be attributed safely to this account. Clear the account
-            filter to view them.
-          </p>
-        )}
-      {detail && (
-        <Card>
+      {snapshots.map((snapshot) => (
+        <Card key={snapshot.account.id}>
           <CardHeader>
-            <CardTitle>
-              {detail.title}{" "}
-              <span className="text-xs font-normal text-muted-foreground">· Provider records</span>
-            </CardTitle>
+            <CardTitle>{snapshot.account.label}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            {view === "prop" && (section === "ledger" || section === "payouts") && (
-              <p className="text-xs text-muted-foreground">
-                {section === "ledger"
-                  ? "Verified completed purchases are included in your spending. Records needing review remain separate."
-                  : "Record actual settlements below to include them in Payouts received. Provider history omits cancelled and reversed requests."}
-              </p>
-            )}
-            {obj(detail.data).complete === false && (
-              <p className="text-xs">Source history is partial.</p>
-            )}
-            {detail.title === "Purchases & fees" ? (
-              <The5ersPurchases value={detail.data} timeZone={state.data?.timeZone ?? "UTC"} />
-            ) : detail.title.startsWith("Payout history") && detail.accountId ? (
-              <The5ersPayouts value={detail.data} sourceAccountId={detail.accountId} />
+            <p className="text-xs text-muted-foreground">
+              Updated {formatSourceDate(snapshot.retrievedAt, state.data?.timeZone ?? "UTC")}
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={state.busy}
+              onClick={() =>
+                void state.run(async () => {
+                  await postJson("/api/the5ers", { action: "sync", id: snapshot.account.id });
+                  state.refresh();
+                  window.dispatchEvent(new Event("journal-data-changed"));
+                })
+              }
+            >
+              Refresh account
+            </Button>
+            {snapshot.sections.balance?.available ? (
+              <The5ersBalance
+                value={snapshot.sections.balance.data}
+                currency={snapshot.account.currency}
+              />
             ) : (
-              <details>
-                <summary className="cursor-pointer text-sm">View records</summary>
-                <div className="mt-3">
-                  <SourceValue value={detail.data} />
-                </div>
-              </details>
+              <p className="text-sm text-muted-foreground">Balance unavailable.</p>
             )}
           </CardContent>
         </Card>
-      )}
+      ))}
     </div>
   );
 }
@@ -1244,26 +1066,12 @@ export function The5ersSource({
   section?: string;
   query?: string;
 }) {
-  const state = useSource();
-  if (!state.data?.connected && !state.error) return null;
-  if (view === "dashboard" || view === "trades") return null;
-  return (
-    <section className="space-y-3 p-4" aria-label="The5ers source records">
-      <h2 className="text-base font-semibold">
-        {section === "payouts"
-          ? "The5ers payouts"
-          : section === "ledger"
-            ? "The5ers expenses"
-            : "The5ers"}
-      </h2>
-      <Messages state={state} />
-      <SnapshotPanels view={view} section={section} state={state} query={query} />
-    </section>
-  );
+  useSource();
+  return null;
 }
 
 export function The5ersLinkedAccount({ accountId }: { accountId: string }) {
   const state = useSource();
   if (!state.data?.connected) return null;
-  return <SnapshotPanels view="accounts" state={state} query={`accounts=${accountId}`} />;
+  return <LinkedAccountBalances state={state} query={`accounts=${accountId}`} />;
 }

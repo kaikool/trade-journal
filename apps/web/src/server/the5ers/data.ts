@@ -269,7 +269,14 @@ async function sourceClient(signal?: AbortSignal) {
 }
 export async function inspectPayoutContract() {
   const { client } = await sourceClient();
-  return client.payoutContract();
+  const contract = await client.payoutContract();
+  const overview = await sourceOverview();
+  return {
+    ...contract,
+    financialSync: overview.cash,
+    purchases: overview.purchases,
+    payoutHistory: overview.cashSnapshots,
+  };
 }
 export async function listSourceAccounts(): Promise<SourceAccount[]> {
   const { client } = await sourceClient();
