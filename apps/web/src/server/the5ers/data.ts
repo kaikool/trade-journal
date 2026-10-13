@@ -59,6 +59,8 @@ export interface SourceSnapshot {
   importedPositions?: number;
   updatedPositions?: number;
   unchangedPositions?: number;
+  canImportSnapshot?: boolean;
+  normalizationVersion?: number;
 }
 interface PositionRefs {
   connectionId: string;
@@ -487,7 +489,131 @@ export async function selectSourceAccounts(
   });
   return selected;
 }
-async function positions(client: The5ersMcp, account: ProviderAccount) {
+/** Account-scoped metadata must agree; never default missing money currency to USD. */
+export function snapshotCurrency(snapshot: SourceSnapshot): string | undefined {
+  const reported = [
+    snapshot.account.currency,
+    ...["balance", "performance", "rules", "positions"].flatMap((name) => {
+      const section = snapshot.sections[name];
+      if (!section?.available) return [];
+      const envelope = sourceFields(section.data);
+      return [envelope.currency ?? sourceFields(envelope.data).currency];
+    }),
+  ].filter((value): value is string => typeof value === "string");
+  if (
+    reported.length < 2 ||
+    reported.some((value) => !sourceCurrency(value)) ||
+    new Set(reported).size !== 1
+  )
+    return;
+  return reported[0];
+}
+
+async function saveSnapshotPropAccount(
+  tx: import("@/db/postgres").JournalExecutor,
+  snapshot: SourceSnapshot,
+  journalAccountId: string,
+  currency: string,
+) {
+  const program =
+    sourceProgram(snapshot.account.program) ??
+    sourceProgram(
+      sourceFields(
+        sourceFields(snapshot.sections.rules?.data).data ?? snapshot.sections.rules?.data,
+      ).name,
+    );
+  const status = sourcePropStatus(snapshot.account.status);
+  const [tracked] = await tx
+    .select()
+    .from(propAccounts)
+    .where(
+      and(eq(propAccounts.journalAccountId, journalAccountId), eq(propAccounts.firm, "The5ers")),
+    );
+  if (!tracked && program && status) {
+    const now = new Date().toISOString();
+    const value = {
+      id: `the5ers_${snapshot.account.id}`,
+      firm: "The5ers",
+      name: snapshot.account.label,
+      program,
+      status,
+      currency,
+      journalAccountId: journalAccountId,
+      openedOn: snapshot.account.createdAt.slice(0, 10),
+      createdAt: now,
+      updatedAt: now,
+    };
+    const created = await tx
+      .insert(propAccounts)
+      .values(value)
+      .onConflictDoNothing()
+      .returning({ id: propAccounts.id });
+    if (created.length)
+      await tx.insert(propAudit).values({
+        id: randomUUID(),
+        entityType: "account",
+        entityId: value.id,
+        afterJson: JSON.stringify(value),
+        reason: "Imported verified The5ers funding phase from saved account metadata",
+        createdAt: now,
+      });
+  }
+}
+
+export async function importSavedSnapshot(id: string) {
+  return db.transaction(async (tx) => {
+    await tx.select().from(settings).where(eq(settings.key, CONNECTION_KEY)).for("update");
+    const [stored] = await tx
+      .select()
+      .from(settings)
+      .where(eq(settings.key, `${SNAPSHOT_PREFIX}${id}`))
+      .for("update");
+    requireValue(stored, "No saved The5ers history is available. Refresh this account.");
+    const selected = JSON.parse((await getSetting(SELECTION_KEY, tx)) ?? "[]") as Selection[];
+    requireValue(
+      selected.some((account) => account.id === id),
+      "Choose a selected The5ers account.",
+    );
+    const snapshot = JSON.parse(stored.value) as SourceSnapshot;
+    const section = snapshot.sections.positions;
+    const data = sourceFields(section?.data);
+    const contextual = snapshotCurrency(snapshot);
+    const currency = contextual;
+    requireValue(
+      section?.available && currency && (!contextual || contextual === currency),
+      "Account currency is missing or conflicting. Refresh the account to verify it.",
+    );
+    requireValue(Array.isArray(data.rows), "Saved position history is unavailable.");
+    const links = JSON.parse((await getSetting("the5ers:journal-links", tx)) ?? "{}") as Record<
+      string,
+      string
+    >;
+    requireValue(links[id], "Link this The5ers account to a journal account in Accounts first.");
+    const outcome = await saveJournalPositions(
+      tx,
+      id,
+      currency,
+      snapshot.retrievedAt,
+      data.rows.map((row) => sourceFields(row).source),
+      data.complete === true,
+    );
+    await saveSnapshotPropAccount(tx, snapshot, links[id]!, currency);
+    Object.assign(snapshot, outcome);
+    snapshot.warnings = snapshot.warnings.filter(
+      (warning) => !warning.startsWith("Position currency is missing"),
+    );
+    snapshot.canImportSnapshot = false;
+    snapshot.normalizationVersion = 2;
+    await setSetting(`${SNAPSHOT_PREFIX}${id}`, JSON.stringify(snapshot), tx);
+    return snapshot;
+  });
+}
+
+async function positions(
+  client: The5ersMcp,
+  account: ProviderAccount,
+  contextualCurrency?: string,
+) {
   const rows: { key: string; hasDetails: boolean; source: unknown }[] = [],
     refs: Record<string, string> = {},
     seen = new Set<string>();
@@ -503,7 +629,8 @@ async function positions(client: The5ersMcp, account: ProviderAccount) {
     const envelope = record(response);
     const body = sourceFields(envelope.data ?? envelope);
     const reportedCurrency = sourceFields(envelope).currency ?? body.currency;
-    const pageCurrency = sourceCurrency(reportedCurrency);
+    const pageCurrency =
+      reportedCurrency === undefined ? contextualCurrency : sourceCurrency(reportedCurrency);
     currencyVerified &&= Boolean(pageCurrency);
     requireValue(
       !currency || !pageCurrency || currency === pageCurrency,
@@ -588,13 +715,13 @@ export async function syncSourceAccount(
   let positionCache: PositionRefs | undefined;
   let journalPositions: { rows: unknown[]; currency: string; complete: boolean } | undefined;
   try {
-    const found = await positions(client, account);
+    const found = await positions(client, account, snapshotCurrency(snapshot));
     snapshot.complete &&= found.complete;
     snapshot.sections.positions = {
       available: true,
       data: { rows: found.rows, currency: found.currency, complete: found.complete },
     };
-    if (found.currency && found.currency === account.currency)
+    if (found.currency && found.currency === (account.currency ?? snapshotCurrency(snapshot)))
       journalPositions = {
         rows: found.rows.map((r) => r.source),
         currency: found.currency,
@@ -650,7 +777,13 @@ export async function syncSourceAccount(
           journalPositions.rows,
           journalPositions.complete,
         );
-        Object.assign(snapshot, outcome);
+        const links = JSON.parse((await getSetting("the5ers:journal-links", tx)) ?? "{}") as Record<
+          string,
+          string
+        >;
+        if (links[id])
+          await saveSnapshotPropAccount(tx, snapshot, links[id]!, journalPositions.currency);
+        Object.assign(snapshot, outcome, { normalizationVersion: 2 });
         if (outcome.skippedPositions) snapshot.complete = false;
         if (outcome.skippedPositions)
           snapshot.warnings.push(
@@ -683,6 +816,15 @@ export async function syncSourceAccount(
         error instanceof RequestError ? error.message : "Payout history could not be retrieved.",
     };
   }
+  await db.transaction(async (tx) => {
+    await assertConnection(connection.id, tx);
+    const saved = await getSetting(`${SNAPSHOT_PREFIX}${id}`, tx);
+    if (!saved) return;
+    const current = JSON.parse(saved) as SourceSnapshot;
+    if (current.retrievedAt !== snapshot.retrievedAt) return;
+    current.sections.payoutHistory = snapshot.sections.payoutHistory!;
+    await setSetting(`${SNAPSHOT_PREFIX}${id}`, JSON.stringify(current), tx);
+  });
   return snapshot;
 }
 export async function sourceOverview() {
@@ -703,6 +845,16 @@ export async function sourceOverview() {
       .filter((row) => selection.some((account) => row.key === `${SNAPSHOT_PREFIX}${account.id}`))
       .map((row) => {
         const snapshot = JSON.parse(row.value) as SourceSnapshot;
+        const data = sourceFields(snapshot.sections.positions?.data);
+        snapshot.canImportSnapshot =
+          snapshot.normalizationVersion !== 2 &&
+          Boolean(snapshotCurrency(snapshot)) &&
+          snapshot.sections.positions?.available === true &&
+          Array.isArray(data.rows) &&
+          data.rows.length > 0 &&
+          Boolean(
+            selection.find((account) => account.id === snapshot.account.id)?.journalAccountId,
+          );
         const payout = payoutHistory.find(
           (p) => p.key === `the5ers:payouts:${snapshot.account.id}`,
         );
@@ -874,6 +1026,7 @@ async function paginatedSource(
     );
     const values =
       body[collection] ??
+      (collection === "payouts" ? body.withdrawals : undefined) ??
       body.items ??
       body.notifications ??
       body.history ??

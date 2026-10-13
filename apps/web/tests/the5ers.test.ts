@@ -1161,7 +1161,7 @@ it("imports completed order cash through the authenticated endpoint without char
   expect(ledger[0]).toMatchObject({ amountMinor: 18000, currency: "EUR" });
 });
 
-it("does not inherit currency for a position page whose envelope omitted it", async () => {
+it("uses corroborated account currency when a position page omits redundant metadata", async () => {
   await connect();
   const first = (await listSourceAccounts())[0]!;
   await selectSourceAccounts([first.id], false, true);
@@ -1209,10 +1209,9 @@ it("does not inherit currency for a position page whose envelope omitted it", as
     }),
   );
   const snapshot = await syncSourceAccount(first.id);
-  expect(snapshot.complete).toBe(false);
-  expect(snapshot.warnings.join(" ")).toContain("Position currency is missing");
+  expect(snapshot.journaledPositions).toBe(2);
   const { queryTrades } = await import("../src/server/trades-query");
-  expect((await queryTrades()).trades).toHaveLength(0);
+  expect((await queryTrades()).trades).toHaveLength(2);
 });
 
 it("imports or confirms payout settlements through the authenticated endpoint and serves saved history without another provider read", async () => {
@@ -1234,9 +1233,9 @@ it("imports or confirms payout settlements through the authenticated endpoint an
             result: {
               structuredContent: {
                 data: {
-                  payouts: [
+                  withdrawals: [
                     {
-                      id: "known-payout",
+                      withdrawalId: "known-payout",
                       status: "completed",
                       currency: "USD",
                       amount: 1000,
@@ -1294,4 +1293,76 @@ it("imports or confirms payout settlements through the authenticated endpoint an
   expect(overview.snapshots[0]!.sections.payoutHistory?.data).toMatchObject({
     rows: [expect.objectContaining({ status: "matched" })],
   });
+});
+
+it("imports old saved snapshot positions without refetching The5ers and rejects conflicting account currency", async () => {
+  rows[0]!.accountType = "High Stakes";
+  await connect();
+  const first = (await listSourceAccounts())[0]!;
+  await selectSourceAccounts([first.id], false, true);
+  const { SNAPSHOT_PREFIX } = await import("../src/server/the5ers/oauth");
+  const { snapshotCurrency } = await import("../src/server/the5ers/data");
+  const snapshot = {
+    account: first,
+    retrievedAt: "2026-10-13T10:00:00Z",
+    complete: false,
+    importedExecutions: 0 as const,
+    warnings: [
+      "Position currency is missing or differs from the journal. Reported positions were not included in analytics.",
+    ],
+    sections: {
+      rules: { available: true, data: { currency: "USD", data: { name: "$50K High Stakes - 2" } } },
+      positions: {
+        available: true,
+        data: {
+          complete: true,
+          rows: [
+            {
+              key: "saved",
+              source: {
+                symbol: "XAUUSD",
+                side: "Buy",
+                isClosed: true,
+                openDate: "2026-10-13T02:32:20.337Z",
+                closeDate: "2026-10-13T02:33:48.020Z",
+                entry: 4169.26,
+                exit: 4167.37,
+                quantity: 0.25,
+                profitAndLoss: -49.33,
+                fee: -2.08,
+                swap: 0,
+              },
+            },
+          ],
+        },
+      },
+    },
+  };
+  expect(snapshotCurrency(snapshot)).toBe("USD");
+  expect(snapshotCurrency({ ...snapshot, account: { ...first, currency: "EUR" } })).toBeUndefined();
+  await db
+    .insert(settings)
+    .values({ key: `${SNAPSHOT_PREFIX}${first.id}`, value: JSON.stringify(snapshot) })
+    .onConflictDoUpdate({ target: settings.key, set: { value: JSON.stringify(snapshot) } });
+  expect((await sourceOverview()).snapshots[0]!.canImportSnapshot).toBe(true);
+  const before = vi.mocked(fetch).mock.calls.length;
+  const response = await POST(request({ action: "snapshot.import", id: first.id }));
+  expect(response.status).toBe(200);
+  expect((await response.json()).snapshot.journaledPositions).toBe(1);
+  expect(vi.mocked(fetch).mock.calls.length).toBe(before);
+  expect((await db.select().from(trades))[0]).toMatchObject({ symbol: "XAUUSD", netPnl: -49.33 });
+  const { propAccounts } = await import("../src/db");
+  expect((await db.select().from(propAccounts))[0]).toMatchObject({
+    program: "verification",
+    journalAccountId: `the5ers_${first.id}`,
+  });
+  expect((await sourceOverview()).snapshots[0]!.canImportSnapshot).toBe(false);
+  expect((await POST(request({ action: "snapshot.import", id: first.id }))).status).toBe(200);
+  expect(await db.select().from(trades)).toHaveLength(1);
+  await db
+    .update(settings)
+    .set({ value: JSON.stringify({ ...snapshot, account: { ...first, currency: "EUR" } }) })
+    .where(eq(settings.key, `${SNAPSHOT_PREFIX}${first.id}`));
+  expect((await POST(request({ action: "snapshot.import", id: first.id }))).status).toBe(400);
+  expect((await db.select().from(trades))[0]!.netPnl).toBe(-49.33);
 });

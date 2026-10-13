@@ -9,6 +9,7 @@ import {
   normalizePosition,
   sourceInstant,
   sourceObject,
+  sourceFields,
 } from "@/lib/the5ers-normalize";
 import { fromMinor, type PropData } from "@/lib/prop-firms";
 import { fmtMoney } from "@/lib/utils";
@@ -319,6 +320,53 @@ export function The5ersPayouts({
   );
 }
 
+export function The5ersProgramSummary({ value }: { value: unknown }) {
+  const privacy = usePrivacy();
+  if (privacy) return <p>Turn off privacy mode to view source data.</p>;
+  const envelope = sourceFields(value),
+    data = sourceFields(envelope.data ?? value);
+  const currency = typeof envelope.currency === "string" ? envelope.currency : undefined;
+  const fields = Object.entries(obj(envelope.data ?? value)).filter(
+    ([key]) =>
+      !["name", "currency", "freshness", "warnings", "complete"].includes(key.toLowerCase()),
+  );
+  const display = (raw: unknown): string | null => {
+    if (typeof raw === "boolean") return raw ? "Yes" : "No";
+    if (typeof raw === "string") return raw;
+    if (typeof raw === "number") return String(raw);
+    const item = sourceFields(raw);
+    if (typeof item.value !== "number") return null;
+    if (item.unit === "percent") return `${item.value}%`;
+    if (item.unit === "currency")
+      return currency ? cash(item.value, currency) : `${item.value} (currency unavailable)`;
+    return `${item.value}${typeof item.unit === "string" ? ` ${item.unit}` : ""}`;
+  };
+  return (
+    <div className="space-y-3">
+      {typeof data.name === "string" && <p className="text-sm font-medium">{data.name}</p>}
+      <dl className="grid grid-cols-2 gap-3">
+        {fields.map(([key, raw]) => {
+          const text = display(raw);
+          return text === null ? null : (
+            <div key={key}>
+              <dt className="text-xs text-muted-foreground">{heading(key)}</dt>
+              <dd className="mt-1 text-sm font-medium">
+                <MonetaryValue>{text}</MonetaryValue>
+              </dd>
+            </div>
+          );
+        })}
+      </dl>
+      <details className="text-xs text-muted-foreground">
+        <summary className="cursor-pointer">Source details</summary>
+        <div className="mt-2">
+          <SourceValue value={value} />
+        </div>
+      </details>
+    </div>
+  );
+}
+
 function useSource() {
   const state = useApi<Overview>("/api/the5ers");
   const [busy, setBusy] = useState(false),
@@ -336,6 +384,19 @@ function useSource() {
       setBusy(false);
     }
   };
+  const imported = useRef(new Set<string>());
+  useEffect(() => {
+    const eligible = (state.data?.snapshots ?? []).filter(
+      (snapshot) => snapshot.canImportSnapshot && !imported.current.has(snapshot.account.id),
+    );
+    if (!eligible.length) return;
+    for (const snapshot of eligible) imported.current.add(snapshot.account.id);
+    void run(async () => {
+      for (const snapshot of eligible)
+        await postJson("/api/the5ers", { action: "snapshot.import", id: snapshot.account.id });
+      window.dispatchEvent(new Event("journal-data-changed"));
+    });
+  }, [state.data]);
   return {
     ...state,
     busy,
@@ -871,6 +932,28 @@ function SnapshotPanels({
     if (view === "prop" && section === "ledger" && state.data?.connected && !selected.length)
       void read("purchases", "Purchases & fees");
   }, [view, section, query, state.data?.connected]);
+  const withdrawalsLoaded = useRef(new Set<string>());
+  useEffect(() => {
+    if (view !== "prop" || section !== "payouts" || !state.data?.connected) return;
+    const accounts = (state.data.selection ?? []).filter(
+      (account) =>
+        (!selected.length ||
+          selected.includes(account.journalAccountId ?? `the5ers_${account.id}`)) &&
+        !withdrawalsLoaded.current.has(account.id) &&
+        !snapshots.find((snapshot) => snapshot.account.id === account.id)?.sections.payoutHistory,
+    );
+    if (!accounts.length) return;
+    for (const account of accounts) withdrawalsLoaded.current.add(account.id);
+    void state.run(async () => {
+      for (const account of accounts)
+        await postJson("/api/the5ers", {
+          action: "read",
+          resource: "payoutHistory",
+          id: account.id,
+        });
+      window.dispatchEvent(new Event("journal-data-changed"));
+    });
+  }, [view, section, query, state.data]);
   return (
     <div className="space-y-3">
       {(view === "prop" && ["ledger", "benefits", "activity"].includes(section)
@@ -939,6 +1022,16 @@ function SnapshotPanels({
                     This source snapshot is partial. Some sections or history may be unavailable.
                   </p>
                 )}
+                {snapshot?.warnings?.length ? (
+                  <details className="text-xs text-muted-foreground">
+                    <summary className="cursor-pointer">Sync details</summary>
+                    <ul className="mt-2 space-y-1">
+                      {snapshot.warnings.map((warning, index) => (
+                        <li key={index}>{warning}</li>
+                      ))}
+                    </ul>
+                  </details>
+                ) : null}
                 {visible.map(
                   (name) =>
                     sections[name] && (
@@ -960,6 +1053,8 @@ function SnapshotPanels({
                             />
                           ) : name === "payoutHistory" ? (
                             <The5ersPayouts value={sections[name].data} sourceAccountId={a.id} />
+                          ) : ["rules", "consistency", "performance"].includes(name) ? (
+                            <The5ersProgramSummary value={sections[name].data} />
                           ) : (
                             <details>
                               <summary className="cursor-pointer text-sm">
@@ -979,8 +1074,9 @@ function SnapshotPanels({
                 {view === "trades" && (
                   <>
                     <p className="text-xs text-muted-foreground">
-                      Verified positions already appear in your journal trade table. These source
-                      details help review records with missing or unsupported facts.
+                      {snapshot?.journaledPositions
+                        ? "Imported positions appear in Trades. The records below need additional information."
+                        : "These positions have not been imported into Trades yet. Check the sync details below."}
                     </p>
                     {positions?.slice(0, 100).map((p) => (
                       <div key={p.key} className="space-y-2 rounded-md border p-3">
@@ -1022,7 +1118,7 @@ function SnapshotPanels({
                 {view === "prop" && section !== "ledger" && (
                   <div className="flex flex-wrap gap-2">
                     {(section === "payouts"
-                      ? [["payoutHistory", "Payout history"]]
+                      ? [["payoutHistory", "Payout history / withdrawals"]]
                       : [
                           ["health", "Account health"],
                           ["journey", "Program journey"],
@@ -1108,7 +1204,7 @@ function SnapshotPanels({
             )}
             {detail.title === "Purchases & fees" ? (
               <The5ersPurchases value={detail.data} timeZone={state.data?.timeZone ?? "UTC"} />
-            ) : detail.title === "Payout history" && detail.accountId ? (
+            ) : detail.title.startsWith("Payout history") && detail.accountId ? (
               <The5ersPayouts value={detail.data} sourceAccountId={detail.accountId} />
             ) : (
               <details>

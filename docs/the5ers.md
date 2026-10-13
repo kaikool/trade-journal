@@ -23,8 +23,8 @@ Opaque refs expire. Account identity uses masked label, platform and a valid cre
 | Position symbol, side, open/close time, size, entry/exit and net P&L | Existing Trades reader, Dashboard analytics and daily Journal/calendar            |
 | Position fee/swap                                                    | Reported values in trade details; never subtracted from reported net P&L again    |
 | Completed purchase cash                                              | Existing audited Prop Firms expense ledger and cash totals                        |
-| Program rules, consistency and provider statistics                   | Collapsible account-scoped reference records                                      |
-| Payout history/eligibility                                           | Provider requests/reference data, separate from actual cash receipts              |
+| Program rules, consistency and provider statistics                   | Compact account metrics; raw source details stay collapsed                        |
+| Payout history/eligibility                                           | Requests stay separate; verified settlements populate audited cash receipts       |
 | Credits, coupons, achievements and notifications                     | Existing Benefits/Activity sections                                               |
 
 ### Positions
@@ -39,7 +39,7 @@ Net P&L, wins/losses, profit factor, equity, drawdown, calendar and intraday cur
 
 Fee/swap sign conventions and size units are not assumed. Gross P&L and aggregate costs are unavailable when a selection contains net-only source positions. ROI on notional, monetary R and market-excursion estimates are unavailable for unverified position units. Reported fee/swap remain visible individually. Absolute drawdown is computed; percentage drawdown requires valid initial capital. Missing history is disclosed on Trades/Dashboard instead of presented as a complete account history.
 
-Verified reported positions are also persisted in the existing `trades` table without inventing execution records. Refresh writes new or changed economics only; unchanged rows, local annotations and exclusions survive repeat syncs and execution rebuilds. Legacy JSON histories are materialized on the next source refresh. Normal page reads use stored database history; an explicit source refresh still scans the paginated provider history to detect new positions and corrections. No unverified remote date filter or cursor is assumed.
+Verified reported positions are also persisted in the existing `trades` table without inventing execution records. Refresh writes new or changed economics only; unchanged rows, local annotations and exclusions survive repeat syncs and execution rebuilds. Legacy snapshots with corroborated account currency are imported automatically when their journal section is opened; no provider refetch is needed. A version marker prevents repeated conversion. Missing or conflicting currency remains visible in Sync details rather than silently choosing USD. Normal page reads use stored database history; an explicit source refresh still scans the paginated provider history to detect new positions and corrections. No unverified remote date filter or cursor is assumed.
 
 Journal annotations, tags, playbooks, review status and local exclusion work for these reported trades. Deleting a reported trade excludes it locally and does not delete the provider record or revive it on refresh. Clearing the linked account removes stored projected history; a later provider refresh can fetch it again. Re-link connected accounts in Accounts rather than transfer their reported history as executions.
 
@@ -53,7 +53,7 @@ Expense date is the order's `placedAt` instant converted to the journal timezone
 
 ### Payout settlements
 
-Account refresh and **Prop firms → Payouts → Payout history** fetch and persist payout history. Subsequent page reads use the saved history. Explicit completed settlements with a verified currency, request timestamp, payment timestamp and net received amount are recorded in the existing audited `prop_entries` and `prop_receipts` tables. A generic request `amount` is not treated as net cash after profit split and commission.
+Account refresh and **Prop firms → Payouts → Payout history / withdrawals** fetch and persist payout history. Opening Payouts loads history once for selected accounts that have no saved payout section. Both `payouts` and `withdrawals` collections are supported; withdrawal IDs remain stable across refreshes. Subsequent page reads use the saved history. Explicit completed settlements with a verified currency, request timestamp, payment timestamp and net received amount are recorded in the existing audited `prop_entries` and `prop_receipts` tables. A generic request `amount` is not treated as net cash after profit split and commission.
 
 Records missing settlement facts offer **Record money received**: select a funded The5ers prop account and confirm the actual amount and payment date. Saving records the net settlement and updates **Payouts received** immediately. This writes only to the local journal, never requests a payout from The5ers. The receipt identity remains stable across refreshes and repeated confirmations; matching manual receipts prevent automatic duplicate posting. Corrections and local reversals remain under the existing ledger workflow.
 

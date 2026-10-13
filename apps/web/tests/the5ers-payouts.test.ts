@@ -144,3 +144,21 @@ it("reads all supported purchase and payout page containers without dropping rec
     ),
   ).toHaveLength(3);
 });
+
+it("reads withdrawals and normalizes explicit net payment without using the gross request amount", () => {
+  const withdrawal = {
+    withdrawalId: "withdrawal-1",
+    status: "Paid",
+    currency: "USD",
+    amount: 1000,
+    netPaid: "780.00",
+    requestDate: "2026-02-01T10:00:00Z",
+    paymentDate: "2026-02-02T10:00:00Z",
+  };
+  expect(sourceRecords({ pages: [{ data: { withdrawals: [withdrawal] } }] }, "payouts")).toEqual([
+    withdrawal,
+  ]);
+  expect(settledPayout(withdrawal)).toMatchObject({ amountMinor: 78000, currency: "USD" });
+  expect(settledPayout({ ...withdrawal, netPaid: undefined })).toBeUndefined();
+  expect(settledPayout({ ...withdrawal, status: "approved" })).toBeUndefined();
+});

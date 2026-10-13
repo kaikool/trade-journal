@@ -35,7 +35,12 @@ vi.mock("../src/lib/use-api", () => ({
     },
   }),
 }));
-import { The5ersConnection, The5ersSource, The5ersBalance } from "../src/components/the5ers";
+import {
+  The5ersConnection,
+  The5ersSource,
+  The5ersBalance,
+  The5ersProgramSummary,
+} from "../src/components/the5ers";
 afterEach(() => {
   state.privacy = false;
 });
@@ -76,4 +81,25 @@ it("labels effective balance separately and does not invent equity when the prov
   );
   expect(html).toContain("Effective balance");
   expect(html).not.toContain("Equity");
+});
+
+it("renders program rules as compact labelled metrics with raw records collapsed", () => {
+  const html = renderToStaticMarkup(
+    createElement(The5ersProgramSummary, {
+      value: {
+        currency: "USD",
+        data: {
+          name: "$50K High Stakes - 2",
+          profitTarget: { value: 2500, unit: "currency" },
+          maxDailyLoss: { value: 4, unit: "percent" },
+          maxTotalLoss: { value: 4000, unit: "currency" },
+        },
+      },
+    }),
+  );
+  expect(html).toContain("$50K High Stakes - 2");
+  expect(html).toContain("$2,500.00");
+  expect(html).toContain("4%");
+  expect(html).toContain("Source details");
+  expect(html).not.toContain("<details open");
 });

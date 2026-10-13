@@ -10,8 +10,16 @@ export const sourceObject = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : {};
-export const sourceNumber = (value: unknown): number | undefined =>
-  typeof value === "number" && Number.isFinite(value) ? value : undefined;
+export const sourceNumber = (value: unknown): number | undefined => {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (
+    typeof value !== "string" ||
+    !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(value.trim())
+  )
+    return;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : undefined;
+};
 
 /** Provider labels may use camelCase, snake_case, PascalCase or display names. */
 export function sourceFields(value: unknown): Record<string, unknown> {
@@ -31,6 +39,8 @@ const sourceBoolean = (value: unknown): boolean | undefined => {
 };
 export function sourceProgram(value: unknown): (typeof PROP_PROGRAMS)[number] | undefined {
   if (typeof value !== "string") return;
+  const phase = /(?:^|\s)High Stakes\s*-\s*([12])$/i.exec(value.trim());
+  if (phase) return phase[1] === "1" ? "evaluation" : "verification";
   const name = value
     .trim()
     .toLowerCase()

@@ -11,14 +11,14 @@ import { mutatePropInTransaction, propToday } from "@/server/prop-firms";
 
 export const payoutKey = (accountId: string, value: unknown) => {
   const row = sourceFields(value);
-  const identity = row.id ?? row.payoutid ?? row.requestid;
+  const identity = row.id ?? row.payoutid ?? row.withdrawalid ?? row.requestid;
   return createHash("sha256")
     .update(
       JSON.stringify([
         accountId,
         identity ??
-          ((row.requestedat ?? row.createdat)
-            ? [row.requestedat ?? row.createdat, row.currency, row.amount]
+          ((row.requestedat ?? row.createdat ?? row.requestdate)
+            ? [row.requestedat ?? row.createdat ?? row.requestdate, row.currency, row.amount]
             : value),
       ]),
     )
@@ -30,7 +30,12 @@ export function sourceRecords(history: { pages: unknown[] }, collection: string)
     const envelope = sourceFields(page);
     if (Array.isArray(envelope.data)) return envelope.data;
     const body = sourceFields(envelope.data ?? page);
-    const rows = body[collection] ?? body.items ?? body.notifications ?? body.history;
+    const rows =
+      body[collection] ??
+      (collection === "payouts" ? body.withdrawals : undefined) ??
+      body.items ??
+      body.notifications ??
+      body.history;
     return Array.isArray(rows) ? rows : [];
   });
 }
@@ -40,11 +45,13 @@ export function settledPayout(value: unknown) {
   const row = sourceFields(value);
   const status = typeof row.status === "string" ? row.status.trim().toLowerCase() : "";
   const currency = sourceCurrency(row.currency);
-  const receivedAt = sourceInstant(row.receivedat ?? row.paidat ?? row.settledat);
-  const requestedAt = sourceInstant(row.requestedat ?? row.createdat);
+  const receivedAt = sourceInstant(
+    row.receivedat ?? row.paidat ?? row.settledat ?? row.paymentdate ?? row.completedat,
+  );
+  const requestedAt = sourceInstant(row.requestedat ?? row.createdat ?? row.requestdate);
   // A generic amount may be gross, before profit split or commission.
   const amountMinor = currency
-    ? sourceMoney(row.receivedamount ?? row.paidamount ?? row.netamount, currency)
+    ? sourceMoney(row.receivedamount ?? row.paidamount ?? row.netamount ?? row.netpaid, currency)
     : undefined;
   if (
     !["completed", "paid", "received", "settled"].includes(status) ||

@@ -12,6 +12,7 @@ import {
   syncSourceAccount,
   readSourceSection,
   confirmSourcePayout,
+  importSavedSnapshot,
 } from "@/server/the5ers/data";
 
 export const maxDuration = 120;
@@ -108,6 +109,12 @@ export const POST = handler(async (request: Request) => {
           body.journalLinks as Record<string, string> | undefined,
         ),
       });
+    case "snapshot.import":
+      requireValue(
+        typeof body.id === "string" && /^[a-f0-9]{64}$/.test(body.id),
+        "Choose a The5ers account.",
+      );
+      return ok({ snapshot: await importSavedSnapshot(body.id) });
     case "sync":
       requireValue(
         typeof body.id === "string" && /^[a-f0-9]{64}$/.test(body.id),

@@ -4,6 +4,7 @@ import {
   normalizePurchase,
   sourceInstant,
   sourceMoney,
+  sourceNumber,
   sourceProgram,
   sourcePropStatus,
 } from "../src/lib/the5ers-normalize";
@@ -112,4 +113,11 @@ describe("The5ers source normalization", () => {
     expect(sourceMoney(123, "JPY")).toBe(123);
     expect(sourceMoney(1.234, "KWD")).toBe(1234);
   });
+});
+
+it("accepts decimal source strings but does not guess formatted or non-decimal money", () => {
+  expect(sourceNumber("-49.33")).toBe(-49.33);
+  expect(sourceNumber("0x10")).toBeUndefined();
+  expect(sourceNumber("4,169.26")).toBeUndefined();
+  expect(sourceProgram("$50K High Stakes - 2")).toBe("verification");
 });
