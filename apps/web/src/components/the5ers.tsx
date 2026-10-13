@@ -135,12 +135,13 @@ export function The5ersConnection() {
           )}
           {overview && !overview.configured && (
             <p className="text-sm text-muted-foreground">
-              The5ers OAuth is not configured on this server yet.
+              JOURNAL_SECRET is missing on this server. The5ers credentials cannot be stored
+              securely.
             </p>
           )}
           <div className="flex flex-wrap gap-2">
             <Button
-              disabled={busy || !overview?.configured}
+              disabled={busy || state.loading}
               onClick={() =>
                 void run(async () => {
                   const { url } = await postJson<{ url: string }>("/api/the5ers", {
@@ -152,6 +153,20 @@ export function The5ersConnection() {
             >
               <Link2 />
               {overview?.connected ? "Reconnect The5ers" : "Connect The5ers"}
+            </Button>
+            <Button
+              variant="outline"
+              disabled={busy || state.loading}
+              onClick={() =>
+                void run(async () => {
+                  const result = await postJson<{ message: string }>("/api/the5ers", {
+                    action: "check",
+                  });
+                  setNotice(result.message);
+                })
+              }
+            >
+              Check connection
             </Button>
             {overview?.connected && (
               <>

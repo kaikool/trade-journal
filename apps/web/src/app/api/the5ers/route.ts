@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { handler, ok, requireValue } from "@/server/api";
 import { boundedJson } from "@/server/the5ers/http";
+import { checkOAuth } from "@/server/the5ers/registration";
 import { AUTH_COOKIE } from "@/server/auth";
 import { startAuthorization, disconnectThe5ers } from "@/server/the5ers/oauth";
 import {
@@ -35,6 +36,8 @@ export const POST = handler(async (request: Request) => {
     "Unknown The5ers request field.",
   );
   switch (body.action) {
+    case "check":
+      return ok(await checkOAuth(new URL(request.url).origin));
     case "connect":
       return ok({
         url: await startAuthorization(

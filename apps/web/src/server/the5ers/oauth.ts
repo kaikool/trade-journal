@@ -6,6 +6,13 @@ import { encryptJson, decryptJson } from "@/server/crypto";
 import { getSetting, setSetting, deleteSetting } from "@/server/settings";
 import { MCP_URL, officialAuthUrl, READ_SCOPES, record } from "./contracts";
 import { providerResponse, boundedJson } from "./http";
+import {
+  callbackUri,
+  discover,
+  resolveClient,
+  staticClient,
+  type OAuthClient,
+} from "./registration";
 
 export const CONNECTION_KEY = "the5ers:oauth:connectionEnc";
 export const SELECTION_KEY = "the5ers:selection";
@@ -19,6 +26,7 @@ export interface Connection {
   tokenUrl: string;
   clientId: string;
   connectedAt: string;
+  client?: OAuthClient;
 }
 interface Pending {
   state: string;
@@ -29,82 +37,24 @@ interface Pending {
   tokenUrl: string;
   clientId: string;
   scopes: string[];
+  client: OAuthClient;
+  issuer?: string;
+  responseIssuerRequired?: boolean;
 }
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 const pendingKey = (session: string) => `the5ers:oauth:pending:${digest(session)}`;
-function callbackUri(): URL {
-  let url: URL;
-  try {
-    url = new URL(process.env.THE5ERS_REDIRECT_URI ?? "");
-  } catch {
-    throw new RequestError("The5ers connection is not configured on this server.");
-  }
-  requireValue(
-    (url.protocol === "https:" || (url.protocol === "http:" && url.hostname === "localhost")) &&
-      url.pathname === "/api/the5ers/callback" &&
-      !url.username &&
-      !url.password &&
-      !url.search &&
-      !url.hash,
-    "Invalid The5ers callback configuration.",
-  );
-  return url;
-}
 export function oauthConfigured(): boolean {
-  return Boolean(
-    process.env.THE5ERS_OAUTH_CLIENT_ID?.trim() &&
-    process.env.THE5ERS_REDIRECT_URI?.trim() &&
-    process.env.JOURNAL_SECRET?.trim(),
-  );
-}
-async function endpoints() {
-  const authorization = process.env.THE5ERS_AUTHORIZATION_URL?.trim(),
-    token = process.env.THE5ERS_TOKEN_URL?.trim();
-  if (authorization || token) {
-    requireValue(authorization && token, "Configure both The5ers OAuth endpoints.");
-    return { authorization: officialAuthUrl(authorization), token: officialAuthUrl(token) };
-  }
-  const resourceResponse = await providerResponse(
-    "https://mcp.the5ers.com/.well-known/oauth-protected-resource",
-  );
-  requireValue(
-    resourceResponse.ok,
-    "The5ers OAuth discovery is unavailable. Configure provider-approved OAuth endpoints.",
-  );
-  const resource = record(await boundedJson(resourceResponse));
-  requireValue(
-    resource.resource === "https://mcp.the5ers.com/mcp" &&
-      Array.isArray(resource.authorization_servers) &&
-      resource.authorization_servers.length === 1,
-    "The5ers returned unsupported OAuth discovery data.",
-  );
-  const issuer = new URL(officialAuthUrl(resource.authorization_servers[0]));
-  const metadataUrl = `${issuer.origin}/.well-known/oauth-authorization-server${issuer.pathname.replace(/\/$/, "")}`;
-  const metadataResponse = await providerResponse(metadataUrl);
-  requireValue(
-    metadataResponse.ok,
-    "The5ers OAuth discovery is unavailable. Configure provider-approved OAuth endpoints.",
-  );
-  const metadata = record(await boundedJson(metadataResponse));
-  requireValue(
-    metadata.issuer === issuer.href &&
-      Array.isArray(metadata.code_challenge_methods_supported) &&
-      metadata.code_challenge_methods_supported.includes("S256"),
-    "The5ers OAuth server must support PKCE S256.",
-  );
-  return {
-    authorization: officialAuthUrl(metadata.authorization_endpoint),
-    token: officialAuthUrl(metadata.token_endpoint),
-  };
+  return Boolean(process.env.JOURNAL_SECRET?.trim());
 }
 export async function startAuthorization(session: string, origin: string): Promise<string> {
-  requireValue(oauthConfigured(), "The5ers connection is not configured on this server.");
-  const redirect = callbackUri();
+  requireValue(oauthConfigured(), "JOURNAL_SECRET is required to securely connect The5ers.");
+  const redirect = callbackUri(origin);
   requireValue(redirect.origin === origin, "The5ers callback must match this journal's origin.");
-  const urls = await endpoints();
+  const urls = await discover();
+  const client = await resolveClient(urls, redirect);
   const state = randomBytes(32).toString("base64url"),
     verifier = randomBytes(32).toString("base64url");
-  const clientId = process.env.THE5ERS_OAUTH_CLIENT_ID!.trim();
+  const clientId = client.id;
   const pending: Pending = {
     state,
     verifier,
@@ -113,7 +63,10 @@ export async function startAuthorization(session: string, origin: string): Promi
     redirectUri: redirect.href,
     tokenUrl: urls.token,
     clientId,
-    scopes: READ_SCOPES,
+    scopes: urls.scopes,
+    client,
+    issuer: urls.issuer,
+    responseIssuerRequired: urls.responseIssuerRequired,
   };
   await setSetting(pendingKey(session), encryptJson(pending));
   const url = new URL(urls.authorization);
@@ -122,7 +75,7 @@ export async function startAuthorization(session: string, origin: string): Promi
     resource: MCP_URL,
     client_id: clientId,
     redirect_uri: redirect.href,
-    scope: READ_SCOPES.join(" "),
+    scope: urls.scopes.join(" "),
     state,
     code_challenge: createHash("sha256").update(verifier).digest("base64url"),
     code_challenge_method: "S256",
@@ -136,18 +89,31 @@ async function exchange(
   params: Record<string, string>,
   old?: Connection,
   scopes = READ_SCOPES,
+  savedClient?: OAuthClient,
 ): Promise<Connection> {
-  const configuredClient = process.env.THE5ERS_OAUTH_CLIENT_ID?.trim();
+  const client = savedClient ?? staticClient();
   requireValue(
-    configuredClient === clientId,
-    "The5ers connection configuration changed. Reconnect your account.",
+    client && client.id === clientId,
+    "The5ers client configuration changed. Reconnect your account.",
   );
+  if (client.mode === "static") {
+    const current = staticClient();
+    requireValue(
+      current?.id === client.id && current?.secret === client.secret,
+      "The5ers connection configuration changed. Reconnect your account.",
+    );
+  }
   const body = new URLSearchParams({ ...params, client_id: clientId, resource: MCP_URL });
-  const secret = process.env.THE5ERS_OAUTH_CLIENT_SECRET?.trim();
-  if (secret) body.set("client_secret", secret);
+  const headers: Record<string, string> = {
+    "Content-Type": "application/x-www-form-urlencoded",
+    Accept: "application/json",
+  };
+  if (client.method === "client_secret_post") body.set("client_secret", client.secret!);
+  if (client.method === "client_secret_basic")
+    headers.Authorization = `Basic ${Buffer.from(`${new URLSearchParams({ value: client.id }).toString().slice(6)}:${new URLSearchParams({ value: client.secret! }).toString().slice(6)}`).toString("base64")}`;
   const response = await providerResponse(officialAuthUrl(tokenUrl), {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+    headers,
     body,
   });
   if (!response.ok) {
@@ -200,10 +166,11 @@ async function exchange(
     tokenUrl: officialAuthUrl(tokenUrl),
     clientId,
     connectedAt: old?.connectedAt ?? new Date().toISOString(),
+    client,
   };
 }
 export async function finishAuthorization(url: URL, session: string): Promise<void> {
-  const redirect = callbackUri();
+  const redirect = callbackUri(url.origin);
   requireValue(
     url.origin === redirect.origin && url.pathname === redirect.pathname,
     "Invalid The5ers callback origin.",
@@ -237,6 +204,13 @@ export async function finishAuthorization(url: URL, session: string): Promise<vo
     code && code.length <= 4096 && !/[\x00-\x20]/.test(code),
     "The5ers did not return a valid authorization code.",
   );
+  requireValue(
+    (!pending.responseIssuerRequired || url.searchParams.has("iss")) &&
+      (!pending.issuer ||
+        !url.searchParams.has("iss") ||
+        url.searchParams.get("iss") === pending.issuer),
+    "The5ers authorization response issuer did not match.",
+  );
   const connection = await exchange(
     pending.tokenUrl,
     pending.clientId,
@@ -248,6 +222,7 @@ export async function finishAuthorization(url: URL, session: string): Promise<vo
     },
     undefined,
     pending.scopes,
+    pending.client,
   );
   await db.transaction(async (tx) => {
     await setSetting(CONNECTION_KEY, encryptJson(connection), tx);
@@ -302,6 +277,7 @@ export async function accessConnection(): Promise<Connection> {
       { grant_type: "refresh_token", refresh_token: value.refreshToken },
       value,
       value.scopes,
+      value.client,
     );
     await setSetting(CONNECTION_KEY, encryptJson(renewed), tx);
     return renewed;

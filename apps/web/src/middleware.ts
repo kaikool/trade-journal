@@ -9,6 +9,9 @@ export const middleware = async (request: NextRequest) => {
   }
   const { pathname } = request.nextUrl;
   if (pathname === "/login" || pathname === "/api/auth") return NextResponse.next();
+  // CIMD publishes only public application identity, never account data or credentials.
+  if (pathname === "/api/the5ers/client-metadata" && request.method === "GET")
+    return NextResponse.next();
   // Only this route uses the independent CRON_SECRET check in its handler.
   // The required journal password gate above still applies to cron requests.
   if (pathname === "/api/cron/broker-sync" && request.method === "GET") return NextResponse.next();

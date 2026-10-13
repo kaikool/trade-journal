@@ -7,6 +7,7 @@ export function isEncryptedSetting(key: string): boolean {
     /^marketData:[^:]+:keyEnc$/.test(key) ||
     key === "the5ers:oauth:connectionEnc" ||
     key.startsWith("the5ers:oauth:pending:") ||
+    key.startsWith("the5ers:oauth:client:") ||
     key.startsWith("the5ers:refs:")
   );
 }

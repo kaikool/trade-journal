@@ -10,6 +10,7 @@ it("rotates broker/AI and lowercase market key envelopes without treating public
   expect(isEncryptedSetting("marketData:coinbase:keyEnc")).toBe(false);
   expect(isEncryptedSetting("timeZone")).toBe(false);
   expect(isEncryptedSetting("the5ers:oauth:connectionEnc")).toBe(true);
+  expect(isEncryptedSetting("the5ers:oauth:client:callback-hash")).toBe(true);
   expect(isEncryptedSetting("the5ers:oauth:pending:session-hash")).toBe(true);
   expect(isEncryptedSetting("the5ers:refs:account-hash")).toBe(true);
   expect(isEncryptedSetting("the5ers:selection")).toBe(false);

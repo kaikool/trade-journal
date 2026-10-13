@@ -12,7 +12,14 @@ afterEach(() => vi.unstubAllEnvs());
 describe("mandatory journal authentication", () => {
   it.each([undefined, "", "   "])("fails closed with password %s", async (password) => {
     vi.stubEnv("JOURNAL_PASSWORD", password);
-    for (const path of ["/", "/login", "/api/auth", "/api/trades", "/api/attachments/id"]) {
+    for (const path of [
+      "/",
+      "/login",
+      "/api/auth",
+      "/api/trades",
+      "/api/attachments/id",
+      "/api/the5ers/client-metadata",
+    ]) {
       expect((await middleware(request(path, "forged"))).status).toBe(503);
     }
     expect(verifyPassword("")).toBe(false);
@@ -39,4 +46,20 @@ describe("mandatory journal authentication", () => {
       expect((await middleware(request(path))).headers.get("x-middleware-next")).toBe("1");
     }
   });
+});
+
+it("allows only the public CIMD metadata GET while keeping source data and changes private", async () => {
+  vi.stubEnv("JOURNAL_PASSWORD", "configured-password");
+  expect(
+    (await middleware(request("/api/the5ers/client-metadata"))).headers.get("x-middleware-next"),
+  ).toBe("1");
+  expect((await middleware(request("/api/the5ers"))).status).toBe(401);
+  expect((await middleware(request("/api/the5ers/client-metadata/extra"))).status).toBe(401);
+  expect(
+    (
+      await middleware(
+        new NextRequest("https://journal.example/api/the5ers/client-metadata", { method: "POST" }),
+      )
+    ).status,
+  ).toBe(401);
 });

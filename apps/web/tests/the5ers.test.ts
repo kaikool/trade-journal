@@ -456,7 +456,7 @@ describe("The5ers transport and cron boundaries", () => {
       ),
     );
     await expect(startAuthorization(session.token!, "https://journal.example")).rejects.toThrow(
-      "provider-approved",
+      "HTTP 403",
     );
     expect(await db.select().from(settings)).toHaveLength(0);
     expect(fetch).toHaveBeenCalledTimes(2);
@@ -526,4 +526,185 @@ it("rejects expired position references without exposing them or calling the pro
     "expired",
   );
   expect(fetch).not.toHaveBeenCalled();
+});
+
+describe("automatic The5ers OAuth registration", () => {
+  const issuer = "https://auth.hub.the5ers.com/synthetic-issuer";
+  const authorization = "https://auth.hub.the5ers.com/synthetic-authorize";
+  const token = "https://auth.hub.the5ers.com/synthetic-token";
+  const registration = "https://auth.hub.the5ers.com/synthetic-register";
+  function automatic(cimd: boolean, dcr = true, fallback = false) {
+    vi.stubEnv("THE5ERS_OAUTH_CLIENT_ID", "");
+    vi.stubEnv("THE5ERS_OAUTH_CLIENT_SECRET", "");
+    vi.stubEnv("THE5ERS_REDIRECT_URI", "");
+    vi.stubEnv("VERCEL_PROJECT_PRODUCTION_URL", "");
+    vi.stubEnv("THE5ERS_AUTHORIZATION_URL", "");
+    vi.stubEnv("THE5ERS_TOKEN_URL", "");
+    const original = fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.includes("oauth-protected-resource"))
+          return json({
+            resource: MCP_URL,
+            authorization_servers: [issuer],
+            scopes_supported: READ_SCOPES,
+          });
+        if (url.includes(".well-known")) {
+          if (fallback && !url.endsWith("/synthetic-issuer/.well-known/openid-configuration"))
+            return new Response(null, { status: 404 });
+          return json({
+            issuer,
+            authorization_endpoint: authorization,
+            token_endpoint: token,
+            registration_endpoint: dcr ? registration : undefined,
+            client_id_metadata_document_supported: cimd,
+            code_challenge_methods_supported: ["S256"],
+            token_endpoint_auth_methods_supported: ["none"],
+            scopes_supported: READ_SCOPES,
+          });
+        }
+        if (url === registration) {
+          const data = JSON.parse(String(init?.body));
+          return json({
+            client_id: "automatically-registered-client",
+            token_endpoint_auth_method: "none",
+            redirect_uris: data.redirect_uris,
+          });
+        }
+        return original(url, init);
+      }),
+    );
+  }
+  it("uses a public metadata URL as client ID without manual credentials and retains refresh support", async () => {
+    automatic(true);
+    const auth = await connect();
+    expect(auth.searchParams.get("client_id")).toBe(
+      "https://journal.example/api/the5ers/client-metadata",
+    );
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => url === registration)).toBe(false);
+    const [row] = await db.select().from(settings).where(eq(settings.key, CONNECTION_KEY));
+    const saved = decryptJson<Record<string, unknown>>(row!.value);
+    expect((saved.client as { mode: string }).mode).toBe("cimd");
+    await db
+      .update(settings)
+      .set({ value: encryptJson({ ...saved, expiresAt: Date.now() - 1 }) })
+      .where(eq(settings.key, CONNECTION_KEY));
+    await accessConnection();
+    const exchange = vi
+      .mocked(fetch)
+      .mock.calls.filter(([url]) => url === token)
+      .at(-1)!;
+    const params = new URLSearchParams(String(exchange[1]?.body));
+    expect(params.get("grant_type")).toBe("refresh_token");
+    expect(params.has("client_secret")).toBe(false);
+  });
+  it("registers a DCR client once, reuses it and does not export registration settings", async () => {
+    automatic(false);
+    const first = new URL(await startAuthorization(session.token!, "https://journal.example"));
+    const second = new URL(await startAuthorization(session.token!, "https://journal.example"));
+    expect(first.searchParams.get("client_id")).toBe("automatically-registered-client");
+    expect(second.searchParams.get("client_id")).toBe("automatically-registered-client");
+    expect(vi.mocked(fetch).mock.calls.filter(([url]) => url === registration)).toHaveLength(1);
+    const stored = await db.select().from(settings);
+    expect(stored.filter((row) => row.key.startsWith("the5ers:oauth:client:"))).toHaveLength(1);
+    expect(stored.every((row) => !row.value.includes("automatically-registered-client"))).toBe(
+      true,
+    );
+  });
+  it("falls back through standard OpenID discovery endpoints on missing metadata", async () => {
+    automatic(true, true, true);
+    await startAuthorization(session.token!, "https://journal.example");
+    expect(
+      vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes(".well-known")),
+    ).toHaveLength(4);
+  });
+  it("does not register if neither automatic mechanism is advertised", async () => {
+    automatic(false, false);
+    await expect(startAuthorization(session.token!, "https://journal.example")).rejects.toThrow(
+      "not enabled automatic",
+    );
+    expect(await db.select().from(settings)).toHaveLength(0);
+  });
+  it("refuses an untrusted registration endpoint instead of posting there", async () => {
+    automatic(false);
+    const original = fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) =>
+        url.includes("oauth-authorization-server")
+          ? json({
+              issuer,
+              authorization_endpoint: authorization,
+              token_endpoint: token,
+              registration_endpoint: "https://evil.example/register",
+              code_challenge_methods_supported: ["S256"],
+            })
+          : original(url, init),
+      ),
+    );
+    await expect(startAuthorization(session.token!, "https://journal.example")).rejects.toThrow(
+      "official authorization server",
+    );
+    expect(await db.select().from(settings)).toHaveLength(0);
+  });
+  it("checks provider capabilities without registering a client or changing settings", async () => {
+    automatic(false);
+    const response = await POST(request({ action: "check" }));
+    expect(response.status).toBe(200);
+    expect((await response.json()).method).toBe("dcr");
+    expect(await db.select().from(settings)).toHaveLength(0);
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => url === registration)).toBe(false);
+  });
+  it("serves only public client metadata without a journal session and gates it on the required password", async () => {
+    automatic(true);
+    session.token = undefined;
+    const { GET: metadata } = await import("../src/app/api/the5ers/client-metadata/route");
+    const response = await metadata(
+      new Request("https://journal.example/api/the5ers/client-metadata"),
+    );
+    expect(response.status).toBe(200);
+    const data = await response.json();
+    expect(data.client_id).toBe("https://journal.example/api/the5ers/client-metadata");
+    expect(data.redirect_uris).toEqual(["https://journal.example/api/the5ers/callback"]);
+    expect(JSON.stringify(data)).not.toMatch(/secret|synthetic-access|synthetic-refresh/);
+    expect(fetch).not.toHaveBeenCalled();
+    vi.stubEnv("JOURNAL_PASSWORD", "");
+    expect(
+      (await metadata(new Request("https://journal.example/api/the5ers/client-metadata"))).status,
+    ).toBe(503);
+  });
+  it("reports registration callback refusal and does not persist a failed DCR client", async () => {
+    automatic(false);
+    const original = fetch;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) =>
+        url === registration
+          ? new Response("secret provider payload", { status: 400 })
+          : original(url, init),
+      ),
+    );
+    const response = await POST(request({ action: "connect" }));
+    expect(response.status).toBe(400);
+    const text = await response.text();
+    expect(text).toContain("client registration failed (HTTP 400)");
+    expect(text).toContain("https://journal.example/api/the5ers/callback");
+    expect(text).not.toContain("secret provider payload");
+    expect(await db.select().from(settings)).toHaveLength(0);
+  });
+  it("rejects authorization responses with a different issuer before token exchange", async () => {
+    automatic(true);
+    const auth = new URL(await startAuthorization(session.token!, "https://journal.example"));
+    vi.mocked(fetch).mockClear();
+    await expect(
+      finishAuthorization(
+        new URL(
+          `https://journal.example/api/the5ers/callback?state=${auth.searchParams.get("state")}&code=code&iss=https://evil.example`,
+        ),
+        session.token!,
+      ),
+    ).rejects.toThrow("issuer did not match");
+    expect(fetch).not.toHaveBeenCalled();
+  });
 });
