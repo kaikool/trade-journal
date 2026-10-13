@@ -2,6 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { accounts, db } from "@/db";
 import { syncAccount } from "@/server/sync";
+import { passwordConfigured } from "@/server/auth";
 import { ENABLED_SYNC_BROKER_IDS } from "@/lib/supported-brokers";
 
 export const maxDuration = 300;
@@ -15,6 +16,8 @@ function hasValidCronSecret(request: Request, secret: string): boolean {
 
 /** Daily Vercel Cron: only accounts explicitly opted into automatic sync. */
 export async function GET(request: Request): Promise<Response> {
+  if (!passwordConfigured())
+    return Response.json({ error: "JOURNAL_PASSWORD is required" }, { status: 503 });
   const secret = process.env.CRON_SECRET;
   if (!secret) return Response.json({ error: "Cron sync is not configured" }, { status: 503 });
   if (!hasValidCronSecret(request, secret))

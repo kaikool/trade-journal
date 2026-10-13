@@ -16,6 +16,7 @@ const request = (authorization?: string) =>
   });
 
 beforeEach(async () => {
+  vi.stubEnv("JOURNAL_PASSWORD", "fixture-cron-password");
   vi.stubEnv("CRON_SECRET", "cron-secret-for-tests");
   syncMocks.syncAccount
     .mockReset()
@@ -73,6 +74,20 @@ afterAll(async () => {
 });
 
 describe("daily broker auto-sync cron", () => {
+  it.each([undefined, "", "   "])(
+    "blocks sync without a journal password (%s)",
+    async (password) => {
+      vi.stubEnv("JOURNAL_PASSWORD", password);
+      const query = vi.spyOn(db, "select");
+      try {
+        expect((await GET(request("Bearer cron-secret-for-tests"))).status).toBe(503);
+        expect(query).not.toHaveBeenCalled();
+        expect(syncMocks.syncAccount).not.toHaveBeenCalled();
+      } finally {
+        query.mockRestore();
+      }
+    },
+  );
   it("rejects requests without the configured bearer secret", async () => {
     const response = await GET(request());
     expect(response.status).toBe(401);

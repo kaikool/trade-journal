@@ -37,6 +37,9 @@ _Dashboard with generated demo data. All screenshots below use synthetic records
 git clone https://github.com/LuxAlgo/trade-journal
 cd trade-journal
 pnpm install --frozen-lockfile
+cp apps/web/.env.example apps/web/.env.local
+# Configure DATABASE_URL and a strong JOURNAL_PASSWORD in apps/web/.env.local.
+# Apply the database migration before starting the app.
 pnpm dev
 # http://localhost:3000
 ```
@@ -70,7 +73,7 @@ The **Prop firms** page has its own **Load demo data** button: a read-only simul
 | `SUPABASE_URL`              | Required for attachment and market-data Storage                                          |
 | `SUPABASE_SERVICE_ROLE_KEY` | Required for server-side Storage access; never expose to the browser                     |
 | `JOURNAL_SECRET`            | Required to encrypt/decrypt saved broker and AI credentials                              |
-| `JOURNAL_PASSWORD`          | Optional: require a password to open the single-user journal                             |
+| `JOURNAL_PASSWORD`          | Required: non-empty password for session-based single-user login                         |
 | `DIRECT_DATABASE_URL`       | Optional: database connection for Drizzle migrations and maintenance                     |
 | `CRON_SECRET`               | Required for Vercel daily broker auto-sync; use a random value of at least 16 characters |
 | `ANTHROPIC_API_KEY`         | Optional: Anthropic AI key via environment instead of Settings                           |
@@ -78,6 +81,10 @@ The **Prop firms** page has its own **Load demo data** button: a read-only simul
 | `JOURNAL_SQLITE_PATH`       | Optional: legacy SQLite source path for `pnpm migrate:supabase`                          |
 
 Set these in Vercel Project Settings → Environment Variables, or in `apps/web/.env.local` for local development. The root [`.env.example`](.env.example) documents the variables. See [Supabase + Vercel setup](docs/supabase-vercel-setup.md) for connection and migration setup.
+
+`JOURNAL_PASSWORD` is mandatory in every environment, including local development. Set a strong password before starting the journal. If it is missing, empty, or contains only whitespace, the application returns **HTTP 503** for pages, login, and API requests; data handlers and broker auto-sync do not run. Static framework assets are not journal data and remain excluded from the middleware matcher.
+
+With a configured password, sign in at `/login`. The server issues an HTTP-only session cookie; missing, forged, or stale sessions receive **HTTP 401** from protected APIs and are redirected to login on pages. Changing `JOURNAL_PASSWORD` invalidates existing sessions. Never put this password in a `NEXT_PUBLIC_` variable or commit your `.env.local` file.
 
 For AI, open **Settings → AI**, select **Anthropic** or **OpenAI**, enter your API key, and choose **Save AI settings**. OpenAI defaults to `gpt-4.1-mini`; you can enter another text model ID available to your account. Each provider keeps its own encrypted key and model choice. Existing Anthropic settings continue to work. An OpenAI-only environment setup selects OpenAI automatically; with both keys present, Anthropic remains the default until you save a provider choice. Environment keys override saved keys and must be changed on the server. Saving settings does not make a model request or verify account access.
 
