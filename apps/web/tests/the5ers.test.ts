@@ -123,7 +123,12 @@ async function connect() {
 }
 beforeEach(async () => {
   await db.delete(settings);
-  const { accounts, propAccounts, propAudit } = await import("../src/db");
+  const { accounts, propAccounts, propAudit, propEntries, propReceipts } =
+    await import("../src/db");
+  await db.delete(propReceipts);
+  await db.delete(propEntries);
+  await db.delete(trades);
+  await db.delete(executions);
   await db.delete(propAudit);
   await db.delete(propAccounts);
   await db.delete(accounts);
@@ -1208,4 +1213,85 @@ it("does not inherit currency for a position page whose envelope omitted it", as
   expect(snapshot.warnings.join(" ")).toContain("Position currency is missing");
   const { queryTrades } = await import("../src/server/trades-query");
   expect((await queryTrades()).trades).toHaveLength(0);
+});
+
+it("imports or confirms payout settlements through the authenticated endpoint and serves saved history without another provider read", async () => {
+  rows[0]!.accountType = "Funded";
+  rows[0]!.status = "Active";
+  await connect();
+  const first = (await listSourceAccounts())[0]!;
+  await selectSourceAccounts([first.id], false, true);
+  const original = fetch;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === MCP_URL && init?.body) {
+        const rpc = JSON.parse(String(init.body));
+        if (rpc.params?.name === "the5ers_payout")
+          return json({
+            jsonrpc: "2.0",
+            id: rpc.id,
+            result: {
+              structuredContent: {
+                data: {
+                  payouts: [
+                    {
+                      id: "known-payout",
+                      status: "completed",
+                      currency: "USD",
+                      amount: 1000,
+                      requestedAt: "2026-02-01T10:00:00Z",
+                    },
+                  ],
+                },
+                pagination: { has_more: false },
+              },
+            },
+          });
+      }
+      return original(url, init);
+    }),
+  );
+  const loaded = (await readSourceSection("payoutHistory", first.id)) as {
+    rows: { key: string; status: string }[];
+    pending: number;
+  };
+  expect(loaded.pending).toBe(1);
+  expect(
+    (
+      await POST(
+        request({
+          action: "payout.confirm",
+          id: first.id,
+          payoutKey: "f".repeat(64),
+          propAccountId: `the5ers_${first.id}`,
+          amount: "780",
+          receivedOn: "2026-02-02",
+        }),
+      )
+    ).status,
+  ).toBe(400);
+  const confirm = () =>
+    POST(
+      request({
+        action: "payout.confirm",
+        id: first.id,
+        payoutKey: loaded.rows[0]!.key,
+        propAccountId: `the5ers_${first.id}`,
+        amount: "780",
+        receivedOn: "2026-02-02",
+      }),
+    );
+  expect((await confirm()).status).toBe(200);
+  expect((await confirm()).status).toBe(200);
+  const { propReceipts } = await import("../src/db");
+  expect(await db.select().from(propReceipts)).toHaveLength(1);
+  expect((await db.select().from(propReceipts))[0]).toMatchObject({ amountMinor: 78000 });
+  await syncSourceAccount(first.id);
+  const external = vi.mocked(fetch).mock.calls.length;
+  const overview = await sourceOverview();
+  expect(vi.mocked(fetch).mock.calls.length).toBe(external);
+  expect(overview.snapshots[0]!.sections.payoutHistory?.data).toMatchObject({
+    rows: [expect.objectContaining({ status: "matched" })],
+  });
 });

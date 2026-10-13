@@ -1,4 +1,10 @@
-import { currencyDigits, toMinor, EXPENSE_CATEGORIES } from "./prop-firms";
+import {
+  currencyDigits,
+  toMinor,
+  EXPENSE_CATEGORIES,
+  PROP_PROGRAMS,
+  PROP_STATES,
+} from "./prop-firms";
 
 export const sourceObject = (value: unknown): Record<string, unknown> =>
   value && typeof value === "object" && !Array.isArray(value)
@@ -6,6 +12,54 @@ export const sourceObject = (value: unknown): Record<string, unknown> =>
     : {};
 export const sourceNumber = (value: unknown): number | undefined =>
   typeof value === "number" && Number.isFinite(value) ? value : undefined;
+
+/** Provider labels may use camelCase, snake_case, PascalCase or display names. */
+export function sourceFields(value: unknown): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(sourceObject(value)).map(([key, item]) => [
+      key.replace(/[ _-]/g, "").toLowerCase(),
+      item,
+    ]),
+  );
+}
+const sourceBoolean = (value: unknown): boolean | undefined => {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    if (["yes", "true"].includes(value.trim().toLowerCase())) return true;
+    if (["no", "false"].includes(value.trim().toLowerCase())) return false;
+  }
+};
+export function sourceProgram(value: unknown): (typeof PROP_PROGRAMS)[number] | undefined {
+  if (typeof value !== "string") return;
+  const name = value
+    .trim()
+    .toLowerCase()
+    .replace(/[ _-]+/g, "_");
+  const alias: Record<string, (typeof PROP_PROGRAMS)[number]> = {
+    phase_1: "evaluation",
+    phase1: "evaluation",
+    challenge: "evaluation",
+    phase_2: "verification",
+    phase2: "verification",
+    instantfunded: "instant_funded",
+  };
+  return PROP_PROGRAMS.includes(name as (typeof PROP_PROGRAMS)[number])
+    ? (name as (typeof PROP_PROGRAMS)[number])
+    : alias[name];
+}
+export function sourcePropStatus(value: unknown): (typeof PROP_STATES)[number] | undefined {
+  if (typeof value !== "string") return;
+  const name = value.trim().toLowerCase();
+  const alias: Record<string, (typeof PROP_STATES)[number]> = {
+    available: "active",
+    failed: "breached",
+    inactive: "closed",
+    terminated: "closed",
+  };
+  return PROP_STATES.includes(name as (typeof PROP_STATES)[number])
+    ? (name as (typeof PROP_STATES)[number])
+    : alias[name];
+}
 
 /** Require an explicit offset; never interpret broker wall time in the server's timezone. */
 export function sourceInstant(value: unknown): string | undefined {
@@ -54,11 +108,11 @@ export interface SourcePosition {
   isValid?: boolean;
 }
 export function normalizePosition(value: unknown): SourcePosition | undefined {
-  const row = sourceObject(value);
+  const row = sourceFields(value);
   const symbol = typeof row.symbol === "string" ? row.symbol.trim() : "";
   const side = typeof row.side === "string" ? row.side.toLowerCase() : "";
   const direction = side === "buy" ? "long" : side === "sell" ? "short" : undefined;
-  const openedAt = sourceInstant(row.openDate),
+  const openedAt = sourceInstant(row.opendate),
     quantity = sourceNumber(row.quantity),
     entry = sourceNumber(row.entry);
   if (
@@ -69,15 +123,15 @@ export function normalizePosition(value: unknown): SourcePosition | undefined {
     quantity === undefined ||
     quantity <= 0 ||
     entry === undefined ||
-    typeof row.isClosed !== "boolean"
+    sourceBoolean(row.isclosed) === undefined
   )
     return;
-  const closedAt = row.isClosed ? sourceInstant(row.closeDate) : null;
-  const exit = row.isClosed ? sourceNumber(row.exit) : null;
-  const netPnl = row.isClosed ? sourceNumber(row.profitAndLoss) : 0;
+  const closedAt = sourceBoolean(row.isclosed) ? sourceInstant(row.closedate) : null;
+  const exit = sourceBoolean(row.isclosed) ? sourceNumber(row.exit) : null;
+  const netPnl = sourceBoolean(row.isclosed) ? sourceNumber(row.profitandloss) : 0;
   if (
     netPnl === undefined ||
-    (row.isClosed &&
+    (sourceBoolean(row.isclosed) &&
       (!closedAt || exit === undefined || Date.parse(closedAt) < Date.parse(openedAt)))
   )
     return;
@@ -92,7 +146,7 @@ export function normalizePosition(value: unknown): SourcePosition | undefined {
     netPnl,
     fee: sourceNumber(row.fee),
     swap: sourceNumber(row.swap),
-    isValid: typeof row.isValid === "boolean" ? row.isValid : undefined,
+    isValid: sourceBoolean(row.isvalid),
   };
 }
 export interface SourcePurchase {
@@ -107,22 +161,22 @@ export interface SourcePurchase {
 }
 /** One order is one cash payment. USD conversion and line totals are never extra charges. */
 export function normalizePurchase(value: unknown): SourcePurchase | undefined {
-  const row = sourceObject(value),
-    placedAt = sourceInstant(row.placedAt),
+  const row = sourceFields(value),
+    placedAt = sourceInstant(row.placedat),
     currency = sourceCurrency(row.currency);
   if (!placedAt || !currency) return;
-  const items = Array.isArray(row.items) ? row.items.map(sourceObject) : [];
+  const items = Array.isArray(row.items) ? row.items.map(sourceFields) : [];
   let amount = sourceNumber(row.price);
   let cashVerified = amount !== undefined;
   if (
     items.some(
-      (i) => sourceNumber(i.creditsApplied) !== undefined && Number(i.creditsApplied) !== 0,
+      (i) => sourceNumber(i.creditsapplied) !== undefined && Number(i.creditsapplied) !== 0,
     )
   ) {
-    // Line netPaid is cash in USD even when the order was paid in another currency.
-    cashVerified = currency === "USD" && items.every((i) => sourceNumber(i.netPaid) !== undefined);
+    // Line netpaid is cash in USD even when the order was paid in another currency.
+    cashVerified = currency === "USD" && items.every((i) => sourceNumber(i.netpaid) !== undefined);
     if (cashVerified) {
-      const minor = items.map((i) => sourceMoney(i.netPaid, "USD"));
+      const minor = items.map((i) => sourceMoney(i.netpaid, "USD"));
       cashVerified = minor.every((v) => v !== undefined);
       if (cashVerified) amount = minor.reduce<number>((sum, v) => sum + v!, 0) / 100;
     }
@@ -133,7 +187,7 @@ export function normalizePurchase(value: unknown): SourcePurchase | undefined {
     placedAt,
     currency,
     amountMinor,
-    status: typeof row.status === "string" ? row.status.toLowerCase() : "unknown",
+    status: typeof row.status === "string" ? row.status.trim().toLowerCase() : "unknown",
     name:
       items
         .map((i) => (typeof i.name === "string" ? i.name : ""))
@@ -142,11 +196,13 @@ export function normalizePurchase(value: unknown): SourcePurchase | undefined {
         .slice(0, 200) || "Program purchase",
     category:
       items.length &&
-      items.every((i) => i.productType === items[0]!.productType) &&
-      EXPENSE_CATEGORIES.includes(items[0]!.productType as (typeof EXPENSE_CATEGORIES)[number])
-        ? String(items[0]!.productType)
+      items.every((i) => i.producttype === items[0]!.producttype) &&
+      EXPENSE_CATEGORIES.includes(items[0]!.producttype as (typeof EXPENSE_CATEGORIES)[number])
+        ? String(items[0]!.producttype)
         : "other",
-    refunded: items.some((i) => i.refunded === true),
+    refunded:
+      sourceBoolean(row.refunded ?? row.isrefunded) === true ||
+      items.some((i) => sourceBoolean(i.refunded ?? i.isrefunded) === true),
     cashVerified,
   };
 }

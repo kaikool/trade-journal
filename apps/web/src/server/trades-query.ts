@@ -129,10 +129,21 @@ export const queryTrades = async (
       row.avgEntry,
       row.avgExit,
     ]);
-  const saved = new Set(native.map(signature));
-  const all = [...native, ...source.filter((row) => !saved.has(signature(row)))].sort(
-    (a, b) => Date.parse(a.openedAt) - Date.parse(b.openedAt) || a.key.localeCompare(b.key),
+  const sourceByKey = new Map(source.map((row) => [row.key, row]));
+  // Restore source metadata/annotations and exclusions for materialized The5ers rows.
+  const visibleNative: TradeRow[] = native.flatMap<TradeRow>((row) =>
+    row.key.startsWith("the5ers_")
+      ? sourceByKey.has(row.key)
+        ? [sourceByKey.get(row.key)!]
+        : []
+      : [row],
   );
+  const saved = new Set(visibleNative.filter((row) => row.source !== "the5ers").map(signature));
+  const savedKeys = new Set(visibleNative.map((row) => row.key));
+  const all = [
+    ...visibleNative.filter((row) => row.source !== "the5ers" || !saved.has(signature(row))),
+    ...source.filter((row) => !savedKeys.has(row.key) && !saved.has(signature(row))),
+  ].sort((a, b) => Date.parse(a.openedAt) - Date.parse(b.openedAt) || a.key.localeCompare(b.key));
   const [timeZone, config] = await Promise.all([getTimeZone(), context()]);
   const pairs = (
     await Promise.all(all.map(async (row) => ({ row, trade: await rowToTrade(row, config) })))
@@ -147,13 +158,9 @@ export const queryTrades = async (
 };
 
 export const getTradeByKey = async (key: string): Promise<TradeRow | undefined> => {
+  if (key.startsWith("the5ers_")) return (await sourceTradeRows()).find((row) => row.key === key);
   const [row] = await db.select().from(trades).where(eq(trades.key, key)).limit(1);
-  return (
-    row ??
-    (key.startsWith("the5ers_")
-      ? (await sourceTradeRows()).find((row) => row.key === key)
-      : undefined)
-  );
+  return row;
 };
 
 /** Navigate chronologically within the active filters, with a stable tie-break for equal entries. */

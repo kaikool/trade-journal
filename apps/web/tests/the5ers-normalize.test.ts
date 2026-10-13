@@ -4,6 +4,8 @@ import {
   normalizePurchase,
   sourceInstant,
   sourceMoney,
+  sourceProgram,
+  sourcePropStatus,
 } from "../src/lib/the5ers-normalize";
 const position = {
   symbol: "EURUSD",
@@ -19,6 +21,37 @@ const position = {
   swap: 1,
 };
 describe("The5ers source normalization", () => {
+  it("normalizes display fields from the reported XAUUSD position", () => {
+    expect(
+      normalizePosition({
+        Symbol: "XAUUSD",
+        Side: "Buy",
+        "Is Closed": "Yes",
+        "Open Date": "2026-10-13T02:32:20.337Z",
+        "Close Date": "2026-10-13T02:33:48.020Z",
+        Entry: 4169.26,
+        Exit: 4167.37,
+        Quantity: 0.25,
+        "Profit And Loss": -49.33,
+        Fee: -2.08,
+        Swap: 0,
+        "Is Valid": "Yes",
+      }),
+    ).toMatchObject({
+      symbol: "XAUUSD",
+      direction: "long",
+      netPnl: -49.33,
+      fee: -2.08,
+      quantity: 0.25,
+      isValid: true,
+      closedAt: "2026-10-13T02:33:48.020Z",
+    });
+    expect(sourceProgram("Phase 2")).toBe("verification");
+    expect(sourceProgram("Instant Funded")).toBe("instant_funded");
+    expect(sourceProgram("High Stakes")).toBeUndefined();
+    expect(sourcePropStatus("Failed")).toBe("breached");
+    expect(sourcePropStatus("Active")).toBe("active");
+  });
   it("preserves reported net P&L without subtracting fee/swap or converting lots", () => {
     expect(normalizePosition(position)).toMatchObject({
       openedAt: "2026-02-01T16:30:00.000Z",

@@ -39,7 +39,9 @@ Net P&L, wins/losses, profit factor, equity, drawdown, calendar and intraday cur
 
 Fee/swap sign conventions and size units are not assumed. Gross P&L and aggregate costs are unavailable when a selection contains net-only source positions. ROI on notional, monetary R and market-excursion estimates are unavailable for unverified position units. Reported fee/swap remain visible individually. Absolute drawdown is computed; percentage drawdown requires valid initial capital. Missing history is disclosed on Trades/Dashboard instead of presented as a complete account history.
 
-Journal annotations, tags, playbooks, review status and local exclusion work for these projected trades. Deleting a reported trade excludes it locally and does not delete the provider record or revive it on refresh. Clearing the linked account removes stored projected history; a later provider refresh can fetch it again. Re-link connected accounts in Accounts rather than transfer their reported history as executions.
+Verified reported positions are also persisted in the existing `trades` table without inventing execution records. Refresh writes new or changed economics only; unchanged rows, local annotations and exclusions survive repeat syncs and execution rebuilds. Legacy JSON histories are materialized on the next source refresh. Normal page reads use stored database history; an explicit source refresh still scans the paginated provider history to detect new positions and corrections. No unverified remote date filter or cursor is assumed.
+
+Journal annotations, tags, playbooks, review status and local exclusion work for these reported trades. Deleting a reported trade excludes it locally and does not delete the provider record or revive it on refresh. Clearing the linked account removes stored projected history; a later provider refresh can fetch it again. Re-link connected accounts in Accounts rather than transfer their reported history as executions.
 
 ### Purchase expenses
 
@@ -49,9 +51,13 @@ Line `netPaid`, credits and discounts are USD even when the order was paid in an
 
 Expense date is the order's `placedAt` instant converted to the journal timezone; the original UTC instant remains in notes. The source does not provide a separate bank settlement date. Purchase expenses stay firm-wide unless attribution can be verified; no account is guessed from a cart or progression chain. Refund amounts/dates and ambiguous cash records require reconciliation with the existing ledger.
 
-### Payout limits
+### Payout settlements
 
-The official payout history explicitly excludes cancelled, declined, terminated and reversed records. Its coverage is incomplete even after all available pages are read. A request amount/status is not proof of money received after split/commission. The journal therefore does not automatically post requests as receipts or recompute withdrawable amounts. Use the existing payout/receipt workflow for actual settlement; provider history remains a reference for reconciliation.
+Account refresh and **Prop firms → Payouts → Payout history** fetch and persist payout history. Subsequent page reads use the saved history. Explicit completed settlements with a verified currency, request timestamp, payment timestamp and net received amount are recorded in the existing audited `prop_entries` and `prop_receipts` tables. A generic request `amount` is not treated as net cash after profit split and commission.
+
+Records missing settlement facts offer **Record money received**: select a funded The5ers prop account and confirm the actual amount and payment date. Saving records the net settlement and updates **Payouts received** immediately. This writes only to the local journal, never requests a payout from The5ers. The receipt identity remains stable across refreshes and repeated confirmations; matching manual receipts prevent automatic duplicate posting. Corrections and local reversals remain under the existing ledger workflow.
+
+The official payout history excludes cancelled, declined, terminated and reversed records. Its coverage is incomplete even after all pages are read; absence from a later response does not delete a receipt or imply reversal. Requests without settlement evidence stay separate from cash totals. Provider field contracts beyond explicit supported settlement fields require owner confirmation rather than guessed profit splits, fees or payment dates.
 
 ## Configuration and daily refresh
 

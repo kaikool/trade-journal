@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { and, eq, like } from "drizzle-orm";
-import { accounts, db, propEntries, settings } from "@/db";
+import { accounts, db, propEntries, settings, trades } from "@/db";
 import type { JournalExecutor } from "@/db/postgres";
 import type { TradeRow } from "@/server/trades-query";
 import { getSetting, setSetting } from "@/server/settings";
@@ -34,6 +34,60 @@ export type SourceTradeRow = TradeRow & {
   reportedSwap?: number;
   programValid?: boolean;
 };
+
+function journalTradeRow(
+  sourceAccountId: string,
+  accountId: string,
+  position: SourcePosition,
+  annotation: Record<string, unknown> = {},
+): SourceTradeRow {
+  const key = `the5ers_${hash([sourceAccountId, positionIdentity(position)])}`;
+  const closed = Boolean(position.closedAt);
+  return {
+    key,
+    accountId,
+    symbol: position.symbol,
+    assetClass: null,
+    direction: position.direction,
+    status: closed
+      ? position.netPnl > 0
+        ? "win"
+        : position.netPnl < 0
+          ? "loss"
+          : "breakeven"
+      : "open",
+    openedAt: position.openedAt,
+    closedAt: position.closedAt,
+    quantity: position.quantity,
+    openQuantity: closed ? 0 : position.quantity,
+    avgEntry: position.entry,
+    avgExit: position.exit,
+    // Internal net-only projection; costsUnavailable suppresses gross/cost aggregates.
+    grossPnl: position.netPnl,
+    fees: 0,
+    netPnl: position.netPnl,
+    executionCount: 0,
+    executionIdsJson: "[]",
+    exitsJson: "[]",
+    durationMs: position.closedAt
+      ? Date.parse(position.closedAt) - Date.parse(position.openedAt)
+      : null,
+    notes: typeof annotation.notes === "string" ? annotation.notes : null,
+    tagsJson: JSON.stringify(annotation.tags ?? []),
+    mistakesJson: JSON.stringify(annotation.mistakes ?? []),
+    playbookId: typeof annotation.playbookId === "string" ? annotation.playbookId : null,
+    rating: typeof annotation.rating === "number" ? annotation.rating : null,
+    stopLoss: typeof annotation.stopLoss === "number" ? annotation.stopLoss : null,
+    profitTarget: typeof annotation.profitTarget === "number" ? annotation.profitTarget : null,
+    reviewedAt: typeof annotation.reviewedAt === "string" ? annotation.reviewedAt : null,
+    source: "the5ers",
+    costsUnavailable: true,
+    quantityUnitsUnknown: true,
+    reportedFee: position.fee,
+    reportedSwap: position.swap,
+    programValid: position.isValid,
+  };
+}
 
 /** Store reported positions, never manufacture atomic executions or prices from P&L. */
 export async function saveJournalPositions(
@@ -85,8 +139,90 @@ export async function saveJournalPositions(
     Buffer.byteLength(JSON.stringify(history)) <= 4 * 1024 * 1024,
     "The5ers journal history exceeded its size limit.",
   );
+  const links = JSON.parse((await getSetting("the5ers:journal-links", tx)) ?? "{}") as Record<
+    string,
+    string
+  >;
+  const accountId = links[sourceAccountId];
+  let importedPositions = 0,
+    updatedPositions = 0,
+    unchangedPositions = 0;
+  if (accountId) {
+    const [account] = await tx
+      .select()
+      .from(accounts)
+      .where(eq(accounts.id, accountId))
+      .for("update");
+    requireValue(
+      account && account.currency === currency,
+      "The linked journal account currency changed.",
+    );
+    const existing = new Map(
+      (await tx.select().from(trades).where(eq(trades.accountId, accountId))).map((row) => [
+        row.key,
+        row,
+      ]),
+    );
+    // Preserve earlier windows; write only new or changed provider economics, never local annotations.
+    for (const position of history.positions) {
+      const projected = journalTradeRow(sourceAccountId, accountId, position);
+      const {
+        source,
+        costsUnavailable,
+        quantityUnitsUnknown,
+        reportedFee,
+        reportedSwap,
+        programValid,
+        notes,
+        tagsJson,
+        mistakesJson,
+        playbookId,
+        rating,
+        stopLoss,
+        profitTarget,
+        reviewedAt,
+        ...computed
+      } = projected;
+      const old = existing.get(projected.key);
+      if (
+        old &&
+        Object.entries(computed).every(([field, value]) => old[field as keyof typeof old] === value)
+      ) {
+        unchangedPositions++;
+        continue;
+      }
+      const annotation = sourceObject(
+        JSON.parse((await getSetting(`the5ers:annotation:${projected.key}`, tx)) ?? "{}"),
+      );
+      if (annotation.excluded === true) continue;
+      const annotated = journalTradeRow(sourceAccountId, accountId, position, annotation);
+      await tx
+        .insert(trades)
+        .values({
+          ...computed,
+          notes: annotated.notes,
+          tagsJson: annotated.tagsJson,
+          mistakesJson: annotated.mistakesJson,
+          playbookId: annotated.playbookId,
+          rating: annotated.rating,
+          stopLoss: annotated.stopLoss,
+          profitTarget: annotated.profitTarget,
+          reviewedAt: annotated.reviewedAt,
+        })
+        .onConflictDoUpdate({ target: trades.key, set: computed });
+      if (old) updatedPositions++;
+      else importedPositions++;
+    }
+    await tx.update(accounts).set({ lastSyncAt: retrievedAt }).where(eq(accounts.id, accountId));
+  }
   await setSetting(`${JOURNAL_SOURCE_PREFIX}${sourceAccountId}`, JSON.stringify(history), tx);
-  return { journaledPositions: valid.length, skippedPositions: rows.length - valid.length };
+  return {
+    journaledPositions: valid.length,
+    skippedPositions: rows.length - valid.length,
+    importedPositions,
+    updatedPositions,
+    unchangedPositions,
+  };
 }
 
 /** Project into the existing trade reader so all journal filters and net analytics apply. */
@@ -129,51 +265,7 @@ export async function sourceJournalData() {
       const key = `the5ers_${hash([history.sourceAccountId, positionIdentity(position)])}`;
       const annotation = annotationMap.get(key) ?? {};
       if (annotation.excluded === true) continue;
-      const closed = Boolean(position.closedAt);
-      result.push({
-        key,
-        accountId,
-        symbol: position.symbol,
-        assetClass: null,
-        direction: position.direction,
-        status: closed
-          ? position.netPnl > 0
-            ? "win"
-            : position.netPnl < 0
-              ? "loss"
-              : "breakeven"
-          : "open",
-        openedAt: position.openedAt,
-        closedAt: position.closedAt,
-        quantity: position.quantity,
-        openQuantity: closed ? 0 : position.quantity,
-        avgEntry: position.entry,
-        avgExit: position.exit,
-        // Internal net-only projection; costsUnavailable suppresses gross/cost aggregates.
-        grossPnl: position.netPnl,
-        fees: 0,
-        netPnl: position.netPnl,
-        executionCount: 0,
-        executionIdsJson: "[]",
-        exitsJson: "[]",
-        durationMs: position.closedAt
-          ? Date.parse(position.closedAt) - Date.parse(position.openedAt)
-          : null,
-        notes: typeof annotation.notes === "string" ? annotation.notes : null,
-        tagsJson: JSON.stringify(annotation.tags ?? []),
-        mistakesJson: JSON.stringify(annotation.mistakes ?? []),
-        playbookId: typeof annotation.playbookId === "string" ? annotation.playbookId : null,
-        rating: typeof annotation.rating === "number" ? annotation.rating : null,
-        stopLoss: typeof annotation.stopLoss === "number" ? annotation.stopLoss : null,
-        profitTarget: typeof annotation.profitTarget === "number" ? annotation.profitTarget : null,
-        reviewedAt: typeof annotation.reviewedAt === "string" ? annotation.reviewedAt : null,
-        source: "the5ers",
-        costsUnavailable: true,
-        quantityUnitsUnknown: true,
-        reportedFee: position.fee,
-        reportedSwap: position.swap,
-        programValid: position.isValid,
-      });
+      result.push(journalTradeRow(history.sourceAccountId, accountId, position, annotation));
     }
   }
   return { rows: result, coverage };
@@ -266,6 +358,20 @@ export async function annotateSourceTrade(
       decoded[name!] = JSON.parse(decoded[json!] as string);
       delete decoded[json!];
     }
+  }
+  const merged = { ...annotation, ...decoded };
+  if (merged.excluded === true) await tx.delete(trades).where(eq(trades.key, key));
+  else {
+    const projected = ["notes", "playbookId", "rating", "stopLoss", "profitTarget", "reviewedAt"];
+    const tablePatch = Object.fromEntries(
+      projected
+        .filter((field) => Object.hasOwn(decoded, field))
+        .map((field) => [field, decoded[field]]),
+    );
+    if (decoded.tags !== undefined) tablePatch.tagsJson = JSON.stringify(decoded.tags);
+    if (decoded.mistakes !== undefined) tablePatch.mistakesJson = JSON.stringify(decoded.mistakes);
+    if (Object.keys(tablePatch).length)
+      await tx.update(trades).set(tablePatch).where(eq(trades.key, key));
   }
   await setSetting(settingKey, JSON.stringify({ ...annotation, ...decoded }), tx);
 }

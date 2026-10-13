@@ -100,6 +100,35 @@ it("retains history across partial windows, updates a position once, and rejects
   await expect(save([{ ...position, quantity: 0.3 }])).rejects.toThrow("changed its entry or size");
   expect((await getTradeByKey(key))?.netPnl).toBe(95);
 });
+it("materializes reported trades once, preserves annotations and survives execution rebuilds", async () => {
+  expect(await save([position])).toMatchObject({ importedPositions: 1, updatedPositions: 0 });
+  expect(await save([position])).toMatchObject({
+    importedPositions: 0,
+    updatedPositions: 0,
+    unchangedPositions: 1,
+  });
+  const [saved] = await db.select().from(trades);
+  expect(saved).toMatchObject({
+    accountId: "journal",
+    quantity: 0.2,
+    netPnl: 97,
+    executionCount: 0,
+  });
+  await db.transaction((tx) =>
+    annotateSourceTrade(tx, saved!.key, {
+      notes: "Keep my review",
+      reviewedAt: "2026-02-03T00:00:00Z",
+    }),
+  );
+  expect(await save([{ ...position, profitAndLoss: 95 }])).toMatchObject({ updatedPositions: 1 });
+  const { rebuildAccount } = await import("../src/server/rebuild");
+  await rebuildAccount("journal");
+  expect(await db.select().from(trades)).toHaveLength(1);
+  expect((await db.select().from(trades))[0]).toMatchObject({
+    notes: "Keep my review",
+    netPnl: 95,
+  });
+});
 it("keeps source annotations and filters and does not double count matching native history", async () => {
   await save([position]);
   const { rows } = await queryTrades();

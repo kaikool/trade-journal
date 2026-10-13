@@ -11,6 +11,7 @@ import {
   selectSourceAccounts,
   syncSourceAccount,
   readSourceSection,
+  confirmSourcePayout,
 } from "@/server/the5ers/data";
 
 export const maxDuration = 120;
@@ -41,6 +42,10 @@ export const POST = handler(async (request: Request) => {
         "positionKey",
         "linkJournalAccounts",
         "journalLinks",
+        "payoutKey",
+        "propAccountId",
+        "amount",
+        "receivedOn",
       ].includes(key),
     ),
     "Unknown The5ers request field.",
@@ -58,6 +63,27 @@ export const POST = handler(async (request: Request) => {
     case "disconnect":
       await disconnectThe5ers();
       return ok({ disconnected: true });
+    case "payout.confirm":
+      requireValue(
+        typeof body.id === "string" &&
+          /^[a-f0-9]{64}$/.test(body.id) &&
+          typeof body.payoutKey === "string" &&
+          /^[a-f0-9]{64}$/.test(body.payoutKey) &&
+          typeof body.propAccountId === "string" &&
+          /^[a-zA-Z0-9_-]{1,100}$/.test(body.propAccountId) &&
+          typeof body.amount === "string" &&
+          body.amount.length <= 40 &&
+          typeof body.receivedOn === "string" &&
+          body.receivedOn.length === 10,
+        "Choose a payout, funded prop account, actual amount and settlement date.",
+      );
+      return ok(
+        await confirmSourcePayout(body.id, body.payoutKey, {
+          accountId: body.propAccountId,
+          amount: body.amount,
+          receivedOn: body.receivedOn,
+        }),
+      );
     case "purchases.sync":
       return ok({ data: await syncSourcePurchases() });
     case "accounts":

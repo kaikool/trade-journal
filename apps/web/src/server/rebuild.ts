@@ -42,9 +42,9 @@ export const rebuildAccountInTransaction = async (
     multipliers: await getMultipliers(tx),
   });
   const obsolete = new Set(
-    (await tx.select({ key: trades.key }).from(trades).where(eq(trades.accountId, accountId))).map(
-      (row) => row.key,
-    ),
+    (await tx.select({ key: trades.key }).from(trades).where(eq(trades.accountId, accountId)))
+      .filter((row) => !row.key.startsWith("the5ers_"))
+      .map((row) => row.key),
   );
   const defaults = await getJournalDefaults(tx);
 

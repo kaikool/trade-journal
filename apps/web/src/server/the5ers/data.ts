@@ -2,7 +2,13 @@ import { createHash, randomUUID } from "node:crypto";
 import { and, eq, like, sql } from "drizzle-orm";
 import { db, settings, accounts as journalAccounts, propAccounts, propAudit } from "@/db";
 import { saveJournalPositions, reconcilePurchases } from "./journal";
-import { sourceCurrency } from "@/lib/the5ers-normalize";
+import { payoutKey, sourceRecords, recordPayoutReceipt } from "./payouts";
+import {
+  sourceCurrency,
+  sourceFields,
+  sourceProgram,
+  sourcePropStatus,
+} from "@/lib/the5ers-normalize";
 import { getTimeZone } from "@/server/settings";
 import { isActiveSource } from "@/lib/the5ers-status";
 import { parseTimestamp } from "@luxalgo/journal-importers";
@@ -10,7 +16,7 @@ import { RequestError, requireValue } from "@/server/api";
 import { getSetting, setSetting } from "@/server/settings";
 import { encryptJson, decryptJson } from "@/server/crypto";
 import { publicData, record, type ReadTool } from "./contracts";
-import { PROP_PROGRAMS, PROP_STATES, currencyDigits } from "@/lib/prop-firms";
+import { currencyDigits } from "@/lib/prop-firms";
 import { The5ersMcp } from "./mcp";
 import {
   accessConnection,
@@ -50,6 +56,9 @@ export interface SourceSnapshot {
   importedExecutions: 0;
   journaledPositions?: number;
   skippedPositions?: number;
+  importedPositions?: number;
+  updatedPositions?: number;
+  unchangedPositions?: number;
 }
 interface PositionRefs {
   connectionId: string;
@@ -114,7 +123,17 @@ export function parseProviderAccounts(value: unknown): {
   const accounts: ProviderAccount[] = page.rows
     .filter((item) => !record(item).contest_account_ref)
     .map((item) => {
-      const row = record(item);
+      const original = record(item);
+      const fields = sourceFields(original);
+      const row: Record<string, unknown> = {
+        ...original,
+        currency: fields.currency,
+        status: fields.status,
+        type: fields.type,
+        accountType: fields.accounttype,
+        phase: fields.phase,
+        stage: fields.stage,
+      };
       requireValue(
         reference(row.ref) &&
           typeof row.label === "string" &&
@@ -430,18 +449,18 @@ export async function selectSourceAccounts(
             createdAt: now,
           });
         }
-        if (
-          !tracked &&
-          associated.length === 0 &&
-          PROP_PROGRAMS.includes(account.program as (typeof PROP_PROGRAMS)[number]) &&
-          PROP_STATES.includes(account.status as (typeof PROP_STATES)[number])
-        ) {
+        const normalizedProgram =
+          sourceProgram(account.program) ??
+          sourceProgram(sourceFields(account.source).phase) ??
+          sourceProgram(sourceFields(account.source).stage);
+        const normalizedStatus = sourcePropStatus(account.status);
+        if (!tracked && associated.length === 0 && normalizedProgram && normalizedStatus) {
           const value = {
             id: `the5ers_${account.id}`,
             firm: "The5ers",
             name: account.label,
-            program: account.program!,
-            status: account.status!,
+            program: normalizedProgram,
+            status: normalizedStatus,
             currency: account.currency,
             journalAccountId: id,
             openedOn: account.createdAt.slice(0, 10),
@@ -482,7 +501,9 @@ async function positions(client: The5ersMcp, account: ProviderAccount) {
       limit: 100,
     });
     const envelope = record(response);
-    const pageCurrency = sourceCurrency(envelope.currency);
+    const body = sourceFields(envelope.data ?? envelope);
+    const reportedCurrency = sourceFields(envelope).currency ?? body.currency;
+    const pageCurrency = sourceCurrency(reportedCurrency);
     currencyVerified &&= Boolean(pageCurrency);
     requireValue(
       !currency || !pageCurrency || currency === pageCurrency,
@@ -650,10 +671,26 @@ export async function syncSourceAccount(
       await setSetting(`${REF_PREFIX}${id}`, encryptJson(positionCache), tx);
     } else await tx.delete(settings).where(eq(settings.key, `${REF_PREFIX}${id}`));
   });
+  try {
+    snapshot.sections.payoutHistory = {
+      available: true,
+      data: await fetchAndSavePayouts(client, connection.id, account, id),
+    };
+  } catch (error) {
+    snapshot.sections.payoutHistory = {
+      available: false,
+      error:
+        error instanceof RequestError ? error.message : "Payout history could not be retrieved.",
+    };
+  }
   return snapshot;
 }
 export async function sourceOverview() {
   const selection = await selectedAccounts();
+  const payoutHistory = await db
+    .select()
+    .from(settings)
+    .where(like(settings.key, "the5ers:payouts:%"));
   const stored = await db
     .select()
     .from(settings)
@@ -664,7 +701,15 @@ export async function sourceOverview() {
     selection,
     snapshots: stored
       .filter((row) => selection.some((account) => row.key === `${SNAPSHOT_PREFIX}${account.id}`))
-      .map((row) => JSON.parse(row.value) as SourceSnapshot),
+      .map((row) => {
+        const snapshot = JSON.parse(row.value) as SourceSnapshot;
+        const payout = payoutHistory.find(
+          (p) => p.key === `the5ers:payouts:${snapshot.account.id}`,
+        );
+        if (payout)
+          snapshot.sections.payoutHistory = { available: true, data: JSON.parse(payout.value) };
+        return snapshot;
+      }),
   };
 }
 /** Limited source reads, never broker actions and never arbitrary caller-supplied refs or URLs. */
@@ -734,10 +779,7 @@ export async function readSourceSection(resource: string, id?: string, positionK
   }
   const account = (await inventoryResult(client)).accounts.find((a) => a.id === id);
   requireValue(account, "This The5ers account is no longer available.");
-  if (resource === "payoutHistory")
-    return paginatedSource(client, read.tool, read.operation, "payouts", {
-      account_ref: account.ref,
-    });
+  if (resource === "payoutHistory") return fetchAndSavePayouts(client, connection.id, account, id!);
   return publicData(await client.read(read.tool, read.operation, { account_ref: account.ref }));
 }
 export async function syncScheduledThe5ers(deadline = Date.now() + 240_000) {
@@ -872,11 +914,7 @@ async function paginatedSource(
 export async function syncSourcePurchases(signal?: AbortSignal) {
   const { connection, client } = await sourceClient(signal);
   const history = await paginatedSource(client, "purchase", "list", "purchases");
-  const values = history.pages.flatMap((page) => {
-    const envelope = record(page),
-      body = record(envelope.data ?? envelope);
-    return Array.isArray(body.purchases) ? body.purchases : [];
-  });
+  const values = sourceRecords(history, "purchases");
   return db.transaction(async (tx) => {
     await assertConnection(connection.id, tx);
     // Serialize source imports so concurrent refresh/cron cannot duplicate ledger writes.
@@ -892,5 +930,87 @@ export async function syncSourcePurchases(signal?: AbortSignal) {
       tx,
     );
     return { ...history, ...result };
+  });
+}
+
+async function fetchAndSavePayouts(
+  client: The5ersMcp,
+  connectionId: string,
+  account: ProviderAccount,
+  id: string,
+) {
+  const history = await paginatedSource(client, "payout", "history", "payouts", {
+    account_ref: account.ref,
+  });
+  const rows = sourceRecords(history, "payouts").map((source) => ({
+    key: payoutKey(id, source),
+    source,
+  }));
+  requireValue(
+    new Set(rows.map((row) => row.key)).size === rows.length,
+    "The5ers payout identities are ambiguous. Previous cash records were retained.",
+  );
+  return db.transaction(async (tx) => {
+    await assertConnection(connectionId, tx);
+    let imported = 0,
+      matched = 0,
+      pending = 0;
+    const results = [];
+    for (const row of rows) {
+      const status = await recordPayoutReceipt(tx, id, row.source);
+      if (status === "imported") imported++;
+      else if (status === "matched") matched++;
+      else pending++;
+      results.push({ ...row, status });
+    }
+    const saved = {
+      ...history,
+      rows: results,
+      imported,
+      matched,
+      pending,
+      retrievedAt: new Date().toISOString(),
+    };
+    await setSetting(`the5ers:payouts:${id}`, JSON.stringify(saved), tx);
+    return saved;
+  });
+}
+
+export async function confirmSourcePayout(
+  id: string,
+  key: string,
+  confirmation: { accountId: string; amount: string; receivedOn: string },
+) {
+  requireValue(
+    (await selectedAccounts()).some((account) => account.id === id),
+    "Choose a selected The5ers account.",
+  );
+  const connection = await accessConnection();
+  return db.transaction(async (tx) => {
+    await assertConnection(connection.id, tx);
+    const selection = JSON.parse((await getSetting(SELECTION_KEY, tx)) ?? "[]") as Selection[];
+    requireValue(
+      selection.some((account) => account.id === id),
+      "The5ers selection changed. Choose a selected account.",
+    );
+    const saved = await getSetting(`the5ers:payouts:${id}`, tx);
+    requireValue(saved, "Load payout history before recording a receipt.");
+    const history = JSON.parse(saved) as {
+      rows: { key: string; source: unknown; status: string }[];
+      pending: number;
+      imported: number;
+      matched: number;
+    };
+    const row = history.rows.find((row) => row.key === key);
+    requireValue(row, "Choose a payout from the saved history.");
+    const status = await recordPayoutReceipt(tx, id, row.source, confirmation);
+    if (row.status === "pending") {
+      history.pending--;
+      if (status === "imported") history.imported++;
+      else history.matched++;
+    }
+    row.status = status;
+    await setSetting(`the5ers:payouts:${id}`, JSON.stringify(history), tx);
+    return { status };
   });
 }

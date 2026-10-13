@@ -4,8 +4,13 @@ import { useEffect, useRef, useState } from "react";
 import { sourceStatus, defaultSourceVisible } from "@/lib/the5ers-status";
 import { useApi, postJson } from "@/lib/use-api";
 import { Badge } from "./ui/badge";
-import { normalizePurchase, sourceInstant, sourceObject } from "@/lib/the5ers-normalize";
-import { fromMinor } from "@/lib/prop-firms";
+import {
+  normalizePurchase,
+  normalizePosition,
+  sourceInstant,
+  sourceObject,
+} from "@/lib/the5ers-normalize";
+import { fromMinor, type PropData } from "@/lib/prop-firms";
 import { fmtMoney } from "@/lib/utils";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
@@ -139,6 +144,181 @@ export function The5ersPurchases({ value, timeZone }: { value: unknown; timeZone
     </div>
   );
 }
+export function The5ersPayouts({
+  value,
+  sourceAccountId,
+}: {
+  value: unknown;
+  sourceAccountId: string;
+}) {
+  const ledger = useApi<PropData>("/api/prop-firms");
+  const [selected, setSelected] = useState<string | null>(null);
+  const [recorded, setRecorded] = useState<Set<string>>(() => new Set());
+  const [accountId, setAccountId] = useState("");
+  const [amount, setAmount] = useState("");
+  const [receivedOn, setReceivedOn] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const privacy = usePrivacy();
+  if (privacy) return <p>Turn off privacy mode to view source data.</p>;
+  const history = obj(value);
+  const rows = (Array.isArray(history.rows) ? history.rows : []) as {
+    key: string;
+    source: unknown;
+    status: string;
+  }[];
+  const accounts = (ledger.data?.accounts ?? []).filter(
+    (a) =>
+      a.firm === "The5ers" &&
+      !a.archived &&
+      ["funded", "instant_funded", "live"].includes(a.program),
+  );
+  const save = async () => {
+    if (!selected) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      await postJson("/api/the5ers", {
+        action: "payout.confirm",
+        id: sourceAccountId,
+        payoutKey: selected,
+        propAccountId: accountId,
+        amount,
+        receivedOn,
+      });
+      setRecorded((saved) => new Set([...saved, selected]));
+      setSelected(null);
+      setNotice("Receipt recorded. Payouts received has been updated.");
+      window.dispatchEvent(new Event("journal-data-changed"));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-muted-foreground">
+        Settled payouts with an explicit net amount and payment date are added to your ledger.
+        Confirm actual money received for other records. Requests alone do not count as cash
+        received.
+      </p>
+      {notice && (
+        <p role="status" className="text-sm">
+          {notice}
+        </p>
+      )}
+      {error && (
+        <p role="alert" className="text-sm">
+          {error}
+        </p>
+      )}
+      {rows.map((row) => (
+        <div key={row.key} className="rounded-md border p-3 space-y-3">
+          <Badge variant="secondary">
+            {row.status === "pending" && !recorded.has(row.key)
+              ? "Confirm settlement"
+              : "Recorded in ledger"}
+          </Badge>
+          <details>
+            <summary className="cursor-pointer text-sm">Payout details</summary>
+            <SourceValue value={row.source} />
+          </details>
+          {row.status === "pending" && !recorded.has(row.key) && selected !== row.key && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy}
+              onClick={() => {
+                setSelected(row.key);
+                setAmount("");
+                setReceivedOn("");
+                setAccountId(accounts.length === 1 ? accounts[0]!.id : "");
+                setError("");
+              }}
+            >
+              Record money received
+            </Button>
+          )}
+          {selected === row.key && (
+            <form
+              className="space-y-3"
+              onSubmit={(e) => {
+                e.preventDefault();
+                void save();
+              }}
+            >
+              <label className="block text-sm">
+                Funded prop account
+                <select
+                  required
+                  aria-label="Funded prop account"
+                  value={accountId}
+                  onChange={(e) => setAccountId(e.target.value)}
+                  className="mt-1 block w-full rounded-md border bg-background p-2"
+                >
+                  <option value="">Choose account</option>
+                  {accounts.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name} ({a.currency})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {!accounts.length && (
+                <p className="text-sm">
+                  Add or link a funded The5ers account in{" "}
+                  <Link href="/prop-firms" className="underline">
+                    Prop firms
+                  </Link>{" "}
+                  first.
+                </p>
+              )}
+              <label className="block text-sm">
+                Actual amount received (after split and fees)
+                <Input
+                  required
+                  aria-label="Actual amount received"
+                  inputMode="decimal"
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                />
+              </label>
+              <label className="block text-sm">
+                Date received
+                <Input
+                  required
+                  aria-label="Date received"
+                  type="date"
+                  max={ledger.data?.today}
+                  value={receivedOn}
+                  onChange={(e) => setReceivedOn(e.target.value)}
+                />
+              </label>
+              <div className="flex gap-2">
+                <Button type="submit" disabled={busy || !accounts.length}>
+                  {busy ? "Recording…" : "Confirm receipt"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => setSelected(null)}
+                >
+                  Cancel
+                </Button>
+              </div>
+            </form>
+          )}
+        </div>
+      ))}
+      {!rows.length && <p className="text-sm">No payout records returned.</p>}
+    </div>
+  );
+}
+
 function useSource() {
   const state = useApi<Overview>("/api/the5ers");
   const [busy, setBusy] = useState(false),
@@ -661,7 +841,9 @@ function SnapshotPanels({
   section?: string;
   query?: string;
 }) {
-  const [detail, setDetail] = useState<{ title: string; data: unknown } | null>(null);
+  const [detail, setDetail] = useState<{ title: string; data: unknown; accountId?: string } | null>(
+    null,
+  );
   useEffect(() => setDetail(null), [view, section, query]);
   const params = new URLSearchParams(query);
   const selected = params.get("accounts")?.split(",").filter(Boolean) ?? [];
@@ -681,8 +863,9 @@ function SnapshotPanels({
         ...(id ? { id } : {}),
         ...(key ? { positionKey: key } : {}),
       });
-      setDetail({ title, data: result.data });
-      if (resource === "purchases") window.dispatchEvent(new Event("journal-data-changed"));
+      setDetail({ title, data: result.data, accountId: id });
+      if (resource === "purchases" || resource === "payoutHistory")
+        window.dispatchEvent(new Event("journal-data-changed"));
     });
   useEffect(() => {
     if (view === "prop" && section === "ledger" && state.data?.connected && !selected.length)
@@ -706,13 +889,17 @@ function SnapshotPanels({
               ? ["balance"]
               : view === "prop"
                 ? section === "payouts"
-                  ? ["payout"]
+                  ? ["payout", "payoutHistory"]
                   : section === "ledger"
                     ? []
                     : ["rules", "consistency", "performance"]
                 : [];
-          const positions = obj(sections.positions?.data).rows as
+          const sourcePositions = obj(sections.positions?.data).rows as
             { key: string; hasDetails: boolean; source: unknown }[] | undefined;
+          const positions =
+            view === "trades" && snapshot?.journaledPositions !== undefined
+              ? sourcePositions?.filter((position) => !normalizePosition(position.source))
+              : sourcePositions;
           return (
             <Card key={a.id}>
               <CardHeader>
@@ -725,6 +912,12 @@ function SnapshotPanels({
                     : "Not refreshed yet"}{" "}
                   · {a.autoSync ? "Daily refresh" : "Manual refresh"}
                 </p>
+                {snapshot?.importedPositions !== undefined && (
+                  <p className="text-xs text-muted-foreground">
+                    {snapshot.importedPositions} new trades · {snapshot.updatedPositions ?? 0}{" "}
+                    updated · {snapshot.unchangedPositions ?? 0} unchanged
+                  </p>
+                )}
                 {view !== "dashboard" && (
                   <Button
                     variant="outline"
@@ -765,6 +958,8 @@ function SnapshotPanels({
                               value={sections[name].data}
                               currency={account?.currency}
                             />
+                          ) : name === "payoutHistory" ? (
+                            <The5ersPayouts value={sections[name].data} sourceAccountId={a.id} />
                           ) : (
                             <details>
                               <summary className="cursor-pointer text-sm">
@@ -905,7 +1100,7 @@ function SnapshotPanels({
               <p className="text-xs text-muted-foreground">
                 {section === "ledger"
                   ? "Verified completed purchases are included in your spending. Records needing review remain separate."
-                  : "Payout requests are not cash received. This source omits cancelled and reversed requests."}
+                  : "Record actual settlements below to include them in Payouts received. Provider history omits cancelled and reversed requests."}
               </p>
             )}
             {obj(detail.data).complete === false && (
@@ -913,6 +1108,8 @@ function SnapshotPanels({
             )}
             {detail.title === "Purchases & fees" ? (
               <The5ersPurchases value={detail.data} timeZone={state.data?.timeZone ?? "UTC"} />
+            ) : detail.title === "Payout history" && detail.accountId ? (
+              <The5ersPayouts value={detail.data} sourceAccountId={detail.accountId} />
             ) : (
               <details>
                 <summary className="cursor-pointer text-sm">View records</summary>
