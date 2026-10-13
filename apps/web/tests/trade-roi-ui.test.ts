@@ -106,6 +106,6 @@ it("shows position and commission clearly and hides an unavailable ROI column fo
   expect(headers).toContain("Fees");
   expect(headers).not.toContain("Net ROI");
   expect(container.textContent).toContain("Short");
-  expect(container.textContent).toContain("$2.08");
+  expect(container.textContent).toContain("-$2.08");
   expect(container.textContent).not.toContain("Connected records");
 });

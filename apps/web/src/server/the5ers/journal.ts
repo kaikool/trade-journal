@@ -68,12 +68,10 @@ function journalTradeRow(
     grossPnl:
       position.netPnl +
       (position.fee !== undefined && position.swap !== undefined
-        ? Math.abs(position.fee) - position.swap
+        ? -position.fee - position.swap
         : 0),
     fees:
-      position.fee !== undefined && position.swap !== undefined
-        ? Math.abs(position.fee) - position.swap
-        : 0,
+      position.fee !== undefined && position.swap !== undefined ? -position.fee - position.swap : 0,
     netPnl: position.netPnl,
     executionCount: 0,
     executionIdsJson: "[]",

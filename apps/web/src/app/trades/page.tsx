@@ -208,7 +208,7 @@ function Trades() {
           row.source === "the5ers"
             ? row.reportedFee === undefined
               ? undefined
-              : Math.abs(row.reportedFee)
+              : row.reportedFee
             : row.fees,
         header: "Fees",
         cell: ({ getValue }) => (

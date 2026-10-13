@@ -221,7 +221,7 @@ function TradeView({ tradeKey }: { tradeKey: string }) {
                 label={trade.source === "the5ers" ? "Commission" : "Fees"}
                 value={fmtMoney(
                   trade.source === "the5ers" && trade.reportedFee !== undefined
-                    ? Math.abs(trade.reportedFee)
+                    ? trade.reportedFee
                     : trade.fees,
                   trade.currency,
                 )}

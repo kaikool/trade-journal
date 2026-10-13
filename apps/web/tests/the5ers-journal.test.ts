@@ -258,7 +258,8 @@ it("keeps distinct MT5 tickets when each arrives in a separate window", async ()
 it("reconstructs gross from signed commission and swap without changing net, including positive swap credits", async () => {
   await save([
     { ...position, symbol: "XAUUSD", profitAndLoss: -49.33, fee: -2.08, swap: 0 },
-    { ...position, symbol: "USDJPY", fee: 2, swap: 5 },
+    { ...position, symbol: "USDJPY", fee: -2, swap: 5 },
+    { ...position, symbol: "AUDUSD", fee: 2, swap: 0 },
   ]);
   const rows = (await queryTrades()).rows;
   const gold = rows.find((r) => r.symbol === "XAUUSD")!;
@@ -268,6 +269,13 @@ it("reconstructs gross from signed commission and swap without changing net, inc
   const credited = rows.find((r) => r.symbol === "USDJPY")!;
   expect(credited.fees).toBe(-3);
   expect(credited.grossPnl).toBe(94);
+  const rebate = rows.find((r) => r.symbol === "AUDUSD")!;
+  expect(rebate.reportedFee).toBe(2);
+  expect(rebate.fees).toBe(-2);
+  expect(rebate.grossPnl).toBe(95);
+  for (const row of rows)
+    expect(row.grossPnl + row.reportedFee! + row.reportedSwap!).toBeCloseTo(row.netPnl);
+
   await save([{ ...position, symbol: "GBPUSD", swap: undefined }], false);
   expect((await queryTrades()).rows.find((r) => r.symbol === "GBPUSD")!.costsUnavailable).toBe(
     true,
