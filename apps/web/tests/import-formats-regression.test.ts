@@ -10,7 +10,7 @@ const { POST } = await import("../src/app/api/import/route");
 const post = (body: object) =>
   POST(new Request("http://localhost/api/import", { method: "POST", body: JSON.stringify(body) }));
 beforeEach(async () => {
-  vi.stubEnv("JOURNAL_PASSWORD", "");
+  vi.stubEnv("JOURNAL_PASSWORD", "authenticated-test-fixture");
   await db.delete(trades);
   await db.delete(executions);
   await db.delete(accounts);
@@ -184,4 +184,20 @@ it("blocks reimports over rounded fractional timestamps without affecting manual
   expect(response.status).toBe(400);
   expect(await db.select().from(executions)).toEqual(before);
   expect((await insertExecutions("test", parsed.executions, "manual")).inserted).toBe(2);
+});
+
+vi.mock("next/headers", async () => {
+  const { createHmac } = await import("node:crypto");
+  return {
+    cookies: async () => ({
+      get: () =>
+        process.env.JOURNAL_PASSWORD === "authenticated-test-fixture"
+          ? {
+              value: createHmac("sha256", "authenticated-test-fixture")
+                .update("session-v1")
+                .digest("hex"),
+            }
+          : undefined,
+    }),
+  };
 });

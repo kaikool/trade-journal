@@ -30,7 +30,7 @@ const rows: ImportedExecution[] = [
 ];
 
 beforeEach(async () => {
-  vi.stubEnv("JOURNAL_PASSWORD", "");
+  vi.stubEnv("JOURNAL_PASSWORD", "authenticated-test-fixture");
   await db.delete(trades);
   await db.delete(executions);
   await db.delete(accounts);
@@ -198,4 +198,20 @@ describe("execution storage preserves a coherent journal", () => {
     const [saved] = await db.select().from(trades).limit(1);
     expect(saved).toMatchObject({ notes: existing, status: "open" });
   });
+});
+
+vi.mock("next/headers", async () => {
+  const { createHmac } = await import("node:crypto");
+  return {
+    cookies: async () => ({
+      get: () =>
+        process.env.JOURNAL_PASSWORD === "authenticated-test-fixture"
+          ? {
+              value: createHmac("sha256", "authenticated-test-fixture")
+                .update("session-v1")
+                .digest("hex"),
+            }
+          : undefined,
+    }),
+  };
 });

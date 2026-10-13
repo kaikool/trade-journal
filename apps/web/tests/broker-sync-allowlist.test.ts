@@ -62,3 +62,18 @@ afterAll(async () => {
   vi.unstubAllEnvs();
   await testDatabase.close();
 });
+
+// Route fixtures authenticate with a real signed session.
+vi.stubEnv("JOURNAL_PASSWORD", "authenticated-test-fixture");
+vi.mock("next/headers", async () => {
+  const { createHmac } = await import("node:crypto");
+  return {
+    cookies: async () => ({
+      get: () => ({
+        value: createHmac("sha256", "authenticated-test-fixture")
+          .update("session-v1")
+          .digest("hex"),
+      }),
+    }),
+  };
+});

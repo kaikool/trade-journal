@@ -15,7 +15,21 @@ import {
 const originalDir = process.env.JOURNAL_DATA_DIR;
 const scratch = mkdtempSync(join(tmpdir(), "journal-prop-test-"));
 process.env.JOURNAL_DATA_DIR = scratch;
-vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => undefined }) }));
+vi.mock("next/headers", async () => {
+  const { createHmac } = await import("node:crypto");
+  return {
+    cookies: async () => ({
+      get: () =>
+        process.env.JOURNAL_PASSWORD === "authenticated-test-fixture"
+          ? {
+              value: createHmac("sha256", "authenticated-test-fixture")
+                .update("session-v1")
+                .digest("hex"),
+            }
+          : undefined,
+    }),
+  };
+});
 const {
   db,
   propAccounts,
@@ -102,7 +116,7 @@ beforeEach(() => {
   db.delete(propAccounts).run();
   db.delete(accounts).run();
   db.delete(settings).run();
-  vi.stubEnv("JOURNAL_PASSWORD", "");
+  vi.stubEnv("JOURNAL_PASSWORD", "authenticated-test-fixture");
 });
 afterEach(() => vi.unstubAllEnvs());
 afterAll(() => {

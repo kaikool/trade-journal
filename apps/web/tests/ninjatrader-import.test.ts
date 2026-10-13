@@ -53,7 +53,7 @@ const csv = (rows: string[]) =>
 const accountTrades = () => db.select().from(trades).where(eq(trades.accountId, "test"));
 
 beforeEach(async () => {
-  vi.stubEnv("JOURNAL_PASSWORD", "");
+  vi.stubEnv("JOURNAL_PASSWORD", "authenticated-test-fixture");
   await db.delete(trades);
   await db.delete(executions);
   await db.delete(accounts);
@@ -258,4 +258,20 @@ describe("NinjaTrader imports through preview, storage and rebuild", () => {
     expect((await commit()).status).toBe(200);
     expect((await accountTrades()).reduce((sum, t) => sum + t.netPnl, 0)).toBe(5265);
   });
+});
+
+vi.mock("next/headers", async () => {
+  const { createHmac } = await import("node:crypto");
+  return {
+    cookies: async () => ({
+      get: () =>
+        process.env.JOURNAL_PASSWORD === "authenticated-test-fixture"
+          ? {
+              value: createHmac("sha256", "authenticated-test-fixture")
+                .update("session-v1")
+                .digest("hex"),
+            }
+          : undefined,
+    }),
+  };
 });

@@ -33,7 +33,8 @@ export const handler =
   ) =>
   async (...args: A): Promise<Response> => {
     try {
-      if (!options.public && passwordConfigured()) {
+      if (!passwordConfigured()) return bad("JOURNAL_PASSWORD is required", 503);
+      if (!options.public) {
         const token = (await cookies()).get(AUTH_COOKIE)?.value;
         if (!verifySession(token)) return bad("Unauthorized", 401);
       }

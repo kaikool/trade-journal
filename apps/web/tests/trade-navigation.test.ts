@@ -36,7 +36,7 @@ const navigate = (tradeKey: string, query = "") =>
   );
 
 beforeEach(async () => {
-  vi.stubEnv("JOURNAL_PASSWORD", "");
+  vi.stubEnv("JOURNAL_PASSWORD", "authenticated-test-fixture");
   await db.delete(trades);
   await db.delete(executions);
   await db.delete(accounts);
@@ -116,4 +116,20 @@ it("uses the journal timezone for date boundaries", async () => {
 
 it("returns 404 for an unknown trade", async () => {
   expect((await navigate("missing")).status).toBe(404);
+});
+
+vi.mock("next/headers", async () => {
+  const { createHmac } = await import("node:crypto");
+  return {
+    cookies: async () => ({
+      get: () =>
+        process.env.JOURNAL_PASSWORD === "authenticated-test-fixture"
+          ? {
+              value: createHmac("sha256", "authenticated-test-fixture")
+                .update("session-v1")
+                .digest("hex"),
+            }
+          : undefined,
+    }),
+  };
 });

@@ -12,7 +12,7 @@ const { GET } = await import("../src/app/api/trades/route");
 const { GET: detail } = await import("../src/app/api/trades/[key]/route");
 
 beforeEach(async () => {
-  vi.stubEnv("JOURNAL_PASSWORD", "");
+  vi.stubEnv("JOURNAL_PASSWORD", "authenticated-test-fixture");
   await db.delete(trades);
   await db.delete(accounts);
   await db.delete(settings);
@@ -78,4 +78,20 @@ it("keeps multipliers attached to their symbols after filtering", async () => {
   const body = await response.json();
   expect(body.trades).toHaveLength(1);
   expect(body.trades[0]).toMatchObject({ symbol: "SPREAD", contractMultiplier: 100 });
+});
+
+vi.mock("next/headers", async () => {
+  const { createHmac } = await import("node:crypto");
+  return {
+    cookies: async () => ({
+      get: () =>
+        process.env.JOURNAL_PASSWORD === "authenticated-test-fixture"
+          ? {
+              value: createHmac("sha256", "authenticated-test-fixture")
+                .update("session-v1")
+                .digest("hex"),
+            }
+          : undefined,
+    }),
+  };
 });

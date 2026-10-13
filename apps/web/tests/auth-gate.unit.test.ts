@@ -14,7 +14,7 @@ afterEach(() => {
   cookieValue = undefined;
 });
 
-describe("optional password protection", () => {
+describe("required password protection", () => {
   it("a forged session cookie is rejected when a password is configured", async () => {
     process.env.JOURNAL_PASSWORD = "correct-horse";
     cookieValue = "totally-forged";
@@ -32,8 +32,8 @@ describe("optional password protection", () => {
     expect((await route()).status).toBe(200);
   });
 
-  it("without a password the journal is open, as documented", async () => {
-    expect((await route()).status).toBe(200);
+  it("without a password the journal is unavailable", async () => {
+    expect((await route()).status).toBe(503);
   });
 
   it("a route marked public skips the gate so login itself can work", async () => {

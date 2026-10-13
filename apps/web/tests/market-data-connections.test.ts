@@ -41,7 +41,8 @@ beforeEach(async () => {
     "OANDA_ENVIRONMENT",
   ])
     vi.stubEnv(name, "");
-  vi.stubEnv("JOURNAL_PASSWORD", "");
+  vi.stubEnv("JOURNAL_PASSWORD", "authenticated-test-fixture");
+  session.token = (await import("../src/server/auth")).sessionToken();
   vi.stubEnv("JOURNAL_SECRET", "fixture-market-data-secret");
 });
 

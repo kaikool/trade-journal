@@ -4,8 +4,22 @@ import { createTestDatabase } from "./helpers/postgres";
 const testDatabase = await createTestDatabase();
 (globalThis as { __journalTestDb?: unknown }).__journalTestDb = testDatabase.db;
 vi.resetModules();
-vi.stubEnv("JOURNAL_PASSWORD", "");
-vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => undefined }) }));
+vi.stubEnv("JOURNAL_PASSWORD", "authenticated-test-fixture");
+vi.mock("next/headers", async () => {
+  const { createHmac } = await import("node:crypto");
+  return {
+    cookies: async () => ({
+      get: () =>
+        process.env.JOURNAL_PASSWORD === "authenticated-test-fixture"
+          ? {
+              value: createHmac("sha256", "authenticated-test-fixture")
+                .update("session-v1")
+                .digest("hex"),
+            }
+          : undefined,
+    }),
+  };
+});
 const { POST, GET } = await import("../src/app/api/accounts/route");
 const { db, executions, trades } = await import("../src/db");
 const { insertExecutions } = await import("../src/server/executions");

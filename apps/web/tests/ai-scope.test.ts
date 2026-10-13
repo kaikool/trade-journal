@@ -41,7 +41,7 @@ const fills = (symbol: string, exit: number, date = "2026-09-15") => [
 ];
 const prompt = () => vi.mocked(runAi).mock.calls.at(-1)![0];
 beforeEach(async () => {
-  vi.stubEnv("JOURNAL_PASSWORD", "");
+  vi.stubEnv("JOURNAL_PASSWORD", "authenticated-test-fixture");
   await db.delete(trades);
   await db.delete(executions);
   await db.delete(accounts);
@@ -322,4 +322,20 @@ it("keeps single-trade critique scoped to its key", async () => {
   expect((await critique(request({ key: selectedTrades[0]!.key }))).status).toBe(200);
   expect(prompt()).toContain("ONLY_A");
   expect(prompt()).not.toContain("ONLY_B");
+});
+
+vi.mock("next/headers", async () => {
+  const { createHmac } = await import("node:crypto");
+  return {
+    cookies: async () => ({
+      get: () =>
+        process.env.JOURNAL_PASSWORD === "authenticated-test-fixture"
+          ? {
+              value: createHmac("sha256", "authenticated-test-fixture")
+                .update("session-v1")
+                .digest("hex"),
+            }
+          : undefined,
+    }),
+  };
 });

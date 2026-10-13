@@ -10,7 +10,21 @@ const { getAiKey, getAiModel, getAiProvider, setSetting, getSetting } =
 const { GET, PATCH } = await import("../src/app/api/settings/route");
 const { GET: exportData } = await import("../src/app/api/export/route");
 const { aiConfigured, runAi } = await import("../src/server/ai");
-vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => undefined }) }));
+vi.mock("next/headers", async () => {
+  const { createHmac } = await import("node:crypto");
+  return {
+    cookies: async () => ({
+      get: () =>
+        process.env.JOURNAL_PASSWORD === "authenticated-test-fixture"
+          ? {
+              value: createHmac("sha256", "authenticated-test-fixture")
+                .update("session-v1")
+                .digest("hex"),
+            }
+          : undefined,
+    }),
+  };
+});
 
 const request = (body: unknown) =>
   new Request("http://localhost/api/settings", {
@@ -25,7 +39,7 @@ beforeEach(async () => {
   await db.delete(settings);
   vi.stubEnv("ANTHROPIC_API_KEY", "");
   vi.stubEnv("OPENAI_API_KEY", "");
-  vi.stubEnv("JOURNAL_PASSWORD", "");
+  vi.stubEnv("JOURNAL_PASSWORD", "authenticated-test-fixture");
   vi.stubEnv("JOURNAL_SECRET", "fixture-ai-settings-secret");
   vi.stubGlobal(
     "fetch",

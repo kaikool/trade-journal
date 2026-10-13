@@ -8,8 +8,22 @@ const testDatabase = await createTestDatabase();
 (globalThis as { __journalTestDb?: unknown }).__journalTestDb = testDatabase.db;
 vi.resetModules();
 
-vi.stubEnv("JOURNAL_PASSWORD", "");
-vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => undefined }) }));
+vi.stubEnv("JOURNAL_PASSWORD", "authenticated-test-fixture");
+vi.mock("next/headers", async () => {
+  const { createHmac } = await import("node:crypto");
+  return {
+    cookies: async () => ({
+      get: () =>
+        process.env.JOURNAL_PASSWORD === "authenticated-test-fixture"
+          ? {
+              value: createHmac("sha256", "authenticated-test-fixture")
+                .update("session-v1")
+                .digest("hex"),
+            }
+          : undefined,
+    }),
+  };
+});
 const { db, accounts, executions, trades, settings } = await import("../src/db");
 const { setSetting, getTimeZone, getImportTimeZone } = await import("../src/server/settings");
 const { POST: importFile } = await import("../src/app/api/import/route");

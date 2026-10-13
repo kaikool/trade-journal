@@ -1,18 +1,29 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-/**
- * Auth guard (only active when JOURNAL_PASSWORD is set). The session cookie is
- * validated for presence here and cryptographically in API handlers — the
- * middleware runtime has no Node crypto, so it gates navigation while the
- * handlers gate data.
- */
-export const middleware = (request: NextRequest) => {
-  if (!process.env.JOURNAL_PASSWORD) return NextResponse.next();
+/** Fail closed before navigation or API access, using Edge-compatible Web Crypto. */
+export const middleware = async (request: NextRequest) => {
+  const password = process.env.JOURNAL_PASSWORD;
+  if (!password?.trim()) {
+    return NextResponse.json({ error: "JOURNAL_PASSWORD is required" }, { status: 503 });
+  }
   const { pathname } = request.nextUrl;
   if (pathname === "/login" || pathname === "/api/auth") return NextResponse.next();
-  const cookie = request.cookies.get("journal_session")?.value;
-  if (!cookie) {
-    if (pathname.startsWith("/api/")) {
+  const token = request.cookies.get("journal_session")?.value;
+  let valid = false;
+  if (token && /^[a-f0-9]{64}$/.test(token)) {
+    const encoder = new TextEncoder();
+    const key = await crypto.subtle.importKey(
+      "raw",
+      encoder.encode(password),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["verify"],
+    );
+    const signature = Uint8Array.from(token.match(/../g)!, (byte) => parseInt(byte, 16));
+    valid = await crypto.subtle.verify("HMAC", key, signature, encoder.encode("session-v1"));
+  }
+  if (!valid) {
+    if (pathname === "/api" || pathname.startsWith("/api/")) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
     return NextResponse.redirect(new URL("/login", request.url));

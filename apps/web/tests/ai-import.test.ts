@@ -59,7 +59,7 @@ const modelResult = (output: unknown, finishReason = "stop") =>
     .mocked(generateText)
     .mockResolvedValue({ output, finishReason } as Awaited<ReturnType<typeof generateText>>);
 beforeEach(async () => {
-  vi.stubEnv("JOURNAL_PASSWORD", "");
+  vi.stubEnv("JOURNAL_PASSWORD", "authenticated-test-fixture");
   vi.stubEnv("JOURNAL_SECRET", "fixture-ai-import-secret");
   vi.stubEnv("OPENAI_API_KEY", "");
   vi.stubEnv("ANTHROPIC_API_KEY", "");
@@ -199,4 +199,20 @@ it("fails closed on truncated model output and sanitizes provider errors", async
   const response = await request({ ...base, mode: "preview" });
   expect(JSON.stringify(await response.json())).not.toContain("private-key");
   expect(await db.select().from(executions)).toHaveLength(0);
+});
+
+vi.mock("next/headers", async () => {
+  const { createHmac } = await import("node:crypto");
+  return {
+    cookies: async () => ({
+      get: () =>
+        process.env.JOURNAL_PASSWORD === "authenticated-test-fixture"
+          ? {
+              value: createHmac("sha256", "authenticated-test-fixture")
+                .update("session-v1")
+                .digest("hex"),
+            }
+          : undefined,
+    }),
+  };
 });

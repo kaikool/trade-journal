@@ -56,7 +56,7 @@ const state = async () => ({
   attachments: await db.select().from(attachments),
 });
 beforeEach(async () => {
-  vi.stubEnv("JOURNAL_PASSWORD", "");
+  vi.stubEnv("JOURNAL_PASSWORD", "authenticated-test-fixture");
   await db.delete(attachments);
   await db.delete(trades);
   await db.delete(executions);
@@ -564,4 +564,20 @@ describe("NinjaTrader overlapping exports and chronology", () => {
     expect(plan.conflicts.join(" ")).toContain("invalid execution rows");
     expect((await commit(broken)).status).toBe(400);
   });
+});
+
+vi.mock("next/headers", async () => {
+  const { createHmac } = await import("node:crypto");
+  return {
+    cookies: async () => ({
+      get: () =>
+        process.env.JOURNAL_PASSWORD === "authenticated-test-fixture"
+          ? {
+              value: createHmac("sha256", "authenticated-test-fixture")
+                .update("session-v1")
+                .digest("hex"),
+            }
+          : undefined,
+    }),
+  };
 });

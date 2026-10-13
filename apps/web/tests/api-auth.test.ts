@@ -11,10 +11,14 @@ afterEach(() => {
   session.token = undefined;
 });
 
-describe("optional journal password protection", () => {
-  it("permits local access when no password is configured", async () => {
-    vi.stubEnv("JOURNAL_PASSWORD", "");
-    expect((await handler(() => ok({ data: true }))()).status).toBe(200);
+describe("required journal password protection", () => {
+  it.each([undefined, "", "   "])("blocks handlers when password is %s", async (password) => {
+    vi.stubEnv("JOURNAL_PASSWORD", password);
+    const action = vi.fn(() => ok({ secret: true }));
+    for (const options of [{}, { public: true }]) {
+      expect((await handler(action, options)()).status).toBe(503);
+    }
+    expect(action).not.toHaveBeenCalled();
   });
   it("rejects both missing and forged cookies before executing any handler", async () => {
     vi.stubEnv("JOURNAL_PASSWORD", "test-password");
@@ -39,7 +43,8 @@ describe("optional journal password protection", () => {
     expect((await handler(() => ok({ login: true }), { public: true })()).status).toBe(200);
   });
   it("logs the database cause without returning SQL or parameters to the client", async () => {
-    vi.stubEnv("JOURNAL_PASSWORD", "");
+    vi.stubEnv("JOURNAL_PASSWORD", "test-password");
+    session.token = sessionToken();
     const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const cause = Object.assign(new Error("password authentication failed for user postgres"), {
       code: "28P01",
