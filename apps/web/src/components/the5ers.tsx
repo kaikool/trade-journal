@@ -292,7 +292,26 @@ export function The5ersAccounts({ onLinked }: { onLinked?: () => void }) {
         <CardTitle>The5ers accounts</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
-        <Messages state={state} />
+        {state.error && (
+          <div role="alert" className="rounded-lg border p-3 text-sm">
+            <p className="font-medium">We couldn’t complete this request</p>
+            <p className="mt-1">
+              Try again. If it keeps happening, check your The5ers connection in Settings.
+            </p>
+            <details className="mt-2">
+              <summary className="cursor-pointer">Technical details</summary>
+              <p className="mt-1 break-words">{state.error}</p>
+            </details>
+          </div>
+        )}
+        {state.notice && (
+          <p role="status" className="text-sm">
+            {state.notice}
+          </p>
+        )}
+        <p className="text-sm text-muted-foreground">
+          Choose your The5ers accounts, then link them to your journal.
+        </p>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" disabled={state.busy} onClick={() => void load()}>
             Refresh account list
@@ -306,17 +325,17 @@ export function The5ersAccounts({ onLinked }: { onLinked?: () => void }) {
             <div className="flex flex-wrap items-center gap-3">
               <Input
                 aria-label="Search The5ers accounts"
-                placeholder="Search account or platform"
+                placeholder="Search accounts"
                 value={search}
                 onChange={(e) => {
                   setSearch(e.target.value);
                   setPage(0);
                 }}
-                className="max-w-sm"
+                className="w-full sm:max-w-sm"
               />
               <select
                 aria-label="Filter The5ers account status"
-                className="rounded-md border bg-background p-2 text-sm"
+                className="w-full rounded-md border bg-background p-2 text-sm sm:w-auto"
                 value={statusFilter}
                 onChange={(e) => {
                   setStatusFilter(e.target.value);
@@ -337,111 +356,136 @@ export function The5ersAccounts({ onLinked }: { onLinked?: () => void }) {
               </select>
             </div>
             {!coverage.complete && (
-              <p role="alert" className="text-sm text-destructive">
-                Account list incomplete. {coverage.warnings.join(" ")} Linking is disabled until
-                coverage is confirmed.
-              </p>
+              <div
+                role="alert"
+                className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100"
+              >
+                <p className="font-medium">Some accounts could not be loaded</p>
+                <p className="mt-1">
+                  You can browse the accounts below. Retry loading the list before saving your
+                  links. Your saved links are unchanged.
+                </p>
+                <Button
+                  className="mt-3"
+                  size="sm"
+                  variant="outline"
+                  disabled={state.busy}
+                  onClick={() => void load()}
+                >
+                  Retry loading
+                </Button>
+                <details className="mt-2">
+                  <summary className="cursor-pointer">Technical details</summary>
+                  <p className="mt-1 break-words">{coverage.warnings.join(" ")}</p>
+                </details>
+              </div>
             )}
             <p className="text-sm text-muted-foreground">
-              {rows.length} matching / {inventory.length} accounts · {chosen.length} selected
-              (maximum 10)
+              Showing {rows.length} of {inventory.length} loaded accounts · {chosen.length} of 10
+              selected
             </p>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-sm">
-                <thead>
-                  <tr className="border-b">
-                    <th className="p-2">Select</th>
-                    <th className="p-2">Account</th>
-                    <th className="p-2">Status</th>
-                    <th className="p-2">Journal link</th>
-                    <th className="p-2">Balance</th>
-                    <th className="p-2">Effective balance</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.slice(page * 20, page * 20 + 20).map((a) => (
-                    <tr key={a.id} className="border-b">
-                      <td className="p-2">
-                        <Checkbox
-                          aria-label={`Select ${a.label}`}
-                          checked={chosen.includes(a.id)}
-                          disabled={state.busy || (!chosen.includes(a.id) && chosen.length >= 10)}
-                          onCheckedChange={(v) =>
-                            setChosen((current) =>
-                              v === true ? [...current, a.id] : current.filter((id) => id !== a.id),
-                            )
-                          }
-                        />
-                      </td>
-                      <td className="p-2">
-                        <div>{a.label}</div>
-                        <div className="text-xs text-muted-foreground">
-                          {a.platform} · {a.program ?? "Program unavailable"} ·{" "}
-                          {a.createdAt.slice(0, 10)}
-                        </div>
-                      </td>
-                      <td className="p-2">{a.status ?? "Unavailable"}</td>
-                      <td className="p-2">
-                        <select
-                          aria-label={`Journal account for ${a.label}`}
-                          className="max-w-40 rounded-md border bg-background p-2"
-                          value={links[a.id] ?? ""}
-                          onChange={(e) =>
-                            setLinks((current) => ({ ...current, [a.id]: e.target.value }))
-                          }
-                        >
-                          <option value="">Create account</option>
-                          {journal.data?.accounts
-                            .filter((j) => j.currency === a.currency)
-                            .map((j) => (
-                              <option key={j.id} value={j.id}>
-                                {j.name}
-                              </option>
-                            ))}
-                        </select>
-                      </td>
-                      <td className="p-2">
+            <div className="grid gap-3 lg:grid-cols-2">
+              {rows.slice(page * 20, page * 20 + 20).map((a) => (
+                <div key={a.id} className="min-w-0 rounded-lg border p-4 space-y-4">
+                  <div className="flex items-start gap-3">
+                    <Checkbox
+                      className="mt-1"
+                      aria-label={`Select ${a.label}`}
+                      checked={chosen.includes(a.id)}
+                      disabled={state.busy || (!chosen.includes(a.id) && chosen.length >= 10)}
+                      onCheckedChange={(v) =>
+                        setChosen((current) =>
+                          v === true ? [...current, a.id] : current.filter((id) => id !== a.id),
+                        )
+                      }
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="break-words font-medium">{a.label}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {a.program ?? a.platform} · {a.createdAt.slice(0, 10)}
+                      </p>
+                    </div>
+                    <span className="shrink-0 rounded-full bg-muted px-2 py-1 text-xs">
+                      {heading(a.status ?? "Unknown")}
+                    </span>
+                  </div>
+                  <dl className="grid grid-cols-2 gap-3 text-sm">
+                    <div className="min-w-0">
+                      <dt className="text-xs text-muted-foreground">Balance</dt>
+                      <dd className="break-words font-medium">
                         <MonetaryValue>
                           {cash(accountValue(a, "balance"), a.currency)}
                         </MonetaryValue>
-                      </td>
-                      <td className="p-2">
+                      </dd>
+                    </div>
+                    <div className="min-w-0">
+                      <dt className="text-xs text-muted-foreground">Effective balance</dt>
+                      <dd className="break-words font-medium">
                         <MonetaryValue>
                           {cash(
                             accountValue(a, "effectiveBalance", "effective_balance", "equity"),
                             a.currency,
                           )}
                         </MonetaryValue>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                      </dd>
+                    </div>
+                  </dl>
+                  {chosen.includes(a.id) && (
+                    <label className="block space-y-1 text-sm">
+                      <span>Link to journal account</span>
+                      <select
+                        aria-label={`Journal account for ${a.label}`}
+                        className="w-full min-w-0 rounded-md border bg-background p-2"
+                        value={links[a.id] ?? ""}
+                        onChange={(e) =>
+                          setLinks((current) => ({ ...current, [a.id]: e.target.value }))
+                        }
+                      >
+                        <option value="">Create a new journal account</option>
+                        {journal.data?.accounts
+                          .filter((j) => j.currency === a.currency)
+                          .map((j) => (
+                            <option key={j.id} value={j.id}>
+                              {j.name}
+                            </option>
+                          ))}
+                      </select>
+                    </label>
+                  )}
+                </div>
+              ))}
+              {!rows.length && (
+                <p className="py-6 text-sm text-muted-foreground">
+                  No accounts match these filters. Try another status or clear your search.
+                </p>
+              )}
             </div>
-            <div className="flex items-center gap-3">
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={!page}
-                onClick={() => setPage(page - 1)}
-              >
-                Previous
-              </Button>
-              <span className="text-sm">
-                Page {page + 1} / {Math.max(1, Math.ceil(rows.length / 20))}
-              </span>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={(page + 1) * 20 >= rows.length}
-                onClick={() => setPage(page + 1)}
-              >
-                Next
-              </Button>
-            </div>
+            {rows.length > 20 && (
+              <div className="flex items-center justify-between gap-3">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!page}
+                  onClick={() => setPage(page - 1)}
+                >
+                  Previous
+                </Button>
+                <span className="text-sm">
+                  Page {page + 1} / {Math.max(1, Math.ceil(rows.length / 20))}
+                </span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={(page + 1) * 20 >= rows.length}
+                  onClick={() => setPage(page + 1)}
+                >
+                  Next
+                </Button>
+              </div>
+            )}
             <label className="flex items-center gap-2 text-sm">
               <Checkbox checked={auto} onCheckedChange={(v) => setAuto(v === true)} />
-              Daily source refresh for active accounts only
+              Automatically refresh active accounts daily
             </label>
             <Button
               disabled={state.busy || !coverage.complete}
@@ -465,12 +509,18 @@ export function The5ersAccounts({ onLinked }: { onLinked?: () => void }) {
                 })
               }
             >
-              Save and link selected accounts
+              {state.busy ? "Please wait…" : `Save links (${chosen.length})`}
             </Button>
-            <p className="text-xs text-muted-foreground">
-              Current balances do not set initial capital. Linking makes accounts available to
-              journal filters; source executions are not yet imported into trade analytics.
-            </p>
+            <div className="text-xs text-muted-foreground">
+              Linked accounts appear in your journal filters. Trade history is not imported yet.
+              <details className="mt-2">
+                <summary className="cursor-pointer">About balances</summary>
+                <p className="mt-1">
+                  These are balances reported by The5ers. Your journal’s initial capital stays
+                  unchanged.
+                </p>
+              </details>
+            </div>
           </>
         )}
       </CardContent>
