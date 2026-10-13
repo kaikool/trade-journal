@@ -27,6 +27,10 @@ interface Overview {
   error?: string;
   selection: Selection[];
   snapshots: SourceSnapshot[];
+  cashSnapshots?: SourceSnapshot[];
+  cashSelection?: Selection[];
+  cash?: { complete: boolean; failures: { id: string; label: string }[] } | null;
+  purchases?: unknown;
 }
 const heading = (name: string) =>
   name
@@ -315,12 +319,7 @@ export function The5ersPayouts({
           )}
         </div>
       ))}
-      {!rows.length && (
-        <p className="text-sm">
-          No payouts returned for this selected account. Choose the account that received your
-          payout to check its payment history.
-        </p>
-      )}
+      {!rows.length && <p className="text-sm">No payouts returned for this account.</p>}
     </div>
   );
 }
@@ -913,12 +912,16 @@ function SnapshotPanels({
   useEffect(() => setDetail(null), [view, section, query]);
   const params = new URLSearchParams(query);
   const selected = params.get("accounts")?.split(",").filter(Boolean) ?? [];
-  const snapshots = (state.data?.snapshots ?? []).filter(
+  const cashView = view === "prop" && ["payouts", "ledger"].includes(section);
+  const snapshots = (
+    cashView ? (state.data?.cashSnapshots ?? []) : (state.data?.snapshots ?? [])
+  ).filter(
     (s) =>
       !selected.length ||
       selected.includes(
-        state.data?.selection.find((a) => a.id === s.account.id)?.journalAccountId ??
-          `the5ers_${s.account.id}`,
+        (cashView ? state.data?.cashSelection : state.data?.selection)?.find(
+          (a) => a.id === s.account.id,
+        )?.journalAccountId ?? `the5ers_${s.account.id}`,
       ),
   );
   const read = (resource: string, title: string, id?: string, key?: string) =>
@@ -933,37 +936,48 @@ function SnapshotPanels({
       if (resource === "purchases" || resource === "payoutHistory")
         window.dispatchEvent(new Event("journal-data-changed"));
     });
-  useEffect(() => {
-    if (view === "prop" && section === "ledger" && state.data?.connected && !selected.length)
-      void read("purchases", "Purchases & fees");
-  }, [view, section, query, state.data?.connected]);
-  const withdrawalsLoaded = useRef(new Set<string>());
-  useEffect(() => {
-    if (view !== "prop" || section !== "payouts" || !state.data?.connected) return;
-    const accounts = (state.data.selection ?? []).filter(
-      (account) =>
-        (!selected.length ||
-          selected.includes(account.journalAccountId ?? `the5ers_${account.id}`)) &&
-        !withdrawalsLoaded.current.has(account.id) &&
-        !snapshots.find((snapshot) => snapshot.account.id === account.id)?.sections.payoutHistory,
-    );
-    if (!accounts.length) return;
-    for (const account of accounts) withdrawalsLoaded.current.add(account.id);
-    void state.run(async () => {
-      for (const account of accounts)
-        await postJson("/api/the5ers", {
-          action: "read",
-          resource: "payoutHistory",
-          id: account.id,
-        });
+  const cashLoaded = useRef(false);
+  const refreshCash = () =>
+    state.run(async () => {
+      await postJson("/api/the5ers", { action: "cash.sync" });
+      state.refresh();
       window.dispatchEvent(new Event("journal-data-changed"));
     });
-  }, [view, section, query, state.data]);
+  useEffect(() => {
+    if (!cashView || !state.data?.connected || state.data.cash || cashLoaded.current) return;
+    cashLoaded.current = true;
+    void refreshCash();
+  }, [cashView, state.data]);
   return (
     <div className="space-y-3">
+      {cashView && state.data?.connected && (
+        <div className="space-y-2">
+          <Button variant="outline" disabled={state.busy} onClick={() => void refreshCash()}>
+            {state.busy ? "Refreshing cash…" : "Refresh expenses & payouts (all accounts)"}
+          </Button>
+          <p className="text-xs text-muted-foreground">
+            Cash history covers all The5ers accounts, including closed accounts. Account filters
+            only change what is displayed.
+          </p>
+          {state.data.cash && !state.data.cash.complete && (
+            <p className="text-sm">
+              Some account histories could not be retrieved. Saved cash records were retained;
+              refresh to retry.
+            </p>
+          )}
+          {section === "ledger" && state.data.purchases != null && (
+            <The5ersPurchases
+              value={state.data.purchases}
+              timeZone={state.data.timeZone ?? "UTC"}
+            />
+          )}
+        </div>
+      )}
       {(view === "prop" && ["ledger", "benefits", "activity"].includes(section)
         ? []
-        : (state.data?.selection ?? [])
+        : cashView
+          ? (state.data?.cashSelection ?? [])
+          : (state.data?.selection ?? [])
       )
         .filter(
           (a) => !selected.length || selected.includes(a.journalAccountId ?? `the5ers_${a.id}`),
@@ -1040,7 +1054,7 @@ function SnapshotPanels({
                     updated · {snapshot.unchangedPositions ?? 0} unchanged
                   </p>
                 )}
-                {view !== "dashboard" && (
+                {view !== "dashboard" && !cashView && (
                   <Button
                     variant="outline"
                     size="sm"

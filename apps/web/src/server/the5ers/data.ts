@@ -936,6 +936,34 @@ export async function sourceOverview() {
     ...(await connectionSummary()),
     timeZone: await getTimeZone(),
     selection,
+    purchases: JSON.parse((await getSetting("the5ers:purchases")) ?? "null"),
+    cash: JSON.parse((await getSetting("the5ers:cash")) ?? "null"),
+    cashSelection: payoutHistory.map((row) => {
+      const history = JSON.parse(row.value);
+      const id = row.key.slice("the5ers:payouts:".length);
+      return {
+        id,
+        label:
+          history.account?.label ?? selection.find((a) => a.id === id)?.label ?? "The5ers account",
+        autoSync: false,
+        journalAccountId: mappings[id] ?? `the5ers_${id}`,
+      };
+    }),
+    cashSnapshots: payoutHistory.map((row) => {
+      const history = JSON.parse(row.value);
+      const id = row.key.slice("the5ers:payouts:".length);
+      return {
+        account: history.account ?? {
+          id,
+          label: selection.find((a) => a.id === id)?.label ?? "The5ers account",
+        },
+        retrievedAt: history.retrievedAt,
+        complete: false,
+        sections: { payoutHistory: { available: true, data: history } },
+        warnings: [],
+        importedExecutions: 0,
+      };
+    }),
     snapshots: stored
       .filter((row) => selection.some((account) => row.key === `${SNAPSHOT_PREFIX}${account.id}`))
       .map((row) => {
@@ -1000,7 +1028,9 @@ export async function readSourceSection(resource: string, id?: string, positionK
     return publicData(await client.read(read.tool, read.operation));
   }
   requireValue(
-    id && (await selectedAccounts()).some((account) => account.id === id),
+    id &&
+      (resource === "payoutHistory" ||
+        (await selectedAccounts()).some((account) => account.id === id)),
     "Choose a selected The5ers account.",
   );
   const read = perAccount[resource]!;
@@ -1093,7 +1123,7 @@ export async function syncScheduledThe5ers(deadline = Date.now() + 240_000) {
   const eligible = candidates.filter(
     (a) => !a.journalAccountId || native.some((n) => n.id === a.journalAccountId && !n.archivedAt),
   );
-  if (!eligible.length) return { checked: 0, synced: 0, failed: 0 };
+
   if (Date.now() >= deadline)
     return { checked: eligible.length, synced: 0, failed: eligible.length };
   let available: SourceAccount[];
@@ -1132,12 +1162,10 @@ export async function syncScheduledThe5ers(deadline = Date.now() + 240_000) {
     }
   }
   let purchases: { synced: boolean; pending?: number } | undefined;
-  if (synced > 0 && Date.now() < deadline) {
+  if (Date.now() < deadline) {
     try {
-      const outcome = await syncSourcePurchases(
-        AbortSignal.timeout(Math.max(1, deadline - Date.now())),
-      );
-      purchases = { synced: true, pending: outcome.pending };
+      const outcome = await syncSourceCash(AbortSignal.timeout(Math.max(1, deadline - Date.now())));
+      purchases = { synced: outcome.complete, pending: outcome.purchases.pending };
     } catch (error) {
       purchases = { synced: false };
       console.error("[cron] The5ers purchases unavailable", {
@@ -1235,6 +1263,42 @@ export async function syncSourcePurchases(signal?: AbortSignal) {
   });
 }
 
+/** Cash covers the entire provider inventory, independently of trade selection. */
+export async function syncSourceCash(signal?: AbortSignal) {
+  const { connection, client } = await sourceClient(signal);
+  const inventory = await inventoryResult(client);
+  let purchases: { pending?: number; synced: boolean };
+  try {
+    purchases = { ...(await syncSourcePurchases(signal)), synced: true };
+  } catch {
+    purchases = { synced: false };
+  }
+  const failures: { id: string; label: string }[] = [];
+  let synced = 0;
+  for (const account of inventory.accounts) {
+    try {
+      signal?.throwIfAborted();
+      await fetchAndSavePayouts(client, connection.id, account, account.id);
+      synced++;
+    } catch {
+      failures.push({ id: account.id, label: account.label });
+    }
+  }
+  const outcome = {
+    accounts: inventory.accounts.map(({ ref: _ref, ...account }) => account),
+    complete: inventory.complete && !failures.length && purchases.synced,
+    warnings: inventory.warnings,
+    failures,
+    synced,
+    retrievedAt: new Date().toISOString(),
+  };
+  await db.transaction(async (tx) => {
+    await assertConnection(connection.id, tx);
+    await setSetting("the5ers:cash", JSON.stringify(outcome), tx);
+  });
+  return { ...outcome, purchases };
+}
+
 async function fetchAndSavePayouts(
   client: The5ersMcp,
   connectionId: string,
@@ -1254,6 +1318,60 @@ async function fetchAndSavePayouts(
   );
   return db.transaction(async (tx) => {
     await assertConnection(connectionId, tx);
+    // Serialize linking and receipt imports against selection changes and concurrent refreshes.
+    await tx.select().from(settings).where(eq(settings.key, CONNECTION_KEY)).for("update");
+    const { ref: _ref, ...sourceAccount } = account;
+    const currency = sourceCurrency(account.currency) ? account.currency! : undefined;
+    const links = JSON.parse((await getSetting("the5ers:journal-links", tx)) ?? "{}") as Record<
+      string,
+      string
+    >;
+    const program = sourceProgram(account.program);
+    if (
+      rows.length &&
+      currency &&
+      program &&
+      ["funded", "instant_funded", "live"].includes(program) &&
+      sourcePropStatus(account.status)
+    ) {
+      const journalAccountId = links[id] ?? `the5ers_${id}`;
+      await tx
+        .insert(journalAccounts)
+        .values({
+          id: journalAccountId,
+          name: `The5ers · ${account.label}`,
+          broker: "The5ers",
+          kind: "import",
+          currency,
+          initialBalance: 0,
+          autoSync: false,
+          createdAt: new Date().toISOString(),
+        })
+        .onConflictDoNothing();
+      const [native] = await tx
+        .select()
+        .from(journalAccounts)
+        .where(eq(journalAccounts.id, journalAccountId));
+      requireValue(
+        native && (links[id] || native.broker === "The5ers") && native.currency === currency,
+        "The existing journal account has a conflicting provider or currency.",
+      );
+      links[id] = journalAccountId;
+      await setSetting("the5ers:journal-links", JSON.stringify(links), tx);
+      await saveSnapshotPropAccount(
+        tx,
+        {
+          account: sourceAccount,
+          retrievedAt: new Date().toISOString(),
+          complete: false,
+          sections: {},
+          warnings: [],
+          importedExecutions: 0,
+        },
+        journalAccountId,
+        currency,
+      );
+    }
     let imported = 0,
       matched = 0,
       pending = 0;
@@ -1267,6 +1385,7 @@ async function fetchAndSavePayouts(
     }
     const saved = {
       ...history,
+      account: sourceAccount,
       rows: results,
       imported,
       matched,
@@ -1283,18 +1402,10 @@ export async function confirmSourcePayout(
   key: string,
   confirmation: { accountId: string; amount: string; receivedOn: string },
 ) {
-  requireValue(
-    (await selectedAccounts()).some((account) => account.id === id),
-    "Choose a selected The5ers account.",
-  );
   const connection = await accessConnection();
   return db.transaction(async (tx) => {
     await assertConnection(connection.id, tx);
-    const selection = JSON.parse((await getSetting(SELECTION_KEY, tx)) ?? "[]") as Selection[];
-    requireValue(
-      selection.some((account) => account.id === id),
-      "The5ers selection changed. Choose a selected account.",
-    );
+    await tx.select().from(settings).where(eq(settings.key, CONNECTION_KEY)).for("update");
     const saved = await getSetting(`the5ers:payouts:${id}`, tx);
     requireValue(saved, "Load payout history before recording a receipt.");
     const history = JSON.parse(saved) as {

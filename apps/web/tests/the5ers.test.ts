@@ -23,6 +23,7 @@ const {
   readSourceSection,
   sourceOverview,
   syncScheduledThe5ers,
+  syncSourceCash,
 } = await import("../src/server/the5ers/data");
 const { MCP_URL, READ_SCOPES, publicData, officialAuthUrl } =
   await import("../src/server/the5ers/contracts");
@@ -95,6 +96,8 @@ const responseData = (name: string, args: Record<string, unknown>): unknown => {
     };
   if (name === "the5ers_purchase" && operation === "list")
     return { data: { purchases: [] }, pagination: { has_more: false } };
+  if (name === "the5ers_payout" && operation === "history")
+    return { data: { payouts: [] }, pagination: { has_more: false } };
   return {
     currency: "USD",
     data: {
@@ -372,7 +375,7 @@ describe("The5ers source synchronization", () => {
     incomplete = true;
     const snapshot = await syncSourceAccount(first!.id);
     expect(snapshot.complete).toBe(false);
-    expect(snapshot.warnings.join(" ")).toContain("partial");
+    expect(snapshot.warnings.join(" ")).toContain("Position history is incomplete");
     const source = snapshot.sections.positions!.data as { rows: unknown[] };
     expect(source.rows).toHaveLength(10);
   });
@@ -857,7 +860,12 @@ it("links existing history without overwriting it and removes source selection w
     ).status,
   ).toBe(200);
   expect((await sourceOverview()).selection).toHaveLength(0);
-  expect(await syncScheduledThe5ers()).toEqual({ checked: 0, synced: 0, failed: 0 });
+  expect(await syncScheduledThe5ers()).toMatchObject({
+    checked: 0,
+    synced: 0,
+    failed: 0,
+    purchases: { synced: true },
+  });
 });
 it("rejects conflicting journal links atomically", async () => {
   await connect();
@@ -898,8 +906,14 @@ it("shows observed balances immediately without resetting capital and skips arch
     .set({ archivedAt: new Date().toISOString() })
     .where(eq(accounts.id, `the5ers_${first!.id}`));
   vi.mocked(fetch).mockClear();
-  expect(await syncScheduledThe5ers()).toEqual({ checked: 0, synced: 0, failed: 0 });
-  expect(fetch).not.toHaveBeenCalled();
+  expect(await syncScheduledThe5ers()).toMatchObject({
+    checked: 0,
+    synced: 0,
+    failed: 0,
+    purchases: { synced: true },
+  });
+  expect(calls.filter((call) => call.tool === "the5ers_positions")).toHaveLength(0);
+  expect(calls.filter((call) => call.tool === "the5ers_payout")).toHaveLength(2);
 });
 
 it("reuses an existing The5ers prop tracker account linked to the chosen journal", async () => {
@@ -1038,7 +1052,12 @@ it("keeps available and disabled accounts selectable but enables cron only for a
   const selected = (await sourceOverview()).selection;
   expect(selected.map((a) => a.autoSync)).toEqual([true, false, false]);
   rows[0]!.status = "disabled";
-  expect(await syncScheduledThe5ers()).toEqual({ checked: 0, synced: 0, failed: 0 });
+  expect(await syncScheduledThe5ers()).toMatchObject({
+    checked: 0,
+    synced: 0,
+    failed: 0,
+    purchases: { synced: true },
+  });
   expect((await sourceOverview()).selection).toHaveLength(3);
   const snapshot = await syncSourceAccount(listed[2]!.id);
   expect(snapshot.account.status).toBe("disabled");
@@ -1518,4 +1537,106 @@ it("retains the complete MT5 response and imports cotemporal positions instead o
   expect(partial.skippedPositions).toBe(2);
   expect(partial.journaledPositions).toBe(1);
   expect(await db.select().from(trades)).toHaveLength(3);
+});
+
+it("syncs cash for every account including unselected closed accounts, keeps trades separate and reads saved cash without MCP", async () => {
+  rows[1]!.accountType = "funded";
+  rows[1]!.status = "closed";
+  await connect();
+  const listed = await listSourceAccounts();
+  await selectSourceAccounts([listed[0]!.id], false, true);
+  const original = fetch;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === MCP_URL && init?.body) {
+        const rpc = JSON.parse(String(init.body));
+        if (rpc.params?.name === "the5ers_payout") {
+          calls.push({ tool: "the5ers_payout", operation: "history", args: rpc.params.arguments });
+          const funded = String(rpc.params.arguments.account_ref).endsWith("-2");
+          return json({
+            jsonrpc: "2.0",
+            id: rpc.id,
+            result: {
+              structuredContent: {
+                currency: "USD",
+                data: {
+                  payouts: funded
+                    ? [
+                        {
+                          id: "closed-funded-receipt",
+                          status: "paid",
+                          currency: "USD",
+                          netAmount: 780,
+                          requestedAt: "2026-02-01T10:00:00Z",
+                          paidAt: "2026-02-02T10:00:00Z",
+                        },
+                      ]
+                    : [],
+                },
+                pagination: { has_more: false },
+              },
+            },
+          });
+        }
+      }
+      return original(url, init);
+    }),
+  );
+  calls = [];
+  expect(await syncSourceCash()).toMatchObject({ synced: 2, complete: true });
+  expect(calls.filter((c) => c.tool === "the5ers_payout")).toHaveLength(2);
+  expect(calls.some((c) => c.tool === "the5ers_positions")).toBe(false);
+  const { propReceipts } = await import("../src/db");
+  expect((await db.select().from(propReceipts)).map((r) => r.amountMinor)).toEqual([78000]);
+  const before = vi.mocked(fetch).mock.calls.length;
+  const overview = await sourceOverview();
+  expect(overview.selection.map((a) => a.id)).toEqual([listed[0]!.id]);
+  expect(overview.cashSnapshots).toHaveLength(2);
+  expect(vi.mocked(fetch).mock.calls.length).toBe(before);
+  await syncSourceCash();
+  expect(await db.select().from(propReceipts)).toHaveLength(1);
+  const history = overview.cashSnapshots.find((s) => s.account.id === listed[1]!.id)!.sections
+    .payoutHistory!.data as { rows: { key: string }[] };
+  const response = await POST(
+    request({
+      action: "payout.confirm",
+      id: listed[1]!.id,
+      payoutKey: history.rows[0]!.key,
+      propAccountId: `the5ers_${listed[1]!.id}`,
+      amount: "780",
+      receivedOn: "2026-02-02",
+    }),
+  );
+  expect(response.status).toBe(200);
+});
+
+it("keeps cash syncing when purchases fail and preserves each failed account's saved payout history", async () => {
+  await connect();
+  const listed = await listSourceAccounts();
+  await syncSourceCash();
+  const original = fetch;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === MCP_URL && init?.body) {
+        const rpc = JSON.parse(String(init.body));
+        if (
+          rpc.params?.name === "the5ers_purchase" ||
+          (rpc.params?.name === "the5ers_payout" &&
+            String(rpc.params.arguments.account_ref).endsWith("-1"))
+        ) {
+          return json({ jsonrpc: "2.0", id: rpc.id, result: { isError: true, content: [] } });
+        }
+      }
+      return original(url, init);
+    }),
+  );
+  expect(await syncSourceCash()).toMatchObject({
+    complete: false,
+    synced: 1,
+    failures: [{ id: listed[0]!.id }],
+    purchases: { synced: false },
+  });
+  expect((await sourceOverview()).cashSnapshots).toHaveLength(2);
 });

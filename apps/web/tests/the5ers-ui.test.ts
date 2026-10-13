@@ -18,6 +18,24 @@ vi.mock("../src/lib/use-api", () => ({
       connected: true,
       canRefresh: true,
       selection: [{ id: "account", label: "Account •1234", autoSync: true }],
+      cash: { complete: true, failures: [] },
+      cashSelection: [
+        {
+          id: "closed",
+          label: "Closed funded account",
+          journalAccountId: "historical",
+          autoSync: false,
+        },
+      ],
+      cashSnapshots: [
+        {
+          account: { id: "closed", label: "Closed funded account" },
+          retrievedAt: "2026-02-02T00:00:00Z",
+          complete: false,
+          sections: { payoutHistory: { available: true, data: { rows: [] } } },
+          warnings: [],
+        },
+      ],
       snapshots: [
         {
           account: { id: "account" },
@@ -102,4 +120,24 @@ it("renders program rules as compact labelled metrics with raw records collapsed
   expect(html).toContain("4%");
   expect(html).toContain("Source details");
   expect(html).not.toContain("<details open");
+});
+
+it("shows cached payouts from unselected historical accounts and applies presentation filters only", () => {
+  const all = renderToStaticMarkup(
+    createElement(The5ersSource, { view: "prop", section: "payouts" }),
+  );
+  expect(all).toContain("Closed funded account");
+  expect(all).toContain("all accounts");
+  const filtered = renderToStaticMarkup(
+    createElement(The5ersSource, {
+      view: "prop",
+      section: "payouts",
+      query: "accounts=historical",
+    }),
+  );
+  expect(filtered).toContain("Closed funded account");
+  const other = renderToStaticMarkup(
+    createElement(The5ersSource, { view: "prop", section: "payouts", query: "accounts=other" }),
+  );
+  expect(other).not.toContain("Closed funded account");
 });

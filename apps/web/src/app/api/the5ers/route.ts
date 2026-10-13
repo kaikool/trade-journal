@@ -7,6 +7,7 @@ import { startAuthorization, disconnectThe5ers } from "@/server/the5ers/oauth";
 import {
   listSourceInventory,
   syncSourcePurchases,
+  syncSourceCash,
   sourceOverview,
   selectSourceAccounts,
   syncSourceAccount,
@@ -85,6 +86,8 @@ export const POST = handler(async (request: Request) => {
           receivedOn: body.receivedOn,
         }),
       );
+    case "cash.sync":
+      return ok({ data: await syncSourceCash(AbortSignal.timeout(100_000)) });
     case "purchases.sync":
       return ok({ data: await syncSourcePurchases() });
     case "accounts":
