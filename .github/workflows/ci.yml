@@ -22,4 +22,10 @@ jobs:
       - run: pnpm test
       - run: node scripts/check-licenses.mjs
       - run: pnpm -r --filter "./packages/*" build
-      - run: pnpm build
+      - name: Build without production database credentials
+        run: pnpm build
+        env:
+          # Next imports API modules while collecting routes. This URL is only
+          # for compilation; any accidental database query must fail in CI.
+          DATABASE_URL: postgres://build:build@127.0.0.1:9/journal
+          NEXT_TELEMETRY_DISABLED: "1"
