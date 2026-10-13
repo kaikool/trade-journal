@@ -936,6 +936,14 @@ function SnapshotPanels({
         )?.journalAccountId ?? `the5ers_${s.account.id}`,
       ),
   );
+  const payoutSnapshots = snapshots.filter((snapshot) => {
+    const history = snapshot.sections.payoutHistory;
+    return (
+      history?.available &&
+      Array.isArray(obj(history.data).rows) &&
+      (obj(history.data).rows as unknown[]).length > 0
+    );
+  });
   const read = (resource: string, title: string, id?: string, key?: string) =>
     state.run(async () => {
       const result = await postJson<{ data: unknown }>("/api/the5ers", {
@@ -965,16 +973,11 @@ function SnapshotPanels({
       {cashView && state.data?.connected && (
         <div className="space-y-2">
           <Button variant="outline" disabled={state.busy} onClick={() => void refreshCash()}>
-            {state.busy ? "Refreshing cash…" : "Refresh expenses & payouts (all accounts)"}
+            {state.busy ? "Refreshing…" : "Refresh"}
           </Button>
-          <p className="text-xs text-muted-foreground">
-            Cash history covers all The5ers accounts, including closed accounts. Account filters
-            only change what is displayed.
-          </p>
           {state.data.cash && !state.data.cash.complete && (
             <p className="text-sm">
-              Some account histories could not be retrieved. Saved cash records were retained;
-              refresh to retry.
+              History is incomplete. Refresh to retry; saved payouts are retained.
             </p>
           )}
           {section === "ledger" && state.data.purchases != null && (
@@ -985,6 +988,15 @@ function SnapshotPanels({
           )}
         </div>
       )}
+      {view === "prop" && section === "payouts" && state.data && !payoutSnapshots.length && (
+        <p className="text-sm text-muted-foreground" role="status">
+          {state.busy
+            ? "Checking payout history…"
+            : selected.length
+              ? "No payouts for this account."
+              : "No payouts to display."}
+        </p>
+      )}
       {(view === "prop" && ["ledger", "benefits", "activity"].includes(section)
         ? []
         : cashView
@@ -993,6 +1005,12 @@ function SnapshotPanels({
       )
         .filter(
           (a) => !selected.length || selected.includes(a.journalAccountId ?? `the5ers_${a.id}`),
+        )
+        .filter(
+          (a) =>
+            section !== "payouts" ||
+            view !== "prop" ||
+            payoutSnapshots.some((s) => s.account.id === a.id),
         )
         .map((a) => {
           const snapshot = snapshots.find((s) => s.account.id === a.id);
@@ -1024,12 +1042,14 @@ function SnapshotPanels({
                 <CardTitle>{a.label}</CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
-                <p className="text-xs text-muted-foreground">
-                  {snapshot
-                    ? `Updated ${formatSourceDate(snapshot.retrievedAt, state.data?.timeZone ?? "UTC")}`
-                    : "Not refreshed yet"}{" "}
-                  · {a.autoSync ? "Daily refresh" : "Manual refresh"}
-                </p>
+                {!cashView && (
+                  <p className="text-xs text-muted-foreground">
+                    {snapshot
+                      ? `Updated ${formatSourceDate(snapshot.retrievedAt, state.data?.timeZone ?? "UTC")}`
+                      : "Not refreshed yet"}{" "}
+                    · {a.autoSync ? "Daily refresh" : "Manual refresh"}
+                  </p>
+                )}
                 {view !== "dashboard" && !cashView && (
                   <Button
                     variant="outline"
@@ -1128,27 +1148,6 @@ function SnapshotPanels({
                       </p>
                     )}
                   </>
-                )}
-                {view === "prop" && section === "payouts" && (
-                  <div className="flex flex-wrap gap-2">
-                    {(section === "payouts"
-                      ? [["payoutHistory", "Payout history"]]
-                      : [
-                          ["health", "Account health"],
-                          ["journey", "Program journey"],
-                        ]
-                    ).map(([resource, title]) => (
-                      <Button
-                        key={resource}
-                        size="sm"
-                        variant="outline"
-                        disabled={state.busy}
-                        onClick={() => void read(resource!, title!, a.id)}
-                      >
-                        {title}
-                      </Button>
-                    ))}
-                  </div>
                 )}
                 {view === "accounts" && account && (
                   <p className="text-xs text-muted-foreground">

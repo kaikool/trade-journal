@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-const state = vi.hoisted(() => ({ privacy: false }));
+const state = vi.hoisted(() => ({ privacy: false, hasPayouts: true }));
 vi.mock("../src/components/privacy", () => ({
   usePrivacy: () => state.privacy,
   MonetaryValue: ({ children }: { children: React.ReactNode }) =>
@@ -20,6 +20,12 @@ vi.mock("../src/lib/use-api", () => ({
       selection: [{ id: "account", label: "Account •1234", autoSync: true }],
       cash: { complete: true, failures: [] },
       cashSelection: [
+        ...Array.from({ length: 108 }, (_, i) => ({
+          id: `empty-${i}`,
+          label: `Empty account ${i}`,
+          journalAccountId: `empty-${i}`,
+          autoSync: false,
+        })),
         {
           id: "closed",
           label: "Closed funded account",
@@ -28,11 +34,30 @@ vi.mock("../src/lib/use-api", () => ({
         },
       ],
       cashSnapshots: [
+        ...Array.from({ length: 108 }, (_, i) => ({
+          account: { id: `empty-${i}`, label: `Empty account ${i}` },
+          sections: { payoutHistory: { available: true, data: { rows: [] } } },
+        })),
         {
           account: { id: "closed", label: "Closed funded account" },
           retrievedAt: "2026-02-02T00:00:00Z",
           complete: false,
-          sections: { payoutHistory: { available: true, data: { rows: [] } } },
+          sections: {
+            payoutHistory: {
+              available: true,
+              data: {
+                rows: state.hasPayouts
+                  ? [
+                      {
+                        key: "receipt",
+                        source: { amount: 100, currency: "USD" },
+                        status: "pending",
+                      },
+                    ]
+                  : [],
+              },
+            },
+          },
           warnings: [],
         },
       ],
@@ -61,6 +86,7 @@ import {
 } from "../src/components/the5ers";
 afterEach(() => {
   state.privacy = false;
+  state.hasPayouts = true;
 });
 it("keeps connected technical panels off Dashboard and Trades", () => {
   for (const view of ["dashboard", "trades"] as const) {
@@ -124,7 +150,8 @@ it("shows cached payouts from unselected historical accounts and applies present
     createElement(The5ersSource, { view: "prop", section: "payouts" }),
   );
   expect(all).toContain("Closed funded account");
-  expect(all).toContain("all accounts");
+  expect(all).not.toContain("Empty account");
+  expect(all).not.toContain("No payouts returned");
   const filtered = renderToStaticMarkup(
     createElement(The5ersSource, {
       view: "prop",
@@ -160,4 +187,14 @@ it("formats provider percentages and money without floating point tails or overf
   expect(html).toContain("13.94");
   expect(html).not.toContain("000000000");
   expect(html).not.toContain("Source details");
+});
+
+it("renders one empty state instead of hundreds of empty account cards", () => {
+  state.hasPayouts = false;
+  const html = renderToStaticMarkup(
+    createElement(The5ersSource, { view: "prop", section: "payouts" }),
+  );
+  expect(html.match(/No payouts to display/g)).toHaveLength(1);
+  expect(html).not.toContain("Empty account");
+  expect(html).not.toContain("Closed funded account");
 });
