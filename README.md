@@ -310,3 +310,9 @@ Sync preserves the number of fills with identical economic facts and reconciles 
 SQLite migration requires an empty PostgreSQL target and valid encryption keys for encrypted credentials. Database writes are transactional. Credential decryption, storage uploads and row-count parity errors abort the migration; uploads created by a failed run are removed when storage cleanup succeeds. The source database must be retained until verification is complete. `--force` is unsupported; `--skip-storage` is allowed only when the source has no attachment or candle records.
 
 See [Audit remediation](docs/audit-remediation.md) for the changes and validation coverage.
+
+### The5ers read-only source connection
+
+The **The5ers** page connects to the official MCP service with OAuth/PKCE, selects accounts, and stores source snapshots separately from journal trades. Selected accounts can refresh through the existing daily broker-sync cron. Balances, positions, rules, consistency, payouts and additional records remain provider-reported data; availability depends on granted permissions and trading platform.
+
+An approved OAuth client and registered callback are required. Live authentication and authenticated response fields have not yet been verified; unsupported account identities fail closed. This release does not insert executions into journal analytics. See [The5ers setup, implementation plan and limitations](docs/the5ers.md).

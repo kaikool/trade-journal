@@ -2,7 +2,12 @@
 export function isEncryptedSetting(key: string): boolean {
   if (["marketData:binance:keyEnc", "marketData:coinbase:keyEnc"].includes(key)) return false;
   return (
-    key === "anthropicKeyEnc" || key === "openaiKeyEnc" || /^marketData:[^:]+:keyEnc$/.test(key)
+    key === "anthropicKeyEnc" ||
+    key === "openaiKeyEnc" ||
+    /^marketData:[^:]+:keyEnc$/.test(key) ||
+    key === "the5ers:oauth:connectionEnc" ||
+    key.startsWith("the5ers:oauth:pending:") ||
+    key.startsWith("the5ers:refs:")
   );
 }
 

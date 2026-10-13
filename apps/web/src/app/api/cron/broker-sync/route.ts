@@ -3,6 +3,7 @@ import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { accounts, db } from "@/db";
 import { syncAccount } from "@/server/sync";
 import { passwordConfigured } from "@/server/auth";
+import { syncScheduledThe5ers } from "@/server/the5ers/data";
 import { ENABLED_SYNC_BROKER_IDS } from "@/lib/supported-brokers";
 
 export const maxDuration = 300;
@@ -24,6 +25,7 @@ export async function GET(request: Request): Promise<Response> {
   if (!hasValidCronSecret(request, secret))
     return Response.json({ error: "Unauthorized" }, { status: 401 });
 
+  const deadline = Date.now() + 240_000;
   const enabled = await db
     .select({ id: accounts.id })
     .from(accounts)
@@ -52,5 +54,11 @@ export async function GET(request: Request): Promise<Response> {
     }
   }
 
-  return Response.json({ checked: enabled.length, synced, failed }, { status: failed ? 500 : 200 });
+  const the5ers = await syncScheduledThe5ers(deadline);
+  synced += the5ers.synced;
+  failed += the5ers.failed;
+  return Response.json(
+    { checked: enabled.length + the5ers.checked, synced, failed },
+    { status: failed ? 500 : 200 },
+  );
 }

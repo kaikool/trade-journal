@@ -13,6 +13,7 @@ import {
 import { JournalDefaultSettings } from "@/components/journal-default-settings";
 import { ContractMultiplierSettings, TimeZoneSettings } from "@/components/journal-settings";
 import { MarketDataSettings } from "@/components/market-data-settings";
+import { The5ersConnection } from "@/components/the5ers";
 import { AiSettings } from "@/components/ai-settings";
 import { CurrencySettings } from "@/components/currency-settings";
 import { FilterBar } from "@/components/filter-bar";
@@ -46,6 +47,13 @@ const sections = [
     label: "Market data",
     icon: ChartCandlestick,
     description: "Connect price history or upload candles for replay and trade analysis.",
+  },
+  {
+    id: "the5ers",
+    label: "The5ers",
+    icon: Globe,
+    description:
+      "Connect authorized Hub accounts and refresh source performance and program records.",
   },
   {
     id: "ai-settings",
@@ -175,6 +183,7 @@ function Settings() {
                 )}
                 {id === "currency-conversion" && <CurrencySettings />}
                 {id === "market-data" && <MarketDataSettings />}
+                {id === "the5ers" && <The5ersConnection />}
                 {id === "ai-settings" && <AiSettings />}
                 {id === "your-data" && (
                   <Card>

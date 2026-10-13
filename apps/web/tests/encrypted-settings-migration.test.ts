@@ -9,6 +9,11 @@ it("rotates broker/AI and lowercase market key envelopes without treating public
   expect(isEncryptedSetting("marketData:binance:keyEnc")).toBe(false);
   expect(isEncryptedSetting("marketData:coinbase:keyEnc")).toBe(false);
   expect(isEncryptedSetting("timeZone")).toBe(false);
+  expect(isEncryptedSetting("the5ers:oauth:connectionEnc")).toBe(true);
+  expect(isEncryptedSetting("the5ers:oauth:pending:session-hash")).toBe(true);
+  expect(isEncryptedSetting("the5ers:refs:account-hash")).toBe(true);
+  expect(isEncryptedSetting("the5ers:selection")).toBe(false);
+  expect(isEncryptedSetting("the5ers:snapshot:account-hash")).toBe(false);
   vi.stubEnv("JOURNAL_SECRET", "old fixture secret");
   const old = encryptJson({ token: "synthetic" });
   const next = reencryptEnvelope(
