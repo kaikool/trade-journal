@@ -9,7 +9,6 @@ import {
   uniqueIndex,
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
-
 /** PostgreSQL target schema for Supabase. Keep names aligned with the SQLite schema. */
 export const accounts = pgTable("accounts", {
   id: text("id").primaryKey(),
@@ -28,8 +27,7 @@ export const accounts = pgTable("accounts", {
   snapshotJson: text("snapshot_json"),
   archivedAt: text("archived_at"),
   createdAt: text("created_at").notNull(),
-});
-
+}).enableRLS();
 export const importSources = pgTable("import_sources", {
   id: text("id").primaryKey(),
   accountId: text("account_id")
@@ -38,8 +36,7 @@ export const importSources = pgTable("import_sources", {
   format: text("format").notNull(),
   name: text("name").notNull(),
   createdAt: text("created_at").notNull(),
-});
-
+}).enableRLS();
 export const importSourceAliases = pgTable(
   "import_source_aliases",
   {
@@ -56,8 +53,7 @@ export const importSourceAliases = pgTable(
   (table) => [
     uniqueIndex("import_source_alias_unique").on(table.accountId, table.format, table.aliasKey),
   ],
-);
-
+).enableRLS();
 export const importBatches = pgTable(
   "import_batches",
   {
@@ -78,8 +74,7 @@ export const importBatches = pgTable(
   (table) => [
     uniqueIndex("import_batch_unique").on(table.accountId, table.format, table.fingerprint),
   ],
-);
-
+).enableRLS();
 export const executions = pgTable(
   "executions",
   {
@@ -101,8 +96,7 @@ export const executions = pgTable(
     uniqueIndex("executions_account_hash").on(table.accountId, table.contentHash),
     index("executions_account_symbol").on(table.accountId, table.symbol),
   ],
-);
-
+).enableRLS();
 export const trades = pgTable(
   "trades",
   {
@@ -140,14 +134,12 @@ export const trades = pgTable(
     index("trades_opened").on(table.openedAt),
     index("trades_account_opened").on(table.accountId, table.openedAt),
   ],
-);
-
+).enableRLS();
 export const journalDays = pgTable("journal_days", {
   date: text("date").primaryKey(),
   note: text("note").notNull().default(""),
   updatedAt: text("updated_at").notNull(),
-});
-
+}).enableRLS();
 export const folders = pgTable("folders", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
@@ -156,8 +148,7 @@ export const folders = pgTable("folders", {
     .default("user"),
   createdAt: text("created_at").notNull(),
   deletedAt: text("deleted_at"),
-});
-
+}).enableRLS();
 export const notes = pgTable(
   "notes",
   {
@@ -172,21 +163,18 @@ export const notes = pgTable(
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [index("notes_folder").on(table.folderId)],
-);
-
+).enableRLS();
 export const playbooks = pgTable("playbooks", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   description: text("description").notNull().default(""),
   rulesJson: text("rules_json").notNull().default("[]"),
   createdAt: text("created_at").notNull(),
-});
-
+}).enableRLS();
 export const settings = pgTable("settings", {
   key: text("key").primaryKey(),
   value: text("value").notNull(),
-});
-
+}).enableRLS();
 export const attachments = pgTable(
   "attachments",
   {
@@ -206,14 +194,12 @@ export const attachments = pgTable(
     index("attachments_owner").on(table.ownerType, table.ownerId),
     uniqueIndex("attachments_storage_path_unique").on(table.storagePath),
   ],
-);
-
+).enableRLS();
 export const noteTemplates = pgTable("note_templates", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   content: text("content").notNull(),
-});
-
+}).enableRLS();
 export const tradeRuleChecks = pgTable(
   "trade_rule_checks",
   {
@@ -224,8 +210,7 @@ export const tradeRuleChecks = pgTable(
     followed: boolean("followed").notNull(),
   },
   (table) => [index("trade_rule_checks_trade").on(table.tradeKey)],
-);
-
+).enableRLS();
 export const progressRules = pgTable("progress_rules", {
   id: text("id").primaryKey(),
   title: text("title").notNull(),
@@ -233,8 +218,7 @@ export const progressRules = pgTable("progress_rules", {
   weekdaysJson: text("weekdays_json").notNull(),
   createdAt: text("created_at").notNull(),
   archivedAt: text("archived_at"),
-});
-
+}).enableRLS();
 export const progressChecks = pgTable(
   "progress_checks",
   {
@@ -244,8 +228,7 @@ export const progressChecks = pgTable(
     done: boolean("done").notNull(),
   },
   (table) => [index("progress_checks_date").on(table.date)],
-);
-
+).enableRLS();
 export const missedTrades = pgTable("missed_trades", {
   id: text("id").primaryKey(),
   symbol: text("symbol").notNull(),
@@ -258,8 +241,7 @@ export const missedTrades = pgTable("missed_trades", {
   notes: text("notes").notNull().default(""),
   createdAt: text("created_at").notNull(),
   archivedAt: text("archived_at"),
-});
-
+}).enableRLS();
 export const marketCsvDatasets = pgTable(
   "market_csv_datasets",
   {
@@ -281,8 +263,7 @@ export const marketCsvDatasets = pgTable(
     index("market_csv_symbol_resolution").on(table.symbol, table.resolution),
     uniqueIndex("market_csv_storage_path_unique").on(table.storagePath),
   ],
-);
-
+).enableRLS();
 export const tradeExcursions = pgTable("trade_excursions", {
   tradeKey: text("trade_key")
     .primaryKey()
@@ -294,8 +275,7 @@ export const tradeExcursions = pgTable("trade_excursions", {
   fetchedAt: text("fetched_at").notNull(),
   datasetId: text("dataset_id").references(() => marketCsvDatasets.id, { onDelete: "cascade" }),
   estimateJson: text("estimate_json").notNull(),
-});
-
+}).enableRLS();
 export const propAccounts = pgTable("prop_accounts", {
   id: text("id").primaryKey(),
   firm: text("firm").notNull(),
@@ -317,8 +297,7 @@ export const propAccounts = pgTable("prop_accounts", {
   revision: integer("revision").notNull().default(1),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
-});
-
+}).enableRLS();
 export const propEntries = pgTable(
   "prop_entries",
   {
@@ -346,8 +325,7 @@ export const propEntries = pgTable(
     index("prop_entries_account_date").on(table.accountId, table.occurredOn),
     index("prop_entries_date").on(table.occurredOn),
   ],
-);
-
+).enableRLS();
 export const propReceipts = pgTable(
   "prop_receipts",
   {
@@ -364,8 +342,7 @@ export const propReceipts = pgTable(
     createdAt: text("created_at").notNull(),
   },
   (table) => [index("prop_receipts_payout").on(table.payoutId)],
-);
-
+).enableRLS();
 export const propAudit = pgTable(
   "prop_audit",
   {
@@ -378,4 +355,4 @@ export const propAudit = pgTable(
     createdAt: text("created_at").notNull(),
   },
   (table) => [index("prop_audit_entity").on(table.entityType, table.entityId)],
-);
+).enableRLS();

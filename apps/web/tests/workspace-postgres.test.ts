@@ -166,13 +166,11 @@ afterAll(async () => {
 // Route fixtures authenticate with a real signed session.
 vi.stubEnv("JOURNAL_PASSWORD", "authenticated-test-fixture");
 vi.mock("next/headers", async () => {
-  const { createHmac } = await import("node:crypto");
+  const { sessionToken } = await import("../src/server/auth");
   return {
     cookies: async () => ({
       get: () => ({
-        value: createHmac("sha256", "authenticated-test-fixture")
-          .update("session-v1")
-          .digest("hex"),
+        value: sessionToken(),
       }),
     }),
   };

@@ -31,6 +31,7 @@ import {
 } from "@/server/settings";
 import { handler, ok } from "@/server/api";
 import { attachmentExportRecord, EXPORT_ATTACHMENTS_NOTE } from "@/lib/export-format";
+import { csvCell } from "@/lib/csv-export";
 
 /**
  * Full data export: your journal is yours. Credentials are deliberately
@@ -43,10 +44,6 @@ export const GET = handler(async (request: Request) => {
   if (format === "csv") {
     const header =
       "key,account_id,symbol,direction,status,opened_at,closed_at,quantity,avg_entry,avg_exit,gross_pnl,fees,net_pnl,tags,notes";
-    const escape = (value: unknown): string => {
-      const text = value === null || value === undefined ? "" : String(value);
-      return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-    };
     const { rows } = await queryTrades(readFilters(url.searchParams));
     const lines = rows.map((row) =>
       [
@@ -66,7 +63,7 @@ export const GET = handler(async (request: Request) => {
         row.tagsJson ?? "[]",
         row.notes ?? "",
       ]
-        .map(escape)
+        .map(csvCell)
         .join(","),
     );
     return new Response([header, ...lines].join("\n"), {

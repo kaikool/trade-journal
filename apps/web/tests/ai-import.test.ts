@@ -202,15 +202,13 @@ it("fails closed on truncated model output and sanitizes provider errors", async
 });
 
 vi.mock("next/headers", async () => {
-  const { createHmac } = await import("node:crypto");
+  const { sessionToken } = await import("../src/server/auth");
   return {
     cookies: async () => ({
       get: () =>
         process.env.JOURNAL_PASSWORD === "authenticated-test-fixture"
           ? {
-              value: createHmac("sha256", "authenticated-test-fixture")
-                .update("session-v1")
-                .digest("hex"),
+              value: sessionToken(),
             }
           : undefined,
     }),

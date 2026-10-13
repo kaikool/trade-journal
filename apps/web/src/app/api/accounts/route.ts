@@ -5,6 +5,8 @@ import { encryptJson } from "@/server/crypto";
 import { newId, nowIso } from "@/server/ids";
 import { syncAccount } from "@/server/sync";
 import { isEnabledSyncBroker } from "@/lib/supported-brokers";
+import { validateAccountBody } from "@/server/account-validation";
+import { setSetting, deleteSetting } from "@/server/settings";
 
 export const GET = handler(async (request: Request) => {
   if (new URL(request.url).searchParams.get("summary") === "1") {
@@ -38,10 +40,12 @@ interface CreateBody {
   profitCalcMethod?: "fifo" | "lifo" | "wavg";
   credentials?: Record<string, string>;
   autoSync?: boolean;
+  brokerAccountId?: string;
 }
 
 export const POST = handler(async (request: Request) => {
   const body = (await request.json()) as CreateBody;
+  validateAccountBody(body, true);
   if (!body.name || !body.kind) return bad("name and kind are required");
   if (body.kind === "sync" && (!body.broker || !body.credentials)) {
     return bad("sync accounts need a broker and credentials");
@@ -64,6 +68,9 @@ export const POST = handler(async (request: Request) => {
     createdAt: nowIso(),
   });
 
+  if (body.kind === "sync" && body.brokerAccountId)
+    await setSetting(`brokerAccount:${id}`, body.brokerAccountId.trim());
+
   // First sync happens right away so the account isn't born empty.
   let sync = null;
   if (body.kind === "sync") {
@@ -72,6 +79,7 @@ export const POST = handler(async (request: Request) => {
     } catch (error) {
       // Bad credentials shouldn't strand a half-created account.
       await db.delete(accounts).where(eq(accounts.id, id));
+      await deleteSetting(`brokerAccount:${id}`);
       return bad(error instanceof Error ? error.message : "Broker connection failed", 502);
     }
   }

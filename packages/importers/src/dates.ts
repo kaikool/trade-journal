@@ -43,6 +43,10 @@ const naiveToUtc = (naiveUtcMs: number, timeZone: string): number => {
   // so DST boundaries land right.
   let guess = naiveUtcMs - (wallClockAsUtc(naiveUtcMs, timeZone) - naiveUtcMs);
   guess = naiveUtcMs - (wallClockAsUtc(guess, timeZone) - guess);
+  // Reject nonexistent wall times and ambiguous repeated times at DST transitions.
+  if (wallClockAsUtc(guess, timeZone) !== naiveUtcMs) return NaN;
+  for (const minutes of [-120, -60, -30, 30, 60, 120])
+    if (wallClockAsUtc(guess + minutes * 60_000, timeZone) === naiveUtcMs) return NaN;
   return guess;
 };
 
@@ -166,6 +170,28 @@ export const parseTimestamp = (value: string | undefined, timeZone = "UTC"): str
   if (text === "") return null;
 
   if (/(Z|[+-]\d{2}:?\d{2})$/.test(text)) {
+    const local = toNaive(text.replace(/(Z|[+-]\d{2}:?\d{2})$/, ""));
+    if (!local) return null;
+    const check = new Date(
+      Date.UTC(
+        local.year,
+        local.month - 1,
+        local.day,
+        local.hour,
+        local.minute,
+        local.second,
+        local.millisecond,
+      ),
+    );
+    if (
+      check.getUTCFullYear() !== local.year ||
+      check.getUTCMonth() !== local.month - 1 ||
+      check.getUTCDate() !== local.day ||
+      check.getUTCHours() !== local.hour ||
+      check.getUTCMinutes() !== local.minute ||
+      check.getUTCSeconds() !== local.second
+    )
+      return null;
     const ms = Date.parse(text);
     return Number.isNaN(ms) ? null : new Date(ms).toISOString();
   }
@@ -193,6 +219,7 @@ export const parseTimestamp = (value: string | undefined, timeZone = "UTC"): str
   )
     return null;
   const utcMs = timeZone === "UTC" ? naiveUtcMs : naiveToUtc(naiveUtcMs, timeZone);
+  if (!Number.isFinite(utcMs)) return null;
   return new Date(utcMs).toISOString();
 };
 

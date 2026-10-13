@@ -84,13 +84,15 @@ Set these in Vercel Project Settings → Environment Variables, or in `apps/web/
 
 `JOURNAL_PASSWORD` is mandatory in every environment, including local development. Set a strong password before starting the journal. If it is missing, empty, or contains only whitespace, the application returns **HTTP 503** for pages, login, and API requests; data handlers and broker auto-sync do not run. Static framework assets are not journal data and remain excluded from the middleware matcher.
 
-With a configured password, sign in at `/login`. The server issues an HTTP-only session cookie; missing, forged, or stale sessions receive **HTTP 401** from protected APIs and are redirected to login on pages. Changing `JOURNAL_PASSWORD` invalidates existing sessions. Never put this password in a `NEXT_PUBLIC_` variable or commit your `.env.local` file.
+With a configured password, sign in at `/login`. The server issues an HTTP-only session cookie; missing, forged, or stale sessions receive **HTTP 401** from protected APIs and are redirected to login on pages. Sessions expire on the server after 30 days. Changing `JOURNAL_PASSWORD` invalidates existing sessions. This upgrade invalidates older session tokens: sign in again. Login allows 10 attempts per minute across instances; excess attempts return HTTP 429 with `Retry-After`, backed by a locked PostgreSQL row. Never put this password in a `NEXT_PUBLIC_` variable or commit your `.env.local` file.
 
 For AI, open **Settings → AI**, select **Anthropic** or **OpenAI**, enter your API key, and choose **Save AI settings**. OpenAI defaults to `gpt-4.1-mini`; you can enter another text model ID available to your account. Each provider keeps its own encrypted key and model choice. Existing Anthropic settings continue to work. An OpenAI-only environment setup selects OpenAI automatically; with both keys present, Anthropic remains the default until you save a provider choice. Environment keys override saved keys and must be changed on the server. Saving settings does not make a model request or verify account access.
 
 Deploy the web app to Vercel or another Node host with network access to your configured PostgreSQL database and Supabase Storage. Persistent local disk is not required by the current runtime.
 
-Optional historical market data powers estimated MAE/MFE and candle replay on closed trades, with Vela™ rendering the charts. Configure a connection or upload candle CSVs in **Settings → Market data**. No provider is enabled or selected by default. See [Market data and replay](#market-data-and-replay) below and the [market data guide](docs/market-data.md) for setup, calculation definitions, and coverage limits.
+Before deploying this upgrade, run `pnpm --filter web db:migrate` against the target database. The migration enables RLS on all journal tables without public policies, so anonymous/authenticated PostgREST roles cannot read journal data. `DATABASE_URL` must use a trusted server role that owns these tables or has `BYPASSRLS`, such as the Supabase `postgres` role. Never expose that database credential or service role key to clients.
+
+Optional historical market data powers estimated MAE/MFE and candle replay on closed trades, with Vela™ rendering the charts. Configure a connection or upload candle CSVs in **Settings → Market data**. CSV commits require configured Supabase Storage; preview remains available without storage. Uploads fail before metadata is saved when durable storage is unavailable. No provider is enabled or selected by default. See [Market data and replay](#market-data-and-replay) below and the [market data guide](docs/market-data.md) for setup, calculation definitions, and coverage limits.
 
 The **Prop firms** sidebar tracks evaluation/reset costs, refunds, payout requests, and actual receipts across your own firms and accounts. It includes cash ROI, partial payouts, reversals, renewal reminders, attachments, and generic CSV import/export. See [Prop firm tracking](#prop-firm-tracking) below and the [prop firm guide and research](docs/prop-firms.md) for workflows and metric definitions.
 
@@ -298,3 +300,13 @@ Trade Journal reports and analyzes what your broker reports. Nothing it computes
 ## License
 
 Code is licensed under [MIT](LICENSE) © [LuxAlgo Global, LLC](https://luxalgo.com). The project name and LuxAlgo marks are covered by the [trademark policy](TRADEMARKS.md). Security reports: see [SECURITY.md](SECURITY.md).
+
+### Broker account isolation and safe transfers
+
+A broker connection syncs one broker account at a time. If your credentials expose several accounts, enter the broker account ID in the connection form and create a separate journal account for each. The selected account ID is retained across syncs, and its currency is recorded without adding balances from other accounts. Legacy accounts with fills but no broker account provenance require a separate connection for recovery; keep the original history and reviews until you have compared them.
+
+Sync preserves the number of fills with identical economic facts and reconciles reported fee corrections when the complete matching group is present. Repeating the same snapshot does not add fills. Transfers keep fills, annotations, note links, attachments and rule checks in one transaction. Transfers across currencies or transfers that merge/change existing trade identities are rejected without saving anything. Contract multiplier updates and all affected account rebuilds also commit together.
+
+SQLite migration requires an empty PostgreSQL target and valid encryption keys for encrypted credentials. Database writes are transactional. Credential decryption, storage uploads and row-count parity errors abort the migration; uploads created by a failed run are removed when storage cleanup succeeds. The source database must be retained until verification is complete. `--force` is unsupported; `--skip-storage` is allowed only when the source has no attachment or candle records.
+
+See [Audit remediation](docs/audit-remediation.md) for the changes and validation coverage.

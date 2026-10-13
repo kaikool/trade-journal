@@ -92,7 +92,7 @@ export async function removeAttachmentObject(path: string) {
 export async function uploadMarketDataset(path: string, json: string): Promise<void> {
   const url = process.env.SUPABASE_URL?.trim();
   const key = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
-  if (!url || !key) return;
+  if (!url || !key) throw new Error("Configure Supabase Storage before importing market candles.");
   const { error } = await bucket().upload(path, Buffer.from(json, "utf8"), {
     contentType: "application/json",
     upsert: true,

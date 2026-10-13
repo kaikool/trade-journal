@@ -3,6 +3,27 @@ import { eq } from "drizzle-orm";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestDatabase } from "./helpers/postgres";
 
+const storageFiles = vi.hoisted(() => new Map<string, Uint8Array>());
+vi.mock("@supabase/supabase-js", () => ({
+  createClient: () => ({
+    storage: {
+      from: () => ({
+        upload: async (path: string, bytes: Uint8Array) => {
+          storageFiles.set(path, bytes);
+          return { error: null };
+        },
+        download: async (path: string) => ({
+          data: storageFiles.has(path) ? new Blob([storageFiles.get(path)! as BlobPart]) : null,
+          error: null,
+        }),
+        remove: async (paths: string[]) => {
+          for (const path of paths) storageFiles.delete(path);
+          return { error: null };
+        },
+      }),
+    },
+  }),
+}));
 const testDatabase = await createTestDatabase();
 (globalThis as { __journalTestDb?: unknown }).__journalTestDb = testDatabase.db;
 vi.resetModules();
@@ -27,6 +48,9 @@ const request = (body: unknown) =>
     body: JSON.stringify(body),
   });
 beforeEach(async () => {
+  storageFiles.clear();
+  vi.stubEnv("SUPABASE_URL", "https://storage.fixture.example");
+  vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "synthetic-storage-fixture");
   await db.delete(settings);
   await db.delete(marketCsvDatasets);
   await db.delete(trades);

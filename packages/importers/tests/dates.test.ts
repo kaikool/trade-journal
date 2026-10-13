@@ -36,3 +36,19 @@ it.each([
 ])("rejects invalid or unsupported precision rather than changing timestamp %s", (input) => {
   expect(parseTimestamp(input)).toBeNull();
 });
+it.each(["2026-02-30T10:00:00Z", "2026-02-30T10:00:00+07:00", "2026-13-01T10:00:00Z"])(
+  "rejects invalid calendar dates even with explicit offsets: %s",
+  (value) => {
+    expect(parseTimestamp(value)).toBeNull();
+  },
+);
+it("rejects nonexistent and ambiguous DST wall times unless an explicit offset resolves them", () => {
+  expect(parseTimestamp("2026-03-08 02:30:00", "America/New_York")).toBeNull();
+  expect(parseTimestamp("2026-11-01 01:30:00", "America/New_York")).toBeNull();
+  expect(parseTimestamp("2026-11-01T01:30:00-04:00", "America/New_York")).toBe(
+    "2026-11-01T05:30:00.000Z",
+  );
+  expect(parseTimestamp("2026-11-01T01:30:00-05:00", "America/New_York")).toBe(
+    "2026-11-01T06:30:00.000Z",
+  );
+});

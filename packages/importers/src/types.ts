@@ -7,6 +7,8 @@ export interface ImportedExecution {
   quantity: number;
   price: number;
   fee: number;
+  /** Transient sync fact: false means the broker omitted fees, so old fees must be retained. */
+  feeReported?: boolean;
   executedAt: string;
   /** Previous parser timestamp, only for detecting an unsafe reimport after a parsing fix. */
   legacyExecutedAt?: string;

@@ -127,3 +127,20 @@ describe("daily broker auto-sync cron", () => {
     expect(syncMocks.syncAccount).not.toHaveBeenCalled();
   });
 });
+it("passes Vercel bearer requests through middleware but still authenticates the cron route", async () => {
+  const { NextRequest } = await import("next/server");
+  const { middleware } = await import("../src/middleware");
+  for (const authorization of ["Bearer cron-secret-for-tests", "Bearer incorrect"]) {
+    const req = new NextRequest("https://journal.example/api/cron/broker-sync", {
+      headers: { authorization },
+    });
+    expect((await middleware(req)).headers.get("x-middleware-next")).toBe("1");
+    expect((await GET(req)).status).toBe(authorization.endsWith("incorrect") ? 401 : 200);
+  }
+  vi.stubEnv("JOURNAL_PASSWORD", "");
+  const req = new NextRequest("https://journal.example/api/cron/broker-sync", {
+    headers: { authorization: "Bearer cron-secret-for-tests" },
+  });
+  expect((await middleware(req)).status).toBe(503);
+  expect((await GET(req)).status).toBe(503);
+});

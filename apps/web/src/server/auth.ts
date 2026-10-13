@@ -1,8 +1,9 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { SESSION_MAX_AGE, sessionParts } from "@/lib/session";
 
 /**
- * Single-user auth requires a non-empty JOURNAL_PASSWORD; the session cookie is an HMAC of the
- * password so rotating the password invalidates sessions.
+ * Single-user auth requires a non-empty JOURNAL_PASSWORD. Sessions have a signed
+ * lifetime and random nonce; rotating the password invalidates all sessions.
  */
 export const AUTH_COOKIE = "journal_session";
 
@@ -10,7 +11,9 @@ export const passwordConfigured = (): boolean => Boolean(process.env.JOURNAL_PAS
 
 export const sessionToken = (): string => {
   if (!passwordConfigured()) throw new Error("JOURNAL_PASSWORD is required");
-  return createHmac("sha256", process.env.JOURNAL_PASSWORD!).update("session-v1").digest("hex");
+  const issued = Math.floor(Date.now() / 1000);
+  const payload = `v2.${issued}.${issued + SESSION_MAX_AGE}.${randomBytes(16).toString("hex")}`;
+  return `${payload}.${createHmac("sha256", process.env.JOURNAL_PASSWORD!).update(payload).digest("hex")}`;
 };
 
 export const verifyPassword = (candidate: string): boolean => {
@@ -22,8 +25,11 @@ export const verifyPassword = (candidate: string): boolean => {
 
 export const verifySession = (token: string | undefined): boolean => {
   if (!passwordConfigured()) return false;
-  if (!token) return false;
-  const expected = Buffer.from(sessionToken(), "utf8");
-  const given = Buffer.from(token, "utf8");
+  const parts = sessionParts(token);
+  if (!parts) return false;
+  const expected = createHmac("sha256", process.env.JOURNAL_PASSWORD!)
+    .update(parts.message)
+    .digest();
+  const given = Buffer.from(parts.signature, "hex");
   return expected.length === given.length && timingSafeEqual(expected, given);
 };

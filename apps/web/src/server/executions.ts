@@ -1,4 +1,5 @@
 import { and, eq, inArray } from "drizzle-orm";
+import { createHash } from "node:crypto";
 import { positionFillProblem, type ImportedExecution } from "@luxalgo/journal-importers";
 import { db, executions, accounts, trades } from "@/db";
 import type { JournalExecutor } from "@/db/postgres";
@@ -122,6 +123,7 @@ export const insertExecutionsInTransaction = async (
   );
   let inserted = 0;
   let duplicates = 0;
+  let corrected = false;
   const createdAt = nowIso();
   const defaults = await getJournalDefaults(tx);
   const note = manualNotes?.trim() ? manualNotes : undefined;
@@ -152,9 +154,66 @@ export const insertExecutionsInTransaction = async (
     }
   }
   const noteExecutionIds = new Set<string>();
-  for (const row of usable) {
+  // A snapshot can contain several independent fills with identical economics.
+  // Match their multiplicity, including legacy hashes, rather than collapsing them.
+  const syncIdentity = (row: {
+    symbol: string;
+    side: string;
+    quantity: number;
+    price: number;
+    executedAt: string;
+  }) => JSON.stringify([row.symbol, row.side, row.quantity, row.price, Date.parse(row.executedAt)]);
+  const savedSync = new Map<string, (typeof executions.$inferSelect)[]>();
+  const incomingCounts = new Map<string, number>();
+  const reportedCounts = new Map<string, number>();
+  const occurrences = new Map<string, number>();
+  if (source === "sync") {
+    for (const saved of await tx
+      .select()
+      .from(executions)
+      .where(and(eq(executions.accountId, accountId), eq(executions.source, "sync")))) {
+      const key = syncIdentity(saved),
+        group = savedSync.get(key) ?? [];
+      group.push(saved);
+      savedSync.set(key, group);
+    }
+    for (const group of savedSync.values())
+      group.sort((a, b) => a.fee - b.fee || a.id.localeCompare(b.id));
+    for (const row of usable) {
+      const key = syncIdentity(row);
+      incomingCounts.set(key, (incomingCounts.get(key) ?? 0) + 1);
+      if (row.feeReported !== false) reportedCounts.set(key, (reportedCounts.get(key) ?? 0) + 1);
+    }
+  }
+  for (const row of source === "sync" ? [...usable].sort((a, b) => a.fee - b.fee) : usable) {
     const id = newId();
-    const contentHash = executionHash(row);
+    let contentHash = executionHash(row);
+    if (source === "sync") {
+      const key = syncIdentity(row),
+        occurrence = occurrences.get(key) ?? 0;
+      occurrences.set(key, occurrence + 1);
+      const saved = savedSync.get(key) ?? [];
+      if (saved[occurrence]) {
+        duplicates++;
+        // Correct fees only when the window contains the entire matching group.
+        if (
+          incomingCounts.get(key)! >= saved.length &&
+          reportedCounts.get(key) === incomingCounts.get(key) &&
+          saved[occurrence]!.fee !== row.fee
+        ) {
+          await tx
+            .update(executions)
+            .set({ fee: row.fee })
+            .where(eq(executions.id, saved[occurrence]!.id));
+          corrected = true;
+        }
+        continue;
+      }
+      contentHash = createHash("sha256")
+        .update(JSON.stringify(["sync-v2", key, occurrence]))
+        .digest("hex")
+        .slice(0, 32);
+    }
     const result = await tx
       .insert(executions)
       .values({
@@ -165,7 +224,7 @@ export const insertExecutionsInTransaction = async (
         quantity: row.quantity,
         price: row.price,
         fee:
-          row.importMetadata?.preserveFee || options.preserveFees
+          source === "sync" || row.importMetadata?.preserveFee || options.preserveFees
             ? row.fee
             : defaultFee(row.fee, row.quantity, accountId, row.symbol, defaults),
         executedAt: row.executedAt,
@@ -192,7 +251,7 @@ export const insertExecutionsInTransaction = async (
       }
     }
   }
-  if (inserted > 0) await rebuildAccountInTransaction(accountId, tx);
+  if (inserted > 0 || corrected) await rebuildAccountInTransaction(accountId, tx);
   if (note) {
     const affected = await tx
       .select({

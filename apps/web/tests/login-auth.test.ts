@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+vi.mock("../src/server/login-throttle", () => ({ takeLoginAttempt: async () => 0 }));
 const jar = vi.hoisted(() => ({ set: vi.fn() }));
 vi.mock("next/headers", () => ({ cookies: async () => jar }));
 import { POST } from "../src/app/api/auth/route";
@@ -29,7 +30,7 @@ describe("login requires configured authentication", () => {
     expect((await login("configured-password")).status).toBe(200);
     expect(jar.set).toHaveBeenCalledWith(
       "journal_session",
-      expect.stringMatching(/^[a-f0-9]{64}$/),
+      expect.stringMatching(/^v2\./),
       expect.objectContaining({ httpOnly: true, secure: true }),
     );
   });

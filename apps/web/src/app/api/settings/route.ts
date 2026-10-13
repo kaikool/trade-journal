@@ -1,5 +1,5 @@
 import { db, accounts } from "@/db";
-import { rebuildAccount } from "@/server/rebuild";
+import { rebuildAccountInTransaction } from "@/server/rebuild";
 import { handler, ok, requireValue } from "@/server/api";
 import {
   getMultipliers,
@@ -103,6 +103,11 @@ export const PATCH = handler(async (request: Request) => {
   if (body.multipliers !== undefined)
     requireValue(
       body.multipliers &&
+        !Array.isArray(body.multipliers) &&
+        Object.keys(body.multipliers).length <= 1000 &&
+        Object.keys(body.multipliers).every(
+          (symbol) => symbol.trim().length > 0 && symbol.length <= 100,
+        ) &&
         typeof body.multipliers === "object" &&
         Object.values(body.multipliers).every(
           (n) => typeof n === "number" && Number.isFinite(n) && n > 0,
@@ -110,26 +115,28 @@ export const PATCH = handler(async (request: Request) => {
       "Contract multipliers must be positive numbers.",
     );
 
-  // A display-only change must not silently alter the legacy import default.
-  if (conversion) await setSetting("currencyConversion", JSON.stringify(conversion));
-  if (body.timeZone !== undefined || body.importTimeZone !== undefined)
-    await setSetting("importTimeZone", body.importTimeZone ?? (await getImportTimeZone()));
-  if (body.timeZone !== undefined) await setSetting("timeZone", body.timeZone);
-
-  if (body.multipliers !== undefined) {
-    await setSetting("multipliers", JSON.stringify(body.multipliers));
-    const allAccounts = await db.select({ id: accounts.id }).from(accounts);
-    for (const account of allAccounts) {
-      await rebuildAccount(account.id);
+  await db.transaction(async (tx) => {
+    // Lock accounts in the same order as transfers before changing valuation settings.
+    const allAccounts =
+      body.multipliers === undefined
+        ? []
+        : await tx.select({ id: accounts.id }).from(accounts).orderBy(accounts.id).for("update");
+    if (conversion) await setSetting("currencyConversion", JSON.stringify(conversion), tx);
+    if (body.timeZone !== undefined || body.importTimeZone !== undefined)
+      await setSetting("importTimeZone", body.importTimeZone ?? (await getImportTimeZone(tx)), tx);
+    if (body.timeZone !== undefined) await setSetting("timeZone", body.timeZone, tx);
+    if (body.multipliers !== undefined) {
+      await setSetting("multipliers", JSON.stringify(body.multipliers), tx);
+      for (const account of allAccounts) await rebuildAccountInTransaction(account.id, tx);
     }
-  }
-
-  for (const id of AI_PROVIDERS) {
-    const key = body[`${id}Key`];
-    if (key !== undefined) await setAiKey(id, key);
-  }
-  if (body.aiProvider !== undefined) await setSetting("aiProvider", body.aiProvider);
-  if (body.aiModel !== undefined) await setSetting(aiModelSetting(provider), body.aiModel.trim());
+    for (const id of AI_PROVIDERS) {
+      const key = body[`${id}Key`];
+      if (key !== undefined) await setAiKey(id, key, tx);
+    }
+    if (body.aiProvider !== undefined) await setSetting("aiProvider", body.aiProvider, tx);
+    if (body.aiModel !== undefined)
+      await setSetting(aiModelSetting(provider), body.aiModel.trim(), tx);
+  });
 
   return ok({ saved: true });
 });

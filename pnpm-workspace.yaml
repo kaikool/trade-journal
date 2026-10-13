@@ -11,3 +11,7 @@ minimumReleaseAgeExclude:
   - "@ai-sdk/provider-utils@5.0.38"
   - "@ai-sdk/provider@4.0.12"
   - "@luxalgo/broker-sdk@0.5.1"
+overrides:
+  "postcss@<8.5.23": "^8.5.26"
+  "undici@>=7.0.0 <7.29.1": "^7.29.1"
+  "source-map-js@<1.2.2": "^1.2.2"

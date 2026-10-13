@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { sessionParts } from "./lib/session";
 
 /** Fail closed before navigation or API access, using Edge-compatible Web Crypto. */
 export const middleware = async (request: NextRequest) => {
@@ -8,9 +9,13 @@ export const middleware = async (request: NextRequest) => {
   }
   const { pathname } = request.nextUrl;
   if (pathname === "/login" || pathname === "/api/auth") return NextResponse.next();
+  // Only this route uses the independent CRON_SECRET check in its handler.
+  // The required journal password gate above still applies to cron requests.
+  if (pathname === "/api/cron/broker-sync" && request.method === "GET") return NextResponse.next();
   const token = request.cookies.get("journal_session")?.value;
+  const parts = sessionParts(token);
   let valid = false;
-  if (token && /^[a-f0-9]{64}$/.test(token)) {
+  if (parts) {
     const encoder = new TextEncoder();
     const key = await crypto.subtle.importKey(
       "raw",
@@ -19,8 +24,8 @@ export const middleware = async (request: NextRequest) => {
       false,
       ["verify"],
     );
-    const signature = Uint8Array.from(token.match(/../g)!, (byte) => parseInt(byte, 16));
-    valid = await crypto.subtle.verify("HMAC", key, signature, encoder.encode("session-v1"));
+    const signature = Uint8Array.from(parts.signature.match(/../g)!, (byte) => parseInt(byte, 16));
+    valid = await crypto.subtle.verify("HMAC", key, signature, encoder.encode(parts.message));
   }
   if (!valid) {
     if (pathname === "/api" || pathname.startsWith("/api/")) {

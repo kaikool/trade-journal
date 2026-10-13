@@ -694,6 +694,7 @@ function BrokerConnect() {
   const { data } = useApi<{ brokers: BrokerInfo[] }>("/api/brokers");
   const [brokerId, setBrokerId] = useState("");
   const [name, setName] = useState("");
+  const [brokerAccountId, setBrokerAccountId] = useState("");
   const [credentials, setCredentials] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -712,6 +713,7 @@ function BrokerConnect() {
         kind: "sync",
         broker: broker.id,
         credentials,
+        ...(brokerAccountId.trim() ? { brokerAccountId: brokerAccountId.trim() } : {}),
       });
       if (created.sync.skipped > 0) {
         alert(
@@ -739,6 +741,7 @@ function BrokerConnect() {
             onValueChange={(value) => {
               setBrokerId(value);
               setCredentials({});
+              setBrokerAccountId("");
             }}
           >
             <SelectTrigger>
@@ -755,6 +758,20 @@ function BrokerConnect() {
         </div>
         {broker && (
           <>
+            <div>
+              <Label htmlFor="broker-account-id">
+                Broker account ID (optional for a single-account connection)
+              </Label>
+              <Input
+                id="broker-account-id"
+                value={brokerAccountId}
+                onChange={(event) => setBrokerAccountId(event.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                For connections with several accounts, enter the ID of the account to sync. Each
+                account keeps its own trades and currency.
+              </p>
+            </div>
             <p className="rounded-md bg-muted/60 p-2.5 text-xs text-muted-foreground">
               {broker.readOnlySetup}
             </p>

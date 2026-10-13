@@ -93,9 +93,13 @@ export const getAiKey = async (provider: AiProvider): Promise<string | null> => 
   }
 };
 
-export const setAiKey = async (provider: AiProvider, key: string | null): Promise<void> => {
-  if (key === null) await deleteSetting(`${provider}KeyEnc`);
-  else await setSetting(`${provider}KeyEnc`, encryptJson(key.trim()));
+export const setAiKey = async (
+  provider: AiProvider,
+  key: string | null,
+  executor: JournalExecutor = db,
+): Promise<void> => {
+  if (key === null) await deleteSetting(`${provider}KeyEnc`, executor);
+  else await setSetting(`${provider}KeyEnc`, encryptJson(key.trim()), executor);
 };
 
 export const getAnthropicKey = (): Promise<string | null> => getAiKey("anthropic");

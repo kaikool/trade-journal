@@ -15,7 +15,10 @@ export const ok = (data: unknown, init?: ResponseInit) => {
 };
 
 export const bad = (message: string, status = 400) =>
-  NextResponse.json({ error: message }, { status });
+  NextResponse.json(
+    { error: message },
+    { status, headers: { "Cache-Control": "private, no-store" } },
+  );
 
 const safeErrorMessage = (message: string): string =>
   message

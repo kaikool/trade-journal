@@ -1,0 +1,23 @@
+ALTER TABLE "accounts" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "attachments" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "executions" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "folders" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "import_batches" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "import_source_aliases" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "import_sources" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "journal_days" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "market_csv_datasets" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "missed_trades" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "note_templates" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "notes" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "playbooks" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "progress_checks" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "progress_rules" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "prop_accounts" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "prop_audit" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "prop_entries" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "prop_receipts" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "settings" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "trade_excursions" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "trade_rule_checks" ENABLE ROW LEVEL SECURITY;--> statement-breakpoint
+ALTER TABLE "trades" ENABLE ROW LEVEL SECURITY;

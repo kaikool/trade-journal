@@ -10,6 +10,18 @@ import { downloadMarketDataset, uploadMarketDataset, removeMarketDataset } from 
 // Immutable datasets; keep at most 200,000 decoded bars across files.
 const decoded = new Map<string, MarketBar[]>();
 let decodedCount = 0;
+function cacheBars(id: string, bars: MarketBar[]) {
+  const previous = decoded.get(id);
+  if (previous) decodedCount -= previous.length;
+  decoded.delete(id);
+  decoded.set(id, bars);
+  decodedCount += bars.length;
+  while (decodedCount > 200_000) {
+    const oldest = decoded.keys().next().value!;
+    decodedCount -= decoded.get(oldest)!.length;
+    decoded.delete(oldest);
+  }
+}
 
 async function datasetBars(id: string, storagePath: string): Promise<MarketBar[]> {
   const cached = decoded.get(id);
@@ -21,13 +33,7 @@ async function datasetBars(id: string, storagePath: string): Promise<MarketBar[]
   const text = await downloadMarketDataset(storagePath);
   if (!text) throw new MarketDataError("CSV dataset was removed or could not be loaded.");
   const bars = JSON.parse(text) as MarketBar[];
-  decoded.set(id, bars);
-  decodedCount += bars.length;
-  while (decodedCount > 200_000) {
-    const oldest = decoded.keys().next().value!;
-    decodedCount -= decoded.get(oldest)!.length;
-    decoded.delete(oldest);
-  }
+  cacheBars(id, bars);
   return bars;
 }
 
@@ -87,20 +93,23 @@ export async function importCsvDataset(input: {
   const checksum = createHash("sha256").update(json).digest("hex");
 
   await uploadMarketDataset(storagePath, json);
-  decoded.set(id, bars);
-  decodedCount += bars.length;
-
-  await db.insert(marketCsvDatasets).values({
-    ...metadata,
-    id,
-    storagePath,
-    checksum,
-    formatVersion: 1,
-    importedAt: new Date().toISOString(),
-    barCount: bars.length,
-    firstTime: bars[0]!.time,
-    lastTime: bars.at(-1)!.time,
-  });
+  try {
+    await db.insert(marketCsvDatasets).values({
+      ...metadata,
+      id,
+      storagePath,
+      checksum,
+      formatVersion: 1,
+      importedAt: new Date().toISOString(),
+      barCount: bars.length,
+      firstTime: bars[0]!.time,
+      lastTime: bars.at(-1)!.time,
+    });
+  } catch (error) {
+    await removeMarketDataset(storagePath).catch(() => {});
+    throw error;
+  }
+  cacheBars(id, bars);
   return id;
 }
 
