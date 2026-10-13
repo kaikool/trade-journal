@@ -38,6 +38,7 @@ const account = (label: string, index: number) => ({
   createdAt: `2026-01-0${index}T10:00:00Z`,
   currency: "USD",
   accountType: "evaluation",
+  status: "active",
 });
 let rows: Record<string, unknown>[] = [];
 let calls: { tool: string; operation: string; args: Record<string, unknown> }[] = [];
@@ -906,4 +907,110 @@ it("reuses an existing The5ers prop tracker account linked to the chosen journal
   expect(props).toHaveLength(1);
   expect(props[0]!.id).toBe("existing-prop");
   expect(props[0]!.notes).toBe("Keep my notes");
+});
+
+it("accepts 115 accounts in a single complete response even when limit 50 is ignored", async () => {
+  await connect();
+  rows = Array.from({ length: 115 }, (_, i) => ({
+    ...account(`Account ${i}`, 1),
+    status: i % 3 === 0 ? "disabled" : i % 3 === 1 ? "available" : "active",
+  }));
+  const result = await POST(request({ action: "accounts" }));
+  expect(result.status).toBe(200);
+  const data = await result.json();
+  expect(data.accounts).toHaveLength(115);
+  expect(data.complete).toBe(true);
+  expect(data.accounts.some((a: { status: string }) => a.status === "disabled")).toBe(true);
+});
+it("accepts an unpaginated list when its reported total confirms complete coverage", () => {
+  const parsed = parseProviderAccounts({
+    currency: "USD",
+    data: { total: "2", accounts: [account("One", 1), account("Two", 2)] },
+  });
+  expect(parsed.hasMore).toBe(false);
+  expect(parsed.total).toBe(2);
+});
+it("reports incomplete coverage and prevents linking when the reported total is not retrieved", async () => {
+  await connect();
+  const original = fetch;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === MCP_URL) {
+        const rpc = JSON.parse(String(init?.body));
+        if (
+          rpc.method === "tools/call" &&
+          rpc.params.name === "the5ers_account" &&
+          rpc.params.arguments.operation === "list"
+        )
+          return json({
+            jsonrpc: "2.0",
+            id: rpc.id,
+            result: {
+              structuredContent: {
+                data: { total: 115, accounts: rows },
+                pagination: { has_more: false },
+              },
+            },
+          });
+      }
+      return original(url, init);
+    }),
+  );
+  const response = await POST(request({ action: "accounts" }));
+  const data = await response.json();
+  expect(data.complete).toBe(false);
+  expect(data.accounts).toHaveLength(2);
+  await expect(selectSourceAccounts([data.accounts[0].id], true, true)).rejects.toThrow(
+    "incomplete",
+  );
+  const { accounts } = await import("../src/db");
+  expect(await db.select().from(accounts)).toHaveLength(0);
+});
+it("stops repeated pages while returning visible records with an incomplete warning", async () => {
+  await connect();
+  const original = fetch;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === MCP_URL) {
+        const rpc = JSON.parse(String(init?.body));
+        if (
+          rpc.method === "tools/call" &&
+          rpc.params.name === "the5ers_account" &&
+          rpc.params.arguments.operation === "list"
+        )
+          return json({
+            jsonrpc: "2.0",
+            id: rpc.id,
+            result: { structuredContent: { accounts: rows, pagination: { has_more: true } } },
+          });
+      }
+      return original(url, init);
+    }),
+  );
+  const data = await (await POST(request({ action: "accounts" }))).json();
+  expect(data.complete).toBe(false);
+  expect(data.accounts).toHaveLength(2);
+  expect(data.warnings.join(" ")).toContain("repeated");
+});
+it("keeps available and disabled accounts selectable but enables cron only for active accounts", async () => {
+  await connect();
+  rows = [
+    account("Active", 1),
+    { ...account("Available", 2), status: "available" },
+    { ...account("Disabled", 3), status: "disabled" },
+  ];
+  const listed = await listSourceAccounts();
+  await selectSourceAccounts(
+    listed.map((a) => a.id),
+    true,
+  );
+  const selected = (await sourceOverview()).selection;
+  expect(selected.map((a) => a.autoSync)).toEqual([true, false, false]);
+  rows[0]!.status = "disabled";
+  expect(await syncScheduledThe5ers()).toEqual({ checked: 0, synced: 0, failed: 0 });
+  expect((await sourceOverview()).selection).toHaveLength(3);
+  const snapshot = await syncSourceAccount(listed[2]!.id);
+  expect(snapshot.account.status).toBe("disabled");
 });

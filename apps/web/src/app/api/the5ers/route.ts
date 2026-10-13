@@ -5,7 +5,7 @@ import { checkOAuth } from "@/server/the5ers/registration";
 import { AUTH_COOKIE } from "@/server/auth";
 import { startAuthorization, disconnectThe5ers } from "@/server/the5ers/oauth";
 import {
-  listSourceAccounts,
+  listSourceInventory,
   sourceOverview,
   selectSourceAccounts,
   syncSourceAccount,
@@ -58,7 +58,7 @@ export const POST = handler(async (request: Request) => {
       await disconnectThe5ers();
       return ok({ disconnected: true });
     case "accounts":
-      return ok({ accounts: await listSourceAccounts() });
+      return ok(await listSourceInventory());
     case "select":
       requireValue(
         body.linkJournalAccounts === undefined || typeof body.linkJournalAccounts === "boolean",

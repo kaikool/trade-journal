@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
+import { sourceStatus, defaultSourceVisible } from "@/lib/the5ers-status";
 import { useApi, postJson } from "@/lib/use-api";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
@@ -235,14 +236,20 @@ export function The5ersAccounts({ onLinked }: { onLinked?: () => void }) {
     [chosen, setChosen] = useState<string[]>([]),
     [auto, setAuto] = useState(false),
     [search, setSearch] = useState(""),
-    [all, setAll] = useState(false),
+    [statusFilter, setStatusFilter] = useState("current"),
+    [coverage, setCoverage] = useState({ complete: true, warnings: [] as string[] }),
     [page, setPage] = useState(0);
   const load = () =>
     state.run(async () => {
-      const result = await postJson<{ accounts: SourceAccount[] }>("/api/the5ers", {
+      const result = await postJson<{
+        accounts: SourceAccount[];
+        complete: boolean;
+        warnings: string[];
+      }>("/api/the5ers", {
         action: "accounts",
       });
       setInventory(result.accounts);
+      setCoverage({ complete: result.complete, warnings: result.warnings });
       setChosen(state.data?.selection.map((a) => a.id) ?? []);
       setLinks(
         Object.fromEntries(
@@ -273,7 +280,10 @@ export function The5ersAccounts({ onLinked }: { onLinked?: () => void }) {
     );
   const rows = (inventory ?? []).filter(
     (a) =>
-      (all || !a.status || a.status === "active" || chosen.includes(a.id)) &&
+      (statusFilter === "all" ||
+        (statusFilter === "current"
+          ? defaultSourceVisible(a.status)
+          : sourceStatus(a.status) === statusFilter)) &&
       `${a.label} ${a.platform} ${a.status ?? ""}`.toLowerCase().includes(search.toLowerCase()),
   );
   return (
@@ -304,17 +314,34 @@ export function The5ersAccounts({ onLinked }: { onLinked?: () => void }) {
                 }}
                 className="max-w-sm"
               />
-              <label className="flex items-center gap-2 text-sm">
-                <Checkbox
-                  checked={all}
-                  onCheckedChange={(v) => {
-                    setAll(v === true);
-                    setPage(0);
-                  }}
-                />
-                Include inactive accounts
-              </label>
+              <select
+                aria-label="Filter The5ers account status"
+                className="rounded-md border bg-background p-2 text-sm"
+                value={statusFilter}
+                onChange={(e) => {
+                  setStatusFilter(e.target.value);
+                  setPage(0);
+                }}
+              >
+                <option value="current">
+                  Active / available (
+                  {inventory.filter((a) => defaultSourceVisible(a.status)).length})
+                </option>
+                <option value="all">All statuses ({inventory.length})</option>
+                {[...new Set(inventory.map((a) => sourceStatus(a.status)))].sort().map((status) => (
+                  <option key={status} value={status}>
+                    {heading(status)} (
+                    {inventory.filter((a) => sourceStatus(a.status) === status).length})
+                  </option>
+                ))}
+              </select>
             </div>
+            {!coverage.complete && (
+              <p role="alert" className="text-sm text-destructive">
+                Account list incomplete. {coverage.warnings.join(" ")} Linking is disabled until
+                coverage is confirmed.
+              </p>
+            )}
             <p className="text-sm text-muted-foreground">
               {rows.length} matching / {inventory.length} accounts · {chosen.length} selected
               (maximum 10)
@@ -414,10 +441,10 @@ export function The5ersAccounts({ onLinked }: { onLinked?: () => void }) {
             </div>
             <label className="flex items-center gap-2 text-sm">
               <Checkbox checked={auto} onCheckedChange={(v) => setAuto(v === true)} />
-              Daily source refresh
+              Daily source refresh for active accounts only
             </label>
             <Button
-              disabled={state.busy}
+              disabled={state.busy || !coverage.complete}
               onClick={() =>
                 void state.run(async () => {
                   await postJson("/api/the5ers", {

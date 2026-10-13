@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { and, eq, like, sql } from "drizzle-orm";
 import { db, settings, accounts as journalAccounts, propAccounts, propAudit } from "@/db";
+import { isActiveSource } from "@/lib/the5ers-status";
 import { parseTimestamp } from "@luxalgo/journal-importers";
 import { RequestError, requireValue } from "@/server/api";
 import { getSetting, setSetting } from "@/server/settings";
@@ -68,19 +69,40 @@ function pageData(value: unknown, collection: "accounts" | "positions") {
     `The5ers ${collection} response is not yet supported. No journal trades were changed.`,
   );
   requireValue(
-    rows.length <= (collection === "accounts" ? 50 : 100),
-    "The5ers exceeded the requested page size.",
+    rows.length <= (collection === "accounts" ? 1000 : 100),
+    "The5ers response exceeded its safety limit.",
   );
-  const pagination = record(envelope.pagination ?? body.pagination);
+  const pagination = record(envelope.pagination ?? body.pagination ?? {});
+  const reportedTotal = pagination.total ?? body.total ?? envelope.total ?? undefined;
+  const total =
+    typeof reportedTotal === "string" && /^\d{1,6}$/.test(reportedTotal)
+      ? Number(reportedTotal)
+      : reportedTotal;
   requireValue(
-    typeof pagination.has_more === "boolean",
-    "The5ers did not report pagination coverage.",
+    total === undefined || (Number.isSafeInteger(total) && Number(total) >= 0),
+    "The5ers reported an invalid account total.",
   );
-  return { rows, hasMore: pagination.has_more };
+  if (collection === "positions")
+    requireValue(
+      typeof pagination.has_more === "boolean",
+      "The5ers did not report pagination coverage.",
+    );
+  return {
+    rows,
+    hasMore:
+      typeof pagination.has_more === "boolean"
+        ? pagination.has_more
+        : typeof total === "number" && rows.length === total
+          ? false
+          : null,
+    total: typeof total === "number" ? total : undefined,
+  };
 }
 export function parseProviderAccounts(value: unknown): {
   accounts: ProviderAccount[];
-  hasMore: boolean;
+  hasMore: boolean | null;
+  total?: number;
+  rawCount: number;
 } {
   const page = pageData(value, "accounts");
   const accounts: ProviderAccount[] = page.rows
@@ -131,37 +153,73 @@ export function parseProviderAccounts(value: unknown): {
         source: publicData(row),
       };
     });
-  return { accounts, hasMore: page.hasMore };
+  return { accounts, hasMore: page.hasMore, total: page.total, rawCount: page.rows.length };
 }
-async function inventory(client: The5ersMcp): Promise<ProviderAccount[]> {
-  const all: ProviderAccount[] = [],
-    seenRefs = new Set<string>();
+interface AccountInventory {
+  accounts: ProviderAccount[];
+  complete: boolean;
+  warnings: string[];
+}
+async function inventoryResult(client: The5ersMcp): Promise<AccountInventory> {
+  const all: ProviderAccount[] = [];
+  const seenIds = new Set<string>();
+  const seenRefs = new Set<string>();
+  let rawCount = 0,
+    total: number | undefined,
+    bytes = 0;
+  const partial = (warning: string) => ({ accounts: all, complete: false, warnings: [warning] });
   for (let page = 1; page <= 20; page++) {
     const parsed = parseProviderAccounts(await client.read("account", "list", { page, limit: 50 }));
-    for (const account of parsed.accounts) {
-      requireValue(
-        !seenRefs.has(account.ref),
-        "The5ers repeated an account page. Sync stopped without merging accounts.",
-      );
-      seenRefs.add(account.ref);
-      all.push(account);
-    }
-    if (!parsed.hasMore) {
-      const identities = all.map((account) => account.id);
-      requireValue(
-        new Set(identities).size === identities.length,
-        "The5ers account labels and creation dates are ambiguous. Sync stopped without merging accounts.",
-      );
-      return all;
-    }
+    const ids = parsed.accounts.map((a) => a.id);
     requireValue(
-      parsed.accounts.length > 0,
-      "The5ers returned an empty account page with more pages indicated.",
+      new Set(ids).size === ids.length,
+      "The5ers account labels and creation dates are ambiguous. Sync stopped without merging accounts.",
     );
+    requireValue(
+      new Set(parsed.accounts.map((a) => a.ref)).size === parsed.accounts.length,
+      "The5ers returned ambiguous account references.",
+    );
+    if (ids.some((id) => seenIds.has(id)) || parsed.accounts.some((a) => seenRefs.has(a.ref)))
+      return partial(
+        "The5ers repeated or overlapped an account page. The account list is incomplete.",
+      );
+    if (parsed.total !== undefined) {
+      if (total !== undefined && total !== parsed.total)
+        return partial("The5ers account total changed during retrieval. Refresh the list.");
+      total = parsed.total;
+    }
+    if (rawCount + parsed.rawCount > 1000)
+      return partial("The account list reached its 1,000-record safety limit and is incomplete.");
+    bytes += Buffer.byteLength(JSON.stringify(parsed.accounts));
+    requireValue(bytes <= 4 * 1024 * 1024, "The5ers account inventory exceeded its size limit.");
+    rawCount += parsed.rawCount;
+    all.push(...parsed.accounts);
+    ids.forEach((id) => seenIds.add(id));
+    parsed.accounts.forEach((a) => seenRefs.add(a.ref));
+    if (parsed.hasMore === false)
+      return total === undefined || rawCount === total
+        ? { accounts: all, complete: true, warnings: [] }
+        : partial("The5ers reported more accounts than were retrieved. The list is incomplete.");
+    if (parsed.hasMore === null)
+      return partial(
+        "The5ers did not report sufficient pagination coverage. The account list is incomplete.",
+      );
+    if (!parsed.rawCount)
+      return partial(
+        "The5ers returned an empty account page while reporting more records. The list is incomplete.",
+      );
   }
-  throw new RequestError(
-    "The5ers account list exceeded its pagination limit. Nothing was selected.",
-  );
+  return partial("The account list reached its page limit and is incomplete.");
+}
+async function inventory(client: The5ersMcp): Promise<ProviderAccount[]> {
+  const result = await inventoryResult(client);
+  requireValue(result.complete, result.warnings.join(" "));
+  return result.accounts;
+}
+export async function listSourceInventory() {
+  const { client } = await sourceClient();
+  const result = await inventoryResult(client);
+  return { ...result, accounts: result.accounts.map(({ ref: _ref, ...account }) => account) };
 }
 async function sourceClient(signal?: AbortSignal) {
   const connection = await accessConnection();
@@ -231,7 +289,7 @@ export async function selectSourceAccounts(
     return {
       id: account.id,
       label: account.label,
-      autoSync,
+      autoSync: autoSync && isActiveSource(account.status),
       journalAccountId:
         journalLinks[id] ?? storedLinks[id] ?? (linkJournalAccounts ? `the5ers_${id}` : undefined),
     };
@@ -432,7 +490,12 @@ async function positions(client: The5ersMcp, account: ProviderAccount) {
   }
   return { rows, refs, complete: false };
 }
-export async function syncSourceAccount(id: string, signal?: AbortSignal): Promise<SourceSnapshot> {
+class InactiveSource extends RequestError {}
+export async function syncSourceAccount(
+  id: string,
+  signal?: AbortSignal,
+  automatic = false,
+): Promise<SourceSnapshot> {
   requireValue(
     (await selectedAccounts()).some((account) => account.id === id),
     "Select this The5ers account before syncing it.",
@@ -443,6 +506,10 @@ export async function syncSourceAccount(id: string, signal?: AbortSignal): Promi
     account,
     "The selected The5ers account identity changed or is unavailable. Refresh and select it again.",
   );
+  if (automatic && !isActiveSource(account.status))
+    throw new InactiveSource(
+      "This The5ers account is no longer active; use manual refresh for history.",
+    );
   const { ref: _ref, ...publicAccount } = account;
   const snapshot: SourceSnapshot = {
     account: publicAccount,
@@ -621,17 +688,40 @@ export async function syncScheduledThe5ers(deadline = Date.now() + 240_000) {
         .select({ id: journalAccounts.id, archivedAt: journalAccounts.archivedAt })
         .from(journalAccounts)
     : [];
-  const selected = candidates.filter(
+  const eligible = candidates.filter(
     (a) => !a.journalAccountId || native.some((n) => n.id === a.journalAccountId && !n.archivedAt),
   );
+  if (!eligible.length) return { checked: 0, synced: 0, failed: 0 };
+  if (Date.now() >= deadline)
+    return { checked: eligible.length, synced: 0, failed: eligible.length };
+  let available: SourceAccount[];
+  try {
+    available = await listSourceAccounts();
+  } catch (error) {
+    console.error("[cron] The5ers inventory unavailable", {
+      errorName: error instanceof Error ? error.name : "UnknownError",
+    });
+    return { checked: eligible.length, synced: 0, failed: eligible.length };
+  }
+  const activeIds = new Set(available.filter((a) => isActiveSource(a.status)).map((a) => a.id));
+  const selected = eligible.filter((a) => activeIds.has(a.id));
   let synced = 0,
+    skipped = 0,
     failed = 0;
   for (const account of selected) {
     try {
       requireValue(Date.now() < deadline, "The5ers scheduled sync time budget was exhausted.");
-      await syncSourceAccount(account.id, AbortSignal.timeout(Math.max(1, deadline - Date.now())));
+      await syncSourceAccount(
+        account.id,
+        AbortSignal.timeout(Math.max(1, deadline - Date.now())),
+        true,
+      );
       synced++;
     } catch (error) {
+      if (error instanceof InactiveSource) {
+        skipped++;
+        continue;
+      }
       failed++;
       console.error("[cron] The5ers source sync failed", {
         accountId: account.id,
@@ -639,7 +729,7 @@ export async function syncScheduledThe5ers(deadline = Date.now() + 240_000) {
       });
     }
   }
-  return { checked: selected.length, synced, failed };
+  return { checked: selected.length - skipped, synced, failed };
 }
 
 /** Preserve every page envelope (currency/coverage), rather than silently merging money. */
