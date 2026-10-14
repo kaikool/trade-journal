@@ -63,6 +63,12 @@ it("renders synced and manual firms in one transactions table without provider-s
     )!;
     await act(async () => transactions.click());
     expect(container.querySelectorAll("table")).toHaveLength(1);
+    const mobile = container.querySelector('[data-testid="transactions-mobile"]')!;
+    expect(mobile.classList.contains("md:hidden")).toBe(true);
+    expect(mobile.children).toHaveLength(2);
+    expect(mobile.textContent).toContain("$100.00");
+    expect(mobile.textContent).toContain("$150.00");
+    expect(mobile.querySelector(".whitespace-nowrap")?.textContent).toBe("2026-02-01");
     const rows = container.querySelectorAll("tbody tr");
     expect(rows).toHaveLength(2);
     expect(container.textContent).toContain("The5ers");

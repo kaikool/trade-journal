@@ -37,6 +37,8 @@ import {
   type CashMovement,
   type PropReceipt,
 } from "@/lib/prop-firms";
+const requestDate = (entry: PropEntry) =>
+  entry.notes?.startsWith("[request-date-unknown]") ? null : entry.occurredOn;
 const PAGE_SIZE = 40;
 const inDates = (day: string | null, from: string, to: string) =>
   day === null ? !from && !to : (!from || day >= from) && (!to || day <= to);
@@ -198,7 +200,7 @@ export function PropFirmTracker() {
       (e) =>
         matches(e) &&
         (showVoided || !e.voided) &&
-        inDates(e.occurredOn, from, to) &&
+        inDates(requestDate(e), from, to) &&
         (!query ||
           `${e.firm} ${name(e.accountId)} ${e.kind} ${e.category} ${e.reference}`
             .toLowerCase()
@@ -212,7 +214,7 @@ export function PropFirmTracker() {
       (row) =>
         (row.entry.status === "requested" ||
           row.entry.status === "approved" ||
-          inDates(row.entry.occurredOn, from, to)) &&
+          inDates(requestDate(row.entry), from, to)) &&
         (!query ||
           `${row.entry.firm} ${name(row.entry.accountId)} ${row.entry.status} ${row.entry.reference}`
             .toLowerCase()
@@ -696,7 +698,7 @@ export function PropFirmTracker() {
                                   <tbody>
                                     {byFirm.map((row) => (
                                       <tr key={row.firm} className="border-b last:border-0">
-                                        <td className="py-3 pr-3">{row.firm}</td>
+                                        <td className="whitespace-nowrap py-3 pr-3">{row.firm}</td>
                                         <td className="pr-3">{money(row.netSpend)}</td>
                                         <td className="pr-3">{money(row.received)}</td>
                                         <td>{money(row.net)}</td>
@@ -978,7 +980,7 @@ export function PropFirmTracker() {
                                 {row.entry.firm} · {name(row.entry.accountId)}
                               </h3>
                               <p className="text-xs text-muted-foreground">
-                                Requested {row.entry.occurredOn}
+                                Requested {requestDate(row.entry) ?? "date unavailable"}
                                 {row.entry.dueOn ? ` · Expected ${row.entry.dueOn}` : ""}
                               </p>
                             </div>
@@ -1069,61 +1071,105 @@ export function PropFirmTracker() {
                 )}
                 {tab === "ledger" && (
                   <Card>
-                    <CardContent className="overflow-x-auto pt-4">
+                    <CardContent className="pt-4">
                       <p className="mb-3 text-xs text-muted-foreground">
                         Expenses and refunds use cash dates; payout rows use request dates. Export
                         cash CSV for individual settlement dates. Payout requests do not count as
                         income.
                       </p>
-                      <table className="w-full min-w-[740px] text-left text-sm">
-                        <thead>
-                          <tr className="border-b text-xs text-muted-foreground">
-                            <th className="py-2">Date</th>
-                            <th>Firm / account</th>
-                            <th>Entry</th>
-                            <th>Amount</th>
-                            <th>Status</th>
-                            <th>Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {slice(entries).map((entry) => (
-                            <tr
-                              key={entry.id}
-                              className={`border-b last:border-0 ${entry.voided ? "opacity-60" : ""}`}
-                            >
-                              <td className="py-3 pr-3">{entry.occurredOn}</td>
-                              <td className="pr-3">
-                                {entry.firm}
-                                <p className="text-xs text-muted-foreground">
+                      <div className="space-y-3 md:hidden" data-testid="transactions-mobile">
+                        {slice(entries).map((entry) => (
+                          <div
+                            key={entry.id}
+                            className={`rounded-lg border p-3 ${entry.voided ? "opacity-60" : ""}`}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="font-medium">{entry.firm}</p>
+                                <p className="break-words text-xs text-muted-foreground">
                                   {name(entry.accountId)}
                                 </p>
-                              </td>
-                              <td className="pr-3">
-                                {label(entry.kind)}
-                                <p className="text-xs text-muted-foreground">
-                                  {entry.kind === "expense"
-                                    ? label(entry.category)
-                                    : entry.reference}
+                              </div>
+                              <div className="shrink-0 text-right tabular-nums">
+                                <p className="font-medium">
+                                  {money(
+                                    entry.kind === "payout"
+                                      ? (payoutById.get(entry.id)?.expected ?? 0)
+                                      : entry.amountMinor,
+                                    entry.currency,
+                                  )}
                                 </p>
-                              </td>
-                              <td className="pr-3 tabular-nums">
-                                {money(
-                                  entry.kind === "payout"
-                                    ? (payoutById.get(entry.id)?.expected ?? 0)
-                                    : entry.amountMinor,
-                                  entry.currency,
-                                )}
                                 {entry.kind === "payout" && (
                                   <p className="text-xs text-muted-foreground">Expected net</p>
                                 )}
-                              </td>
-                              <td>{entry.voided ? "Voided" : label(entry.status)}</td>
-                              <td>{entryActions(entry)}</td>
+                              </div>
+                            </div>
+                            <div className="my-2 flex flex-wrap justify-between gap-2 text-xs">
+                              <span className="whitespace-nowrap">
+                                {requestDate(entry) ?? "Date unavailable"}
+                              </span>
+                              <span>
+                                {label(entry.kind)} ·{" "}
+                                {entry.voided ? "Voided" : label(entry.status)}
+                              </span>
+                            </div>
+                            {entryActions(entry)}
+                          </div>
+                        ))}
+                      </div>
+                      <div className="hidden overflow-x-auto md:block">
+                        <table className="w-full min-w-[900px] text-left text-sm">
+                          <thead>
+                            <tr className="border-b text-xs text-muted-foreground">
+                              <th className="py-2">Date</th>
+                              <th>Firm / account</th>
+                              <th>Entry</th>
+                              <th>Amount</th>
+                              <th>Status</th>
+                              <th>Actions</th>
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                          </thead>
+                          <tbody>
+                            {slice(entries).map((entry) => (
+                              <tr
+                                key={entry.id}
+                                className={`border-b align-top last:border-0 ${entry.voided ? "opacity-60" : ""}`}
+                              >
+                                <td className="whitespace-nowrap py-3 pr-3">
+                                  {requestDate(entry) ?? "Date unavailable"}
+                                </td>
+                                <td className="pr-3">
+                                  {entry.firm}
+                                  <p className="text-xs text-muted-foreground">
+                                    {name(entry.accountId)}
+                                  </p>
+                                </td>
+                                <td className="pr-3">
+                                  {label(entry.kind)}
+                                  <p className="text-xs text-muted-foreground">
+                                    {entry.kind === "expense"
+                                      ? label(entry.category)
+                                      : entry.reference}
+                                  </p>
+                                </td>
+                                <td className="pr-3 tabular-nums">
+                                  {money(
+                                    entry.kind === "payout"
+                                      ? (payoutById.get(entry.id)?.expected ?? 0)
+                                      : entry.amountMinor,
+                                    entry.currency,
+                                  )}
+                                  {entry.kind === "payout" && (
+                                    <p className="text-xs text-muted-foreground">Expected net</p>
+                                  )}
+                                </td>
+                                <td>{entry.voided ? "Voided" : label(entry.status)}</td>
+                                <td>{entryActions(entry)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
                     </CardContent>
                   </Card>
                 )}

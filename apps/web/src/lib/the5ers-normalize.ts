@@ -100,6 +100,11 @@ export function sourceMoney(value: unknown, currency: string): number | undefine
   const number = sourceNumber(value);
   if (number === undefined || number < 0) return;
   try {
+    const scaled = number * 10 ** currencyDigits(currency);
+    const rounded = Math.round(scaled);
+    const tolerance = Math.min(0.000001, Number.EPSILON * Math.max(1, Math.abs(scaled)) * 64);
+    if (Math.abs(scaled - rounded) <= tolerance)
+      return toMinor(String(rounded / 10 ** currencyDigits(currency)), currency);
     return toMinor(String(number), currency);
   } catch {
     return;

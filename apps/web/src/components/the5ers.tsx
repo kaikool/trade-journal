@@ -38,7 +38,13 @@ interface Overview {
     checked?: number;
     total?: number;
     remaining?: number;
-    payouts?: { found: number; paid: number; recorded: number; missingSettlement: number };
+    payouts?: {
+      found: number;
+      paid: number;
+      recorded: number;
+      missingSettlement: number;
+      blocked?: Record<string, number>;
+    };
   } | null;
   purchases?: unknown;
   moduleSync?: {
@@ -648,10 +654,27 @@ export function The5ersConnection() {
                   Payouts found: {overview.cash.payouts.found} · Recorded receipts:{" "}
                   {overview.cash.payouts.recorded}
                   {overview.cash.payouts.missingSettlement > 0
-                    ? ` · Paid payouts missing settlement information: ${overview.cash.payouts.missingSettlement}`
+                    ? ` · Paid payouts not yet recorded: ${overview.cash.payouts.missingSettlement}`
                     : ""}
                 </p>
               )}
+              {Object.entries(overview.cash?.payouts?.blocked ?? {}).map(([reason, count]) => (
+                <p key={reason} className="text-xs text-muted-foreground">
+                  {(
+                    {
+                      account: "Matching funded account unavailable",
+                      amount: "Payout amount unavailable or invalid",
+                      currency: "Payout currency unavailable",
+                      "opening-date": "Payout predates the account opening date",
+                      duplicate: "Matching receipt already exists",
+                      "changed-receipt": "Saved receipt differs from source",
+                      "future-date": "Source date is in the future",
+                      "dates-or-status": "Source settlement status or dates unavailable",
+                    } as Record<string, string>
+                  )[reason] ?? "Payout requires another sync"}
+                  : {count}
+                </p>
+              ))}
               {overview.cash?.complete === false && (
                 <p className="text-sm">
                   {overview.cash.checked != null && overview.cash.total != null
@@ -659,7 +682,7 @@ export function The5ersConnection() {
                       ? `${overview.cash.remaining} account histories remain. Sync finances continues from saved data.`
                       : overview.cash.expensesComplete === false
                         ? "Expenses could not be updated. Sync expenses to retry."
-                        : "Some Paid payouts lack the settlement details required to record cash received."
+                        : "Some Paid payouts have not been recorded in the ledger."
                     : "Financial sync is incomplete. Existing ledger records are retained."}
                 </p>
               )}

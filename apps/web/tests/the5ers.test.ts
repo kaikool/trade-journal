@@ -1266,7 +1266,7 @@ it("imports or confirms payout settlements through the authenticated endpoint an
                   withdrawals: [
                     {
                       withdrawalId: "known-payout",
-                      status: "completed",
+                      status: "approved",
                       currency: "USD",
                       amount: 1000,
                       requestedAt: "2026-02-01T10:00:00Z",
@@ -1969,32 +1969,28 @@ it("archives every advertised read module, dependent records and all account pos
   expect(purchases).toHaveLength(1);
   expect(JSON.parse(purchases[0]!.value).data.data.accounts[0].sourceAccountId).toBe(listed[1]!.id);
   expect(purchases[0]!.value).not.toContain("opaque-account");
-  await db
-    .insert(settings)
-    .values({
-      key: `the5ers:snapshot:${listed[0]!.id}`,
-      value: JSON.stringify({
-        account: listed[0],
-        retrievedAt: "2020-01-01T00:00:00Z",
-        sections: { balance: { available: true, data: { currency: "USD", data: { balance: 0 } } } },
-        warnings: [],
-        importedExecutions: 0,
-        normalizationVersion: 6,
-      }),
-    });
-  await db
-    .insert(settings)
-    .values({
-      key: SELECTION_KEY,
-      value: JSON.stringify([
-        {
-          id: listed[0]!.id,
-          label: listed[0]!.label,
-          autoSync: false,
-          journalAccountId: `the5ers_${listed[0]!.id}`,
-        },
-      ]),
-    });
+  await db.insert(settings).values({
+    key: `the5ers:snapshot:${listed[0]!.id}`,
+    value: JSON.stringify({
+      account: listed[0],
+      retrievedAt: "2020-01-01T00:00:00Z",
+      sections: { balance: { available: true, data: { currency: "USD", data: { balance: 0 } } } },
+      warnings: [],
+      importedExecutions: 0,
+      normalizationVersion: 6,
+    }),
+  });
+  await db.insert(settings).values({
+    key: SELECTION_KEY,
+    value: JSON.stringify([
+      {
+        id: listed[0]!.id,
+        label: listed[0]!.label,
+        autoSync: false,
+        journalAccountId: `the5ers_${listed[0]!.id}`,
+      },
+    ]),
+  });
   const before = vi.mocked(fetch).mock.calls.length;
   expect((await sourceOverview()).snapshots[0]!.sections.balance!.data).toMatchObject({
     data: { balance: 10097 },

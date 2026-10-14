@@ -1360,7 +1360,7 @@ export async function syncSourceCash(signal?: AbortSignal, batch = false) {
         const history = JSON.parse(row.value);
         return (
           batch &&
-          history.importerVersion === 3 &&
+          history.importerVersion === 4 &&
           Date.now() - Date.parse(history.retrievedAt) < 15 * 60_000
         );
       })
@@ -1404,7 +1404,13 @@ export async function syncSourceCash(signal?: AbortSignal, batch = false) {
   }
   const inventoryIds = new Set(inventory.accounts.map((a) => a.id));
   const histories = await db.select().from(settings).where(like(settings.key, "the5ers:payouts:%"));
-  const payoutSummary = { found: 0, paid: 0, recorded: 0, missingSettlement: 0 };
+  const payoutSummary = {
+    found: 0,
+    paid: 0,
+    recorded: 0,
+    missingSettlement: 0,
+    blocked: {} as Record<string, number>,
+  };
   for (const history of histories) {
     if (!inventoryIds.has(history.key.slice("the5ers:payouts:".length))) continue;
     const saved = JSON.parse(history.value);
@@ -1415,7 +1421,11 @@ export async function syncSourceCash(signal?: AbortSignal, batch = false) {
       );
       if (isPaid) payoutSummary.paid++;
       if (["imported", "matched"].includes(row.status)) payoutSummary.recorded++;
-      else if (isPaid) payoutSummary.missingSettlement++;
+      else if (isPaid) {
+        payoutSummary.missingSettlement++;
+        const reason = row.pendingReason ?? "unresolved";
+        payoutSummary.blocked[reason] = (payoutSummary.blocked[reason] ?? 0) + 1;
+      }
     }
   }
   const outcome = {
@@ -1506,7 +1516,9 @@ async function fetchAndSavePayouts(
   // The journal owner has confirmed that The5ers Paid records represent money received.
   for (const source of sources) {
     const row = sourceFields(source);
-    if (String(row.status).trim().toLowerCase() === "paid") {
+    if (
+      ["paid", "completed", "received", "settled"].includes(String(row.status).trim().toLowerCase())
+    ) {
       Object.assign(source, { ownerConfirmedPaid: true });
       if (
         row.netamount == null &&
@@ -1572,15 +1584,18 @@ async function fetchAndSavePayouts(
       pending = 0;
     const results = [];
     for (const row of rows) {
-      const status = await recordPayoutReceipt(tx, id, row.source);
+      let pendingReason: string | undefined;
+      const status = await recordPayoutReceipt(tx, id, row.source, undefined, (reason) => {
+        pendingReason = reason;
+      });
       if (status === "imported") imported++;
       else if (status === "matched") matched++;
       else pending++;
-      results.push({ ...row, status });
+      results.push({ ...row, status, pendingReason });
     }
     const saved = {
       ...history,
-      importerVersion: 3,
+      importerVersion: 4,
       explanation: payoutExplanation ? publicData(payoutExplanation) : undefined,
       account: sourceAccount,
       rows: results,

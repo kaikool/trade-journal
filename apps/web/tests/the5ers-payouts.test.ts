@@ -272,3 +272,79 @@ it("uses a real payment ID when payout IDs are unavailable and retains existing 
     payoutKey("source", { id: "known" }),
   );
 });
+it("records owner-confirmed terminal payouts without inventing settlement dates, once", async () => {
+  for (const [index, status] of ["paid", "completed", "received", "settled"].entries()) {
+    const source = {
+      id: `confirmed-${index}`,
+      status,
+      currency: "USD",
+      netAmount: 100 + index,
+      ownerConfirmedPaid: true,
+    };
+    expect(await save(source)).toBe("imported");
+    expect(await save(source)).toBe("matched");
+  }
+  const data = await propData();
+  expect(data.receipts).toHaveLength(4);
+  expect(data.entries.every((entry) => entry.notes.startsWith("[request-date-unknown]"))).toBe(
+    true,
+  );
+  const movements = cashMovements(data.entries, data.receipts);
+  expect(movements.every((row) => row.date === null)).toBe(true);
+  expect(cashSummary(movements).received).toBe(40600);
+});
+it("accepts floating point noise but rejects real fractions of a cent", () => {
+  expect(settledPayout({ ...payout, netAmount: 1684.8499999999997 })?.amountMinor).toBe(168485);
+  expect(settledPayout({ ...payout, netAmount: 780.001 })).toBeUndefined();
+});
+it("keeps historical cash for archived funded accounts", async () => {
+  const { eq } = await import("drizzle-orm");
+  await db.update(propAccounts).set({ archived: true }).where(eq(propAccounts.id, "funded"));
+  expect(await save(payout)).toBe("imported");
+  expect((await propData()).receipts).toHaveLength(1);
+});
+it("reports an opening-date conflict without changing a manually configured account", async () => {
+  const { eq } = await import("drizzle-orm");
+  await db
+    .update(propAccounts)
+    .set({ openedOn: "2026-03-01" })
+    .where(eq(propAccounts.id, "funded"));
+  let reason = "";
+  expect(
+    await db.transaction((tx) =>
+      recordPayoutReceipt(
+        tx,
+        "source",
+        { ...payout, ownerConfirmedPaid: true },
+        undefined,
+        (value) => {
+          reason = value;
+        },
+      ),
+    ),
+  ).toBe("pending");
+  expect(reason).toBe("opening-date");
+  expect((await propData()).accounts[0]?.openedOn).toBe("2026-03-01");
+});
+it("corrects an untouched imported opening bound when the confirmed payout proves earlier history", async () => {
+  const { eq } = await import("drizzle-orm");
+  await db
+    .update(propAccounts)
+    .set({ id: "the5ers_source", openedOn: "2026-03-01" })
+    .where(eq(propAccounts.id, "funded"));
+  const [account] = await db.select().from(propAccounts);
+  await db
+    .insert(propAudit)
+    .values({
+      id: "import-audit",
+      entityType: "account",
+      entityId: account!.id,
+      beforeJson: "null",
+      afterJson: JSON.stringify(account),
+      reason: "Imported verified The5ers funding phase from saved account metadata",
+      createdAt: account!.createdAt,
+    });
+  expect(await save({ ...payout, ownerConfirmedPaid: true })).toBe("imported");
+  expect((await propData()).accounts[0]?.openedOn).toBe("2026-02-02");
+  expect(await save({ ...payout, ownerConfirmedPaid: true })).toBe("matched");
+});
