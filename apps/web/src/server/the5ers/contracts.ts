@@ -19,6 +19,19 @@ export const READ_SCOPES = [
 ].map((scope) => `mcp:${scope}.read`);
 /** Pinned read-only allowlist. Inspect current provider schemas with tools/list; no caller-supplied tool names. */
 export const READ_TOOLS = {
+  catalogue: { name: "the5ers_catalogue", operations: ["programs"] },
+  contest: {
+    name: "the5ers_contest",
+    operations: [
+      "upcoming",
+      "overview",
+      "leaderboard",
+      "performance",
+      "balance_chart",
+      "mine",
+      "winners",
+    ],
+  },
   account: {
     name: "the5ers_account",
     operations: [

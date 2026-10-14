@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestDatabase } from "./helpers/postgres";
-import { eq } from "drizzle-orm";
+import { eq, like } from "drizzle-orm";
 const session = vi.hoisted(() => ({ token: undefined as string | undefined }));
 vi.mock("next/headers", () => ({
   cookies: async () => ({ get: () => (session.token ? { value: session.token } : undefined) }),
@@ -1794,6 +1794,314 @@ it("keeps cash syncing when purchases fail and preserves each failed account's s
     purchases: { synced: false },
   });
   expect((await sourceOverview()).cashSnapshots).toHaveLength(2);
+});
+
+it("archives every advertised read module, dependent records and all account positions, resumes failures, and serves archived data without MCP", async () => {
+  await connect();
+  const listed = await listSourceAccounts();
+  const original = fetch;
+  let affiliateFails = true;
+  const spec = (operation: string, required: string[] = [], paginated = false) => ({
+    type: "object",
+    properties: {
+      operation: { const: operation },
+      ...Object.fromEntries(required.map((key) => [key, { type: "string" }])),
+      ...(paginated ? { page: { type: "integer" }, limit: { type: "integer" } } : {}),
+    },
+    required: ["operation", "contract_version", ...required],
+  });
+  const tools = [
+    { name: "the5ers_catalogue", inputSchema: spec("programs") },
+    {
+      name: "the5ers_account",
+      inputSchema: { anyOf: [spec("list", [], true), spec("balance", ["account_ref"])] },
+    },
+    {
+      name: "the5ers_positions",
+      inputSchema: {
+        anyOf: [
+          spec("list", ["account_ref"], true),
+          spec("trades", ["position_ref"]),
+          spec("detail", ["position_ref"]),
+        ],
+      },
+    },
+    { name: "the5ers_program", inputSchema: spec("rules", ["account_ref"]) },
+    { name: "the5ers_consistency", inputSchema: spec("list", ["account_ref"]) },
+    { name: "the5ers_payout", inputSchema: spec("history", ["account_ref"], true) },
+    { name: "the5ers_wallet", inputSchema: spec("overview", ["account_ref"]) },
+    { name: "the5ers_achievements", inputSchema: spec("earned") },
+    { name: "the5ers_alerts", inputSchema: spec("list") },
+    {
+      name: "the5ers_purchase",
+      inputSchema: { anyOf: [spec("list", [], true), spec("accounts", ["purchase_ref"])] },
+    },
+    {
+      name: "the5ers_contest",
+      inputSchema: {
+        anyOf: [
+          spec("upcoming"),
+          spec("overview", ["contest_id"]),
+          spec("leaderboard", ["contest_id"], true),
+        ],
+      },
+    },
+    { name: "the5ers_affiliate", inputSchema: spec("overview") },
+  ];
+  const providerReads: { name: string; args: Record<string, unknown> }[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === MCP_URL && init?.body) {
+        const rpc = JSON.parse(String(init.body));
+        if (rpc.method === "tools/list")
+          return json({ jsonrpc: "2.0", id: rpc.id, result: { tools } });
+        if (rpc.method === "tools/call") {
+          const { name, arguments: args } = rpc.params;
+          providerReads.push({ name, args });
+          if (name === "the5ers_affiliate" && affiliateFails)
+            return json({ jsonrpc: "2.0", id: rpc.id, result: { isError: true, content: [] } });
+          if (name === "the5ers_positions" && args.operation === "list") {
+            const page = Number(args.page);
+            const position = {
+              ref: `private-position-${args.account_ref}-${page}`,
+              symbol: "XAUUSD",
+              side: "Buy",
+              isClosed: true,
+              openDate: `2026-02-0${page}T10:00:00Z`,
+              closeDate: `2026-02-0${page}T11:00:00Z`,
+              quantity: 0.25,
+              entry: 4100,
+              exit: 4101,
+              profitAndLoss: 23,
+              fee: -2,
+              swap: 0,
+            };
+            return json({
+              jsonrpc: "2.0",
+              id: rpc.id,
+              result: {
+                structuredContent: {
+                  currency: "USD",
+                  data: { positions: [position], access_token: "do-not-store-token" },
+                  pagination: { has_more: page === 1 },
+                },
+              },
+            });
+          }
+          if (name === "the5ers_purchase" && args.operation === "list")
+            return json({
+              jsonrpc: "2.0",
+              id: rpc.id,
+              result: {
+                structuredContent: {
+                  data: { purchases: [{ ref: "private-purchase-ref", name: "Program purchase" }] },
+                  pagination: { has_more: false },
+                },
+              },
+            });
+          if (name === "the5ers_purchase" && args.operation === "accounts")
+            return json({
+              jsonrpc: "2.0",
+              id: rpc.id,
+              result: {
+                structuredContent: {
+                  data: { accounts: [{ ref: `opaque-account-${epoch}-2`, label: rows[1]!.label }] },
+                },
+              },
+            });
+          if (name === "the5ers_contest" && args.operation === "upcoming")
+            return json({
+              jsonrpc: "2.0",
+              id: rpc.id,
+              result: {
+                structuredContent: { data: { contests: [{ id: "contest-1", name: "Contest" }] } },
+              },
+            });
+        }
+      }
+      return original(url, init);
+    }),
+  );
+  const { syncAllSourceModules } = await import("../src/server/the5ers/data");
+  const { readArchivedModule } = await import("../src/server/the5ers/modules");
+  let summary;
+  for (let batch = 0; batch < 10; batch++) {
+    summary = await syncAllSourceModules();
+    if (!summary.processed) break;
+  }
+  expect(summary).toMatchObject({ complete: false, failed: 1 });
+  expect(Object.keys(summary.modules)).toHaveLength(12);
+  expect(await db.select().from(trades)).toHaveLength(4);
+  const { accounts } = await import("../src/db");
+  expect(await db.select().from(accounts)).toHaveLength(2);
+  expect((await sourceOverview()).selection).toHaveLength(0);
+  expect(
+    providerReads.filter(
+      (read) => read.name === "the5ers_positions" && read.args.operation === "trades",
+    ),
+  ).toHaveLength(4);
+  expect(
+    providerReads.some(
+      (read) =>
+        read.name === "the5ers_purchase" && read.args.purchase_ref === "private-purchase-ref",
+    ),
+  ).toBe(true);
+  expect(
+    providerReads.some(
+      (read) => read.name === "the5ers_contest" && read.args.contest_id === "contest-1",
+    ),
+  ).toBe(true);
+  const positionCalls = providerReads.filter((read) => read.name === "the5ers_positions").length;
+  affiliateFails = false;
+  expect(await syncAllSourceModules()).toMatchObject({ complete: true, failed: 0 });
+  expect(providerReads.filter((read) => read.name === "the5ers_positions")).toHaveLength(
+    positionCalls,
+  );
+  const archived = await readArchivedModule("positions", "list", listed[0]!.id);
+  expect(archived.pages).toHaveLength(2);
+  expect(JSON.stringify(archived)).not.toContain("private-position");
+  expect(JSON.stringify(archived)).not.toContain("do-not-store-token");
+  const purchases = await db
+    .select()
+    .from(settings)
+    .where(like(settings.key, "the5ers:module:purchase:accounts:%"));
+  expect(purchases).toHaveLength(1);
+  expect(JSON.parse(purchases[0]!.value).data.data.accounts[0].sourceAccountId).toBe(listed[1]!.id);
+  expect(purchases[0]!.value).not.toContain("opaque-account");
+  await db
+    .insert(settings)
+    .values({
+      key: `the5ers:snapshot:${listed[0]!.id}`,
+      value: JSON.stringify({
+        account: listed[0],
+        retrievedAt: "2020-01-01T00:00:00Z",
+        sections: { balance: { available: true, data: { currency: "USD", data: { balance: 0 } } } },
+        warnings: [],
+        importedExecutions: 0,
+        normalizationVersion: 6,
+      }),
+    });
+  await db
+    .insert(settings)
+    .values({
+      key: SELECTION_KEY,
+      value: JSON.stringify([
+        {
+          id: listed[0]!.id,
+          label: listed[0]!.label,
+          autoSync: false,
+          journalAccountId: `the5ers_${listed[0]!.id}`,
+        },
+      ]),
+    });
+  const before = vi.mocked(fetch).mock.calls.length;
+  expect((await sourceOverview()).snapshots[0]!.sections.balance!.data).toMatchObject({
+    data: { balance: 10097 },
+  });
+  const result = await GET(
+    new Request(
+      `https://journal.test/api/the5ers?view=module&module=positions&operation=list&subject=${listed[0]!.id}`,
+    ),
+  );
+  expect(result.status).toBe(200);
+  expect(vi.mocked(fetch).mock.calls.length).toBe(before);
+  const [trade] = await db.select().from(trades);
+  const { annotateSourceTrade } = await import("../src/server/the5ers/journal");
+  await db.transaction((tx) =>
+    annotateSourceTrade(tx, trade!.key, {
+      notes: "Keep my journal",
+      reviewedAt: "2026-02-03T00:00:00Z",
+    }),
+  );
+  const [job] = await db.select().from(settings).where(eq(settings.key, "the5ers:module-job"));
+  const saved = decryptJson<Record<string, unknown>>(job!.value);
+  saved.finishedAt = new Date(Date.now() - 16 * 60_000).toISOString();
+  await db
+    .update(settings)
+    .set({ value: encryptJson(saved) })
+    .where(eq(settings.key, job!.key));
+  for (let batch = 0; batch < 10; batch++) {
+    const result = await syncAllSourceModules();
+    if (result.complete) break;
+  }
+  expect(await db.select().from(trades)).toHaveLength(4);
+  expect((await db.select().from(trades).where(eq(trades.key, trade!.key)))[0]).toMatchObject({
+    notes: "Keep my journal",
+    reviewedAt: "2026-02-03T00:00:00Z",
+  });
+}, 20000);
+
+it("keeps archiving source pages and details when native projection fails, and never invokes unallowlisted mutations", async () => {
+  await connect();
+  const { syncModuleArchive, readArchivedModule } = await import("../src/server/the5ers/modules");
+  const connection = await accessConnection();
+  const accountId = "a".repeat(64);
+  const read = vi.fn(async (tool: string, operation: string, args: Record<string, unknown>) => {
+    if (operation === "list")
+      return {
+        data: { positions: [{ ref: `position-${args.page}`, symbol: "XAUUSD", quantity: 1 }] },
+        pagination: { has_more: args.page === 1 },
+      };
+    return { data: { details: true } };
+  });
+  const client = {
+    read,
+    payoutContract: async () => ({
+      tools: [
+        {
+          name: "the5ers_positions",
+          inputSchema: {
+            anyOf: [
+              {
+                properties: { operation: { const: "list" }, account_ref: {}, page: {}, limit: {} },
+                required: ["account_ref"],
+              },
+              {
+                properties: { operation: { const: "detail" }, position_ref: {} },
+                required: ["position_ref"],
+              },
+            ],
+          },
+        },
+        {
+          name: "the5ers_payout",
+          inputSchema: { properties: { operation: { const: "send" } }, required: [] },
+        },
+      ],
+      complete: true,
+    }),
+  } as unknown as InstanceType<typeof The5ersMcp>;
+  let projectionFails = true;
+  const project = async (page: { operation: string }) => {
+    if (projectionFails && page.operation === "list")
+      throw new Error("Synthetic native import failure");
+  };
+  let summary;
+  for (let batch = 0; batch < 5; batch++) {
+    summary = await syncModuleArchive(
+      client,
+      connection.id,
+      [{ id: accountId, ref: "private-account" }],
+      16,
+      project,
+    );
+    if (!summary.processed) break;
+  }
+  expect(summary).toMatchObject({ complete: false, projectionFailed: 2 });
+  expect((await readArchivedModule("positions", "list", accountId)).pages).toHaveLength(2);
+  expect(read.mock.calls.filter(([, operation]) => operation === "detail")).toHaveLength(2);
+  expect(read.mock.calls.some(([, operation]) => operation === "send")).toBe(false);
+  projectionFails = false;
+  summary = await syncModuleArchive(
+    client,
+    connection.id,
+    [{ id: accountId, ref: "private-account" }],
+    16,
+    project,
+  );
+  expect(summary.projectionFailed).toBe(0);
+  expect(summary.unsupported).toContain("the5ers_payout.send");
 });
 
 it("reads the actual payout and withdrawal tool schemas through the authenticated connection without calling any payout operation", async () => {

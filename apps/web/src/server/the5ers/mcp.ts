@@ -126,7 +126,7 @@ export class The5ersMcp {
     if (!response.ok) throw new RequestError("The5ers connection initialization failed.");
   }
   /** Discover the provider's actual payout/withdrawal read contract, without executing tools. */
-  async payoutContract() {
+  async payoutContract(allModules = false) {
     await (this.initializing ??= this.initialize());
     const tools: Record<string, unknown>[] = [];
     const cursors = new Set<string>();
@@ -140,6 +140,7 @@ export class The5ersMcp {
         if (typeof tool.name !== "string")
           throw new RequestError("The5ers returned an invalid tool name.");
         if (
+          allModules ||
           /payout|withdraw|payment|wallet/i.test(
             `${tool.name} ${typeof tool.description === "string" ? tool.description : ""}`,
           )
@@ -152,7 +153,7 @@ export class The5ersMcp {
           });
         }
       }
-      if (tools.length > 40 || JSON.stringify(tools).length > 2 * 1024 * 1024)
+      if (tools.length > (allModules ? 200 : 40) || JSON.stringify(tools).length > 2 * 1024 * 1024)
         throw new RequestError("The5ers payout contract exceeded its size limit.");
       if (result.nextCursor === undefined) return { tools, complete: true };
       if (

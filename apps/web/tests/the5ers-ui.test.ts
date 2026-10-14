@@ -156,7 +156,7 @@ it("uses the common prop ledger instead of rendering separate source finances", 
 it("keeps financial sync controls in connection settings, without repeating source payments", () => {
   const html = renderToStaticMarkup(createElement(The5ersConnection));
   expect(html).toContain("Sync expenses");
-  expect(html).toContain("Sync finances");
+  expect(html).toContain("Sync all data");
   expect(html).toContain("Download connection report");
   expect(html).not.toContain("Closed funded account");
 });

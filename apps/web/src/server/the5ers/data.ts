@@ -1,6 +1,7 @@
+import { moduleArchiveSummary, readArchivedModule, syncModuleArchive } from "./modules";
 import { the5ersAccountName } from "@/lib/the5ers-name";
 import { createHash, randomUUID } from "node:crypto";
-import { and, or, eq, like, sql, count } from "drizzle-orm";
+import { and, or, eq, like, sql, count, inArray } from "drizzle-orm";
 import { db, settings, accounts as journalAccounts, propAccounts, propAudit, trades } from "@/db";
 import { saveJournalPositions, reconcilePurchases, positionIdentity } from "./journal";
 import { payoutKey, sourceRecords, recordPayoutReceipt } from "./payouts";
@@ -955,6 +956,19 @@ export async function sourceOverview() {
     string,
     string
   >;
+  const archivedBalances = selection.length
+    ? await db
+        .select()
+        .from(settings)
+        .where(
+          inArray(
+            settings.key,
+            selection.map(
+              (account) => `the5ers:module:account:balance:${account.id}:${account.id}:1`,
+            ),
+          ),
+        )
+    : [];
   const counts = await db
     .select({ accountId: trades.accountId, total: count() })
     .from(trades)
@@ -999,10 +1013,27 @@ export async function sourceOverview() {
         importedExecutions: 0,
       };
     }),
+    moduleSync: await moduleArchiveSummary(),
     snapshots: stored
       .filter((row) => selection.some((account) => row.key === `${SNAPSHOT_PREFIX}${account.id}`))
       .map((row) => {
         const snapshot = JSON.parse(row.value) as SourceSnapshot;
+        const archived = archivedBalances.find(
+          (balance) =>
+            balance.key ===
+            `the5ers:module:account:balance:${snapshot.account.id}:${snapshot.account.id}:1`,
+        );
+        if (archived) {
+          const cached = JSON.parse(archived.value);
+          const body = sourceFields(sourceFields(cached.data).data);
+          if (
+            typeof body.balance === "number" &&
+            Date.parse(cached.retrievedAt) > Date.parse(snapshot.retrievedAt)
+          ) {
+            snapshot.sections.balance = { available: true, data: cached.data };
+            snapshot.retrievedAt = cached.retrievedAt;
+          }
+        }
         snapshot.storedTrades =
           counts.find((row) => row.accountId === mappings[snapshot.account.id])?.total ?? 0;
         const data = sourceFields(snapshot.sections.positions?.data);
@@ -1045,6 +1076,22 @@ export async function readSourceSection(resource: string, id?: string, positionK
     Object.hasOwn(global, resource) || Object.hasOwn(perAccount, resource),
     "Choose a supported The5ers section.",
   );
+  const archivedRead = global[resource] ?? perAccount[resource];
+  if (!["fills", "position", "wallet", "accountInventory", "payoutHistory"].includes(resource)) {
+    const saved = await readArchivedModule(
+      archivedRead!.tool,
+      archivedRead!.operation,
+      Object.hasOwn(global, resource) ? "global" : (id ?? "global"),
+    );
+    if (saved.available)
+      return saved.pages.length === 1 && archivedRead!.operation !== "list"
+        ? saved.pages[0].data
+        : {
+            pages: saved.pages.map((page: { data: unknown }) => page.data),
+            complete:
+              sourceFields(sourceFields(saved.pages.at(-1)?.data).pagination).hasmore === false,
+          };
+  }
   const { connection, client } = await sourceClient();
   if (Object.hasOwn(global, resource)) {
     const read = global[resource]!;
@@ -1576,4 +1623,107 @@ export async function confirmSourcePayout(
     await setSetting(`the5ers:payouts:${id}`, JSON.stringify(history), tx);
     return { status };
   });
+}
+
+/** Archive every supported read module, and project available positions into the existing journal. */
+export async function syncAllSourceModules(signal?: AbortSignal) {
+  const { connection, client } = await sourceClient(signal);
+  const inventory = await inventoryResult(client);
+  const result = await syncModuleArchive(
+    client,
+    connection.id,
+    inventory.accounts,
+    16,
+    async (page) => {
+      if (page.tool !== "positions" || page.operation !== "list") return;
+      const account = inventory.accounts.find((account) => account.id === page.subject);
+      if (!account) return;
+      const archive = await readArchivedModule("positions", "list", account.id, account.id);
+      const pages = archive.pages.filter((saved: { runId?: string }) => saved.runId === page.runId);
+      const rows = sourceRecords(
+        { pages: pages.map((saved: { data: unknown }) => saved.data) },
+        "positions",
+      );
+      if (!rows.some((row) => normalizePosition(row))) return;
+      const currencies = new Set(
+        pages
+          .map(
+            (saved: { data: unknown }) =>
+              sourceCurrency(sourceFields(saved.data).currency) ?? sourceCurrency(account.currency),
+          )
+          .filter(Boolean),
+      );
+      if (currencies.size !== 1) return;
+      const currency = [...currencies][0] as string;
+      await db.transaction(async (tx) => {
+        await assertConnection(connection.id, tx);
+        await tx.select().from(settings).where(eq(settings.key, CONNECTION_KEY)).for("update");
+        const links = JSON.parse((await getSetting("the5ers:journal-links", tx)) ?? "{}") as Record<
+          string,
+          string
+        >;
+        const journalAccountId = links[account.id] ?? `the5ers_${account.id}`;
+        await tx
+          .insert(journalAccounts)
+          .values({
+            id: journalAccountId,
+            name: the5ersAccountName(`The5ers · ${account.label}`),
+            broker: "The5ers",
+            kind: "import",
+            currency,
+            initialBalance: 0,
+            autoSync: false,
+            createdAt: new Date().toISOString(),
+          })
+          .onConflictDoNothing();
+        const [native] = await tx
+          .select()
+          .from(journalAccounts)
+          .where(eq(journalAccounts.id, journalAccountId));
+        requireValue(
+          native &&
+            native.currency === currency &&
+            (links[account.id] || native.broker === "The5ers"),
+          "The archived position account conflicts with an existing journal account.",
+        );
+        links[account.id] = journalAccountId;
+        await setSetting("the5ers:journal-links", JSON.stringify(links), tx);
+        const last = pages.at(-1);
+        const complete =
+          pages.length === last?.page &&
+          sourceFields(sourceFields(last?.data).pagination).hasmore === false;
+        await saveJournalPositions(
+          tx,
+          account.id,
+          currency,
+          new Date().toISOString(),
+          rows,
+          complete,
+        );
+        const { ref: _ref, ...publicAccount } = account;
+        await saveSnapshotPropAccount(
+          tx,
+          {
+            account: publicAccount,
+            retrievedAt: new Date().toISOString(),
+            complete,
+            sections: {},
+            warnings: [],
+            importedExecutions: 0,
+          },
+          journalAccountId,
+          currency,
+        );
+      });
+    },
+  );
+  if (!inventory.complete) {
+    result.complete = false;
+    result.inventoryWarnings = inventory.warnings;
+    await db.transaction(async (tx) => {
+      await assertConnection(connection.id, tx);
+      await setSetting("the5ers:module-sync", JSON.stringify(result), tx);
+    });
+  }
+  return result;
 }

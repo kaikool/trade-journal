@@ -33,6 +33,7 @@ interface AccountRow {
   id: string;
   the5ersSourceId?: string;
   name: string;
+  the5ersSelected?: boolean;
   broker: string;
   kind: "sync" | "import" | "manual";
   currency: string;
@@ -54,9 +55,13 @@ export default function AccountsPage() {
 }
 
 function Accounts() {
+  const [showOtherSynced, setShowOtherSynced] = useState(false);
   const { data, refresh } = useApi<{ accounts: AccountRow[] }>("/api/accounts");
   const [syncing, setSyncing] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const visibleAccounts = data?.accounts.filter(
+    (account) => showOtherSynced || !account.the5ersSourceId || account.the5ersSelected !== false,
+  );
 
   const action = async <T = unknown,>(id: string, body: Record<string, unknown>) => {
     const result = await postJson<T>(`/api/accounts/${id}/actions`, body);
@@ -109,13 +114,25 @@ function Accounts() {
           />
         </DialogContent>
       </Dialog>
+      {data?.accounts.some(
+        (account) => account.the5ersSourceId && account.the5ersSelected === false,
+      ) && (
+        <label className="mx-4 mt-4 flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={showOtherSynced}
+            onChange={(event) => setShowOtherSynced(event.target.checked)}
+          />
+          Show other synced accounts
+        </label>
+      )}
       <div className="grid gap-3 p-4 md:grid-cols-2">
         {data?.accounts.length === 0 && (
           <p className="col-span-full py-16 text-center text-sm text-muted-foreground">
             No accounts yet — use New account to create your first one.
           </p>
         )}
-        {data?.accounts.map((account) => (
+        {visibleAccounts?.map((account) => (
           <Card key={account.id} className={account.archivedAt ? "opacity-60" : undefined}>
             <CardHeader className="flex-row flex-wrap items-center justify-between gap-2">
               <CardTitle className="min-w-0 flex-1 text-base font-semibold normal-case tracking-normal text-foreground">
@@ -293,7 +310,7 @@ function Accounts() {
                     variant="outline"
                     size="sm"
                     onClick={async () => {
-                      const others = data.accounts.filter(
+                      const others = (data?.accounts ?? []).filter(
                         (candidate) => candidate.id !== account.id,
                       );
                       if (others.length === 0) return alert("No other account to transfer into.");
@@ -303,7 +320,10 @@ function Accounts() {
                       const chosen = others[Number(target) - 1];
                       if (chosen) {
                         try {
-                          await action(account.id, { action: "transfer", toAccountId: chosen.id });
+                          await action(account.id, {
+                            action: "transfer",
+                            toAccountId: chosen.id,
+                          });
                         } catch (error) {
                           alert(error instanceof Error ? error.message : "Transfer failed");
                         }

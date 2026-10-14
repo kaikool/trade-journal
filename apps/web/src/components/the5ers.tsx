@@ -41,6 +41,14 @@ interface Overview {
     payouts?: { found: number; paid: number; recorded: number; missingSettlement: number };
   } | null;
   purchases?: unknown;
+  moduleSync?: {
+    complete: boolean;
+    saved: number;
+    total: number;
+    failed: number;
+    remaining: number;
+    projectionFailed?: number;
+  } | null;
 }
 const heading = (name: string) =>
   name
@@ -591,7 +599,7 @@ export function The5ersConnection() {
         {overview?.connected && (
           <>
             <p className="text-sm">
-              Connected · {overview.selection.length} accounts selected for trades
+              Connected · {overview.selection.length} accounts selected for daily updates
               {!overview.canRefresh ? " · Reconnect required when access expires" : ""}
             </p>
             <details
@@ -599,7 +607,7 @@ export function The5ersConnection() {
               onToggle={(event) => setManageAccounts(event.currentTarget.open)}
             >
               <summary className="cursor-pointer rounded-md border p-3 text-sm font-medium">
-                Select trading accounts
+                Select accounts for daily updates
               </summary>
               {manageAccounts && (
                 <div className="mt-3">
@@ -608,11 +616,22 @@ export function The5ersConnection() {
               )}
             </details>
             <div className="space-y-2 rounded-md border p-3">
-              <p className="text-sm font-medium">Financial sync</p>
+              <p className="text-sm font-medium">All module sync</p>
               <p className="text-xs text-muted-foreground">
-                Imported expenses and received payouts appear in the same Prop firms ledger as
-                manual records.
+                Save all available modules and trade history for every account. Expenses and payouts
+                use the same Prop firms ledger as manual records.
               </p>
+              {overview.moduleSync && (
+                <p className="text-sm">
+                  Module sections saved: {overview.moduleSync.saved}/{overview.moduleSync.total}
+                  {overview.moduleSync.failed
+                    ? ` · ${overview.moduleSync.failed} source reads failed`
+                    : ""}
+                  {overview.moduleSync.projectionFailed
+                    ? ` · ${overview.moduleSync.projectionFailed} trade imports need retry`
+                    : ""}
+                </p>
+              )}
               {overview.cash?.retrievedAt && (
                 <p className="text-xs text-muted-foreground">
                   Last attempt:{" "}
@@ -697,10 +716,38 @@ export function The5ersConnection() {
                           break;
                         previousRemaining = result.data.remaining;
                       }
+                      for (;;) {
+                        const result = await postJson<{
+                          data: {
+                            complete: boolean;
+                            saved: number;
+                            total: number;
+                            remaining: number;
+                            failed: number;
+                            processed: number;
+                            busy?: boolean;
+                            unsupported?: string[];
+                          };
+                        }>("/api/the5ers", { action: "modules.sync" });
+                        state.refresh();
+                        window.dispatchEvent(new Event("journal-data-changed"));
+                        state.setNotice(
+                          result.data.complete
+                            ? "All available module data is saved in the database."
+                            : `Module sections saved: ${result.data.saved}/${result.data.total}. ${result.data.failed ?? 0} source reads failed.`,
+                        );
+                        if (
+                          result.data.complete ||
+                          !result.data.remaining ||
+                          !result.data.processed ||
+                          result.data.busy
+                        )
+                          break;
+                      }
                     })
                   }
                 >
-                  Sync finances
+                  Sync all data
                 </Button>
                 <Button
                   size="sm"

@@ -58,6 +58,7 @@ export const GET = handler(async (request: Request) => {
       ...safe,
       name: safe.broker === "The5ers" ? the5ersAccountName(safe.name) : safe.name,
       the5ersSourceId: Object.entries(links).find(([, target]) => target === safe.id)?.[0],
+      the5ersSelected: selected.has(safe.id),
       connected: credentialsEnc !== null,
       snapshot: safe.snapshotJson ? JSON.parse(safe.snapshotJson) : null,
     })),

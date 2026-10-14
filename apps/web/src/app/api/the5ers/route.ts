@@ -1,3 +1,4 @@
+import { readArchivedModule } from "@/server/the5ers/modules";
 import { cookies } from "next/headers";
 import { handler, ok, requireValue } from "@/server/api";
 import { boundedJson } from "@/server/the5ers/http";
@@ -8,6 +9,7 @@ import {
   listSourceInventory,
   syncSourcePurchases,
   syncSourceCash,
+  syncAllSourceModules,
   sourceOverview,
   selectSourceAccounts,
   syncSourceAccount,
@@ -21,6 +23,17 @@ export const maxDuration = 120;
 export const GET = handler(async (request: Request) => {
   if (request && new URL(request.url).searchParams.get("view") === "payout-contract")
     return ok(await inspectPayoutContract());
+  if (new URL(request.url).searchParams.get("view") === "module") {
+    const params = new URL(request.url).searchParams;
+    return ok(
+      await readArchivedModule(
+        params.get("module") ?? "",
+        params.get("operation") ?? "",
+        params.get("subject") ?? "global",
+        params.get("accountId") ?? undefined,
+      ),
+    );
+  }
   return ok(await sourceOverview());
 });
 export const POST = handler(async (request: Request) => {
@@ -91,6 +104,8 @@ export const POST = handler(async (request: Request) => {
           receivedOn: body.receivedOn,
         }),
       );
+    case "modules.sync":
+      return ok({ data: await syncAllSourceModules(AbortSignal.timeout(100_000)) });
     case "cash.sync":
       return ok({ data: await syncSourceCash(AbortSignal.timeout(100_000), true) });
     case "purchases.sync":
