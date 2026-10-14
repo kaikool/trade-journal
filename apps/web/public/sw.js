@@ -1,6 +1,6 @@
-const CACHE_NAME = "trade-journal-offline-v2";
+const CACHE_NAME = "trade-journal-offline-v3";
 const OFFLINE_URL = "/offline.html";
-const APP_ICONS = ["/icon-192.png?v=2", "/icon-512.png?v=2", "/apple-touch-icon.png?v=2"];
+const APP_ICONS = ["/icon-192.png?v=3", "/icon-512.png?v=3", "/apple-touch-icon.png?v=3"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
