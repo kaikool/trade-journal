@@ -64,6 +64,7 @@ export function sourcePropStatus(value: unknown): (typeof PROP_STATES)[number] |
     available: "active",
     failed: "breached",
     inactive: "closed",
+    disabled: "inactive",
     terminated: "closed",
   };
   return PROP_STATES.includes(name as (typeof PROP_STATES)[number])

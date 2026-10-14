@@ -6,7 +6,7 @@ export const PROP_PROGRAMS = [
   "instant_funded",
   "live",
 ] as const;
-export const PROP_STATES = ["active", "passed", "breached", "closed"] as const;
+export const PROP_STATES = ["active", "inactive", "passed", "breached", "closed"] as const;
 export const PAYOUT_STATES = [
   "requested",
   "approved",

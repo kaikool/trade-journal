@@ -8,6 +8,7 @@ import {
   sourceFields,
   sourceProgram,
   sourcePropStatus,
+  sourceInstant,
   normalizePosition,
 } from "@/lib/the5ers-normalize";
 import { getTimeZone } from "@/server/settings";
@@ -1278,22 +1279,34 @@ export async function syncSourcePurchases(signal?: AbortSignal) {
 export async function syncSourceCash(signal?: AbortSignal) {
   const { connection, client } = await sourceClient(signal);
   const inventory = await inventoryResult(client);
+  const failures: { id: string; label: string }[] = [];
+  let synced = 0;
+  // Historical funded accounts must not wait behind dozens of evaluations.
+  // Bound concurrency to avoid exhausting the shared MCP request deadline.
+  const queue = [...inventory.accounts].sort(
+    (a, b) =>
+      Number(sourceProgram(b.program) === "funded") - Number(sourceProgram(a.program) === "funded"),
+  );
+  await Promise.all(
+    Array.from({ length: Math.min(3, queue.length) }, async () => {
+      for (;;) {
+        const account = queue.shift();
+        if (!account) return;
+        try {
+          signal?.throwIfAborted();
+          await fetchAndSavePayouts(client, connection.id, account, account.id);
+          synced++;
+        } catch {
+          failures.push({ id: account.id, label: account.label });
+        }
+      }
+    }),
+  );
   let purchases: { pending?: number; synced: boolean };
   try {
     purchases = { ...(await syncSourcePurchases(signal)), synced: true };
   } catch {
     purchases = { synced: false };
-  }
-  const failures: { id: string; label: string }[] = [];
-  let synced = 0;
-  for (const account of inventory.accounts) {
-    try {
-      signal?.throwIfAborted();
-      await fetchAndSavePayouts(client, connection.id, account, account.id);
-      synced++;
-    } catch {
-      failures.push({ id: account.id, label: account.label });
-    }
   }
   const outcome = {
     accounts: inventory.accounts.map(({ ref: _ref, ...account }) => account),
@@ -1319,10 +1332,61 @@ async function fetchAndSavePayouts(
   const history = await paginatedSource(client, "payout", "history", "payouts", {
     account_ref: account.ref,
   });
-  const rows = sourceRecords(history, "payouts").map((source) => ({
-    key: payoutKey(id, source),
-    source,
-  }));
+  // The real contract puts currency on the envelope, not each history row.
+  const sources = history.pages.flatMap((page) => {
+    const envelope = sourceFields(page);
+    const currency = sourceCurrency(envelope.currency);
+    return sourceRecords({ pages: [page] }, "payouts").map((source) => ({
+      ...record(source),
+      ...(currency ? { currency } : {}),
+    }));
+  });
+  // History's amount does not identify the trader's net receipt. Explain supplies
+  // finalAmount for the latest payout only; never apply its split to older rows.
+  if (
+    sources.some((source) =>
+      ["paid", "completed", "received", "settled"].includes(
+        String(sourceFields(source).status).toLowerCase(),
+      ),
+    )
+  ) {
+    try {
+      const explanation = sourceFields(
+        await client.read("payout", "explain", { account_ref: account.ref }),
+      );
+      const body = sourceFields(explanation.data);
+      const latest = sourceFields(body.latestpayout);
+      const breakdown = sourceFields(latest.breakdown);
+      const currency = sourceCurrency(explanation.currency);
+      const requested = sourceInstant(latest.requestedat);
+      const matches = sources.filter((source) => {
+        const row = sourceFields(source);
+        return (
+          requested &&
+          sourceInstant(row.requestedat) === requested &&
+          row.amount === latest.amount &&
+          row.currency === currency
+        );
+      });
+      if (
+        body.subject === "latest_payout" &&
+        sourceInstant(latest.completedat) &&
+        ["paid", "completed", "received", "settled"].includes(
+          String(latest.status).toLowerCase(),
+        ) &&
+        matches.length === 1 &&
+        typeof breakdown.finalamount === "number"
+      ) {
+        Object.assign(matches[0]!, {
+          netAmount: breakdown.finalamount,
+          completedAt: latest.completedat,
+        });
+      }
+    } catch {
+      // Retain fetched history; a missing breakdown must never become guessed cash.
+    }
+  }
+  const rows = sources.map((source) => ({ key: payoutKey(id, source), source }));
   requireValue(
     new Set(rows.map((row) => row.key)).size === rows.length,
     "The5ers payout identities are ambiguous. Previous cash records were retained.",

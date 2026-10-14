@@ -772,7 +772,7 @@ it("does not interpret disabled as a breached/closed prop account", async () => 
   const [first] = await listSourceAccounts();
   await selectSourceAccounts([first!.id], false, true);
   const { propAccounts } = await import("../src/db");
-  expect(await db.select().from(propAccounts)).toHaveLength(0);
+  expect((await db.select().from(propAccounts)).map((a) => a.status)).toEqual(["inactive"]);
 });
 it("reads all purchase pages while retaining separate currencies", async () => {
   await connect();
@@ -1585,7 +1585,7 @@ it("syncs cash for every account including unselected closed accounts, keeps tra
   );
   calls = [];
   expect(await syncSourceCash()).toMatchObject({ synced: 2, complete: true });
-  expect(calls.filter((c) => c.tool === "the5ers_payout")).toHaveLength(2);
+  expect(calls.filter((c) => c.tool === "the5ers_payout")).toHaveLength(3);
   expect(calls.some((c) => c.tool === "the5ers_positions")).toBe(false);
   const { propReceipts } = await import("../src/db");
   expect((await db.select().from(propReceipts)).map((r) => r.amountMinor)).toEqual([78000]);
@@ -1609,6 +1609,63 @@ it("syncs cash for every account including unselected closed accounts, keeps tra
     }),
   );
   expect(response.status).toBe(200);
+});
+
+it("imports the documented latest paid withdrawal using envelope currency and explain finalAmount for a disabled funded account", async () => {
+  rows[1]!.accountType = "funded";
+  rows[1]!.status = "disabled";
+  await connect();
+  const original = fetch;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === MCP_URL && init?.body) {
+        const rpc = JSON.parse(String(init.body));
+        if (rpc.params?.name === "the5ers_payout") {
+          const funded = String(rpc.params.arguments.account_ref).endsWith("-2");
+          const latest = {
+            requestedAt: "2026-02-01T10:00:00Z",
+            completedAt: "2026-02-02T10:00:00Z",
+            amount: 1000,
+            status: "Paid",
+            method: "bank transfer",
+          };
+          const data =
+            rpc.params.arguments.operation === "explain"
+              ? {
+                  subject: "latest_payout",
+                  latestPayout: {
+                    ...latest,
+                    breakdown: { finalAmount: 780, commission: 20, userShare: 800 },
+                  },
+                }
+              : {
+                  coverage: { complete: false },
+                  payouts: funded
+                    ? [latest, { ...latest, requestedAt: "2026-01-20T10:00:00Z" }]
+                    : [],
+                };
+          return json({
+            jsonrpc: "2.0",
+            id: rpc.id,
+            result: {
+              structuredContent: { currency: "USD", data, pagination: { has_more: false } },
+            },
+          });
+        }
+      }
+      return original(url, init);
+    }),
+  );
+  await syncSourceCash();
+  const { propReceipts } = await import("../src/db");
+  expect((await db.select().from(propReceipts)).map((r) => r.amountMinor)).toEqual([78000]);
+  await syncSourceCash();
+  expect(await db.select().from(propReceipts)).toHaveLength(1);
+  const overview = await sourceOverview();
+  const history = overview.cashSnapshots.find((s) => s.account.program === "funded")!.sections
+    .payoutHistory!.data as { pending: number };
+  expect(history.pending).toBe(1);
 });
 
 it("keeps cash syncing when purchases fail and preserves each failed account's saved payout history", async () => {

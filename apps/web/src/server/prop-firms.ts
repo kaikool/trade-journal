@@ -162,8 +162,8 @@ export async function mutatePropInTransaction(tx: JournalExecutor, body: Record<
       "Closing date must follow opening date.",
     );
     requireValue(
-      values.status === "active" ? !values.closedOn : Boolean(values.closedOn),
-      "Active accounts have no closing date; resolved accounts need a closing date.",
+      ["active", "inactive"].includes(values.status) ? !values.closedOn : Boolean(values.closedOn),
+      "Active or inactive accounts have no closing date; resolved accounts need a closing date.",
     );
     requireValue(
       values.status !== "passed" || ["evaluation", "verification"].includes(values.program),
