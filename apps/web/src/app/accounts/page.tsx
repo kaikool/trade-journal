@@ -96,7 +96,7 @@ function Accounts() {
       refresh();
       window.dispatchEvent(new Event("journal-data-changed"));
     } catch (error) {
-      alert(error instanceof Error ? error.message : "Cập nhật hiển thị thất bại");
+      alert(error instanceof Error ? error.message : "Failed to update account visibility");
     } finally {
       setUpdatingBulk(false);
     }
@@ -159,10 +159,10 @@ function Accounts() {
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
             <h2 className="text-sm font-semibold tracking-tight text-foreground">
-              Thiết lập tài khoản hiển thị trong Dashboard & Trades
+              Dashboard & Trades account visibility
             </h2>
             <p className="text-xs text-muted-foreground mt-0.5">
-              Tổng số: {accounts.length} tài khoản · Đang hiển thị: {visibleCount} · Active: {activeCount}
+              Total: {accounts.length} accounts · Displayed: {visibleCount} · Active: {activeCount}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -171,30 +171,30 @@ function Accounts() {
               variant="outline"
               disabled={updatingBulk || accounts.length === 0}
               onClick={() => void handleBulkVisibility("select-all")}
-              title="Tích chọn tất cả tài khoản để hiển thị trên Dashboard & Trades"
+              title="Select all accounts to display in Dashboard & Trades"
             >
               <CheckSquare className="h-3.5 w-3.5 mr-1" />
-              Tích chọn tất cả
+              Select all
             </Button>
             <Button
               size="sm"
               variant="outline"
               disabled={updatingBulk || accounts.length === 0}
               onClick={() => void handleBulkVisibility("select-active")}
-              title="Chỉ tích chọn các tài khoản Active"
+              title="Select only active accounts"
             >
               <Check className="h-3.5 w-3.5 mr-1" />
-              Chỉ chọn Active
+              Active only
             </Button>
             <Button
               size="sm"
               variant="outline"
               disabled={updatingBulk || accounts.length === 0}
               onClick={() => void handleBulkVisibility("deselect-all")}
-              title="Bỏ chọn tất cả tài khoản"
+              title="Deselect all accounts"
             >
               <Square className="h-3.5 w-3.5 mr-1" />
-              Bỏ chọn tất cả
+              Deselect all
             </Button>
           </div>
         </div>
@@ -207,7 +207,7 @@ function Accounts() {
               className="h-7 text-xs"
               onClick={() => setFilterTab("all")}
             >
-              Tất cả ({accounts.length})
+              All ({accounts.length})
             </Button>
             <Button
               size="sm"
@@ -215,7 +215,7 @@ function Accounts() {
               className="h-7 text-xs"
               onClick={() => setFilterTab("visible")}
             >
-              Đang hiển thị ({visibleCount})
+              Displayed ({visibleCount})
             </Button>
             <Button
               size="sm"
@@ -223,14 +223,14 @@ function Accounts() {
               className="h-7 text-xs"
               onClick={() => setFilterTab("active")}
             >
-              Chỉ Active ({activeCount})
+              Active ({activeCount})
             </Button>
           </div>
           <div className="relative w-full sm:w-64">
             <Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-muted-foreground" />
             <Input
               type="text"
-              placeholder="Tìm tài khoản..."
+              placeholder="Search accounts..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="h-7.5 pl-8 text-xs"
@@ -243,8 +243,8 @@ function Accounts() {
         {filteredAccounts.length === 0 && (
           <p className="col-span-full py-16 text-center text-sm text-muted-foreground">
             {accounts.length === 0
-              ? "Chưa có tài khoản nào — hãy kết nối The5ers trong Settings hoặc tạo tài khoản mới."
-              : "Không tìm thấy tài khoản phù hợp với bộ lọc."}
+              ? "No accounts yet — connect The5ers in Settings or create a new account."
+              : "No accounts match the current filter."}
           </p>
         )}
         {filteredAccounts.map((account) => (
@@ -352,15 +352,15 @@ function Accounts() {
                       window.dispatchEvent(new Event("journal-data-changed"));
                     }}
                   />
-                  <span className="text-xs font-medium sm:text-sm">Hiển thị trong Dashboard & Trades</span>
+                  <span className="text-xs font-medium sm:text-sm">Show in Dashboard & Trades</span>
                 </label>
                 {account.visibleInJournal ? (
                   <Badge variant="outline" className="text-xs border-emerald-500/40 text-emerald-500 bg-emerald-500/10">
-                    Đang hiển thị
+                    Displayed
                   </Badge>
                 ) : (
                   <Badge variant="outline" className="text-xs text-muted-foreground">
-                    Đã ẩn
+                    Hidden
                   </Badge>
                 )}
               </div>

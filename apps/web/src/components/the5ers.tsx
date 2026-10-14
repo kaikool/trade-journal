@@ -549,9 +549,9 @@ export function The5ersConnection() {
       </CardHeader>
       <CardContent className="space-y-3">
         <p className="text-sm text-muted-foreground">
-          Kết nối Hub The5ers ở chế độ chỉ đọc. Sử dụng nút đồng bộ bên dưới để nạp toàn bộ
-          tài khoản, chi phí, payout và lịch sử giao dịch vào database. Quản lý tài khoản hiển thị
-          tại trang Accounts.
+          Read-only The5ers Hub connection. Use the sync button below to import all
+          accounts, expenses, payouts, and trade history into the database. Manage account visibility
+          in Accounts.
         </p>
         <Messages state={state} />
         {overview && !overview.configured && (
@@ -608,9 +608,9 @@ export function The5ersConnection() {
             <div className="space-y-3 rounded-md border p-4 bg-muted/20">
               <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <p className="text-sm font-semibold">Đồng bộ toàn bộ dữ liệu The5ers vào Database</p>
+                  <p className="text-sm font-semibold">Sync all The5ers data into Database</p>
                   <p className="text-xs text-muted-foreground">
-                    Tự động đồng bộ toàn bộ tài khoản, chi phí thi cử, payout tài chính và toàn bộ lịch sử vị thế vào Database.
+                    Automatically sync all accounts, challenge expenses, financial payouts, and position history into the database.
                   </p>
                 </div>
                 <Button
@@ -618,17 +618,17 @@ export function The5ersConnection() {
                   disabled={state.busy}
                   onClick={() =>
                     void state.run(async () => {
-                      state.setNotice("Đang kiểm tra và khởi tạo danh sách tất cả tài khoản The5ers...");
+                      state.setNotice("Initializing all The5ers accounts in database...");
                       await postJson("/api/the5ers", { action: "sync.init" });
                       window.dispatchEvent(new Event("journal-data-changed"));
 
-                      state.setNotice("Đang đồng bộ chi phí (expenses & purchases)...");
+                      state.setNotice("Syncing expenses and purchases...");
                       try {
                         await postJson("/api/the5ers", { action: "purchases.sync" });
                       } catch {}
                       window.dispatchEvent(new Event("journal-data-changed"));
 
-                      state.setNotice("Đang đồng bộ payout và lịch sử tài chính (cash)...");
+                      state.setNotice("Syncing payouts and financial cash history...");
                       let previousRemaining = Infinity;
                       for (let batch = 0; batch < 90; batch++) {
                         const result = await postJson<{
@@ -644,15 +644,15 @@ export function The5ersConnection() {
                         if (result.data.complete) break;
                         state.setNotice(
                           result.data.checked != null
-                            ? `Tài chính: ${result.data.checked}/${result.data.total} tài khoản đã lưu.`
-                            : "Đang đồng bộ tài chính...",
+                            ? `Financial history: ${result.data.checked}/${result.data.total} account histories saved.`
+                            : "Syncing financial history...",
                         );
                         if (!result.data.remaining || result.data.remaining >= previousRemaining)
                           break;
                         previousRemaining = result.data.remaining;
                       }
 
-                      state.setNotice("Đang đồng bộ các module và toàn bộ lịch sử lệnh giao dịch...");
+                      state.setNotice("Syncing module sections and trade history...");
                       await continueModuleSync(
                         async () =>
                           (
@@ -667,10 +667,10 @@ export function The5ersConnection() {
                           }
                           state.setNotice(
                             result.busy
-                              ? "Đang lưu lịch sử lệnh The5ers vào Database..."
+                              ? "Saving The5ers position history into database..."
                               : result.complete
-                                ? "Hoàn tất! Toàn bộ tài khoản và dữ liệu The5ers đã được lưu thành công vào Database."
-                                : `Đã lưu ${result.saved}/${result.total} module. ${result.failed ?? 0} lỗi đọc nguồn.`,
+                                ? "Completed! All The5ers accounts and records have been successfully saved into the database."
+                                : `Module sections saved: ${result.saved}/${result.total}. ${result.failed ?? 0} source reads failed.`,
                           );
                         },
                       );
@@ -679,21 +679,21 @@ export function The5ersConnection() {
                     })
                   }
                 >
-                  Sync toàn bộ dữ liệu The5ers vào Database (Sync all data)
+                  Sync all data
                 </Button>
               </div>
 
               {overview.moduleSync && (
                 <p className="text-xs text-muted-foreground">
-                  Trạng thái module: {overview.moduleSync.saved}/{overview.moduleSync.total} đã lưu
+                  Module sections saved: {overview.moduleSync.saved}/{overview.moduleSync.total}
                   {overview.moduleSync.failed
-                    ? ` · ${overview.moduleSync.failed} lỗi đọc nguồn`
+                    ? ` · ${overview.moduleSync.failed} source reads failed`
                     : ""}
                 </p>
               )}
               {(overview.moduleSync?.updatedAt ?? overview.cash?.retrievedAt) && (
                 <p className="text-xs text-muted-foreground">
-                  Lần đồng bộ gần nhất:{" "}
+                  Last attempt:{" "}
                   {formatSourceDate(
                     overview.moduleSync?.updatedAt ?? overview.cash?.retrievedAt,
                     overview.timeZone ?? "UTC",
@@ -705,12 +705,12 @@ export function The5ersConnection() {
               )}
               {overview.cash?.checked != null && (
                 <p className="text-xs text-muted-foreground">
-                  Lịch sử tài khoản: {overview.cash.checked}/{overview.cash.total}
+                  Account histories: {overview.cash.checked}/{overview.cash.total}
                 </p>
               )}
               {overview.cash?.payouts && (
                 <p className="text-xs text-muted-foreground">
-                  Payouts tìm thấy: {overview.cash.payouts.found} · Đã ghi nhận:{" "}
+                  Payouts found: {overview.cash.payouts.found} · Recorded receipts:{" "}
                   {overview.cash.payouts.recorded}
                 </p>
               )}
