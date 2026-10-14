@@ -1,4 +1,4 @@
-import { decompressFile } from "lzma-purejs-requirejs";
+import { decompress } from "lzma";
 import { DUKASCOPY_PRICE_FACTORS } from "@/lib/dukascopy-instruments";
 import { RESOLUTIONS, type MarketBar } from "@/lib/market-data";
 import { dukascopySymbol } from "@/lib/market-providers";
@@ -61,18 +61,17 @@ export function decodeArchive(
   if (!compressed.length) return [];
   if (compressed.length < 13 || compressed.readUInt32LE(1) > 16 * 1024 * 1024)
     throw new MarketDataError("Invalid Dukascopy archive header.");
-  const bytes: number[] = [];
+  const declaredSize = compressed.readBigUInt64LE(5);
+  if (declaredSize !== 0xffffffffffffffffn && declaredSize > 1440n * 24n)
+    throw new MarketDataError("Dukascopy archive exceeds the candle limit.");
+  let buffer: Buffer;
   try {
-    decompressFile(compressed, {
-      writeByte(byte: number) {
-        if (bytes.length >= 1440 * 24) throw new Error("Archive exceeds candle limit");
-        bytes.push(byte);
-      },
-    });
+    const decoded = decompress(compressed);
+    buffer = typeof decoded === "string" ? Buffer.from(decoded, "utf8") : Buffer.from(decoded);
+    if (buffer.length > 1440 * 24) throw new Error("Archive exceeds candle limit");
   } catch {
     throw new MarketDataError("Dukascopy candle archive could not be decoded.");
   }
-  const buffer = Buffer.from(bytes);
   if (buffer.length % 24) throw new MarketDataError("Invalid Dukascopy candle records.");
   const bars: MarketBar[] = [];
   for (let offset = 0; offset < buffer.length; offset += 24) {

@@ -109,9 +109,9 @@ importers:
       lucide-react:
         specifier: ^1.34.0
         version: 1.34.0(react@19.2.8)
-      lzma-purejs-requirejs:
-        specifier: 1.0.0
-        version: 1.0.0
+      lzma:
+        specifier: 2.3.2
+        version: 2.3.2
       next:
         specifier: ^15.5.27
         version: 15.5.27(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -1883,10 +1883,6 @@ packages:
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
 
-  amdefine@0.1.1:
-    resolution: {integrity: sha512-cE/769sItEDt5sSdqmrWMsat+XaA5FJiEou+ZwlY7ef/Jf/517k6nYyUIRPR2o/QbpBg4FiYXj9GyRGNg5f/bg==}
-    engines: {node: '>=0.4.2'}
-
   any-promise@1.3.0:
     resolution: {integrity: sha512-7UvmKalWRt1wgjL1RrGxoSJW/0QZFIegpeGvZG9kjp8vrRu55XTHbwnqq2GpXm9uLbcuhxm3IqX9OB4MZR1b2A==}
 
@@ -1975,10 +1971,6 @@ packages:
 
   comma-separated-tokens@2.0.3:
     resolution: {integrity: sha512-Fu4hJdvzeylCfQPp9SGWidpzrMs7tTrlu6Vb8XGaRGck8QSNZJJp538Wrb60Lax4fPwR64ViY468OIUTbRlGZg==}
-
-  commander@2.2.0:
-    resolution: {integrity: sha512-U6hBkeIsoeE81B+yas9uVF4YYVcVoBCwb1e314VPyvVQubFwvnTAuc1oUQ6VuMPYUS4Rf1gzr0wTVLvs4sb5Pw==}
-    engines: {node: '>= 0.6.x'}
 
   commander@4.1.1:
     resolution: {integrity: sha512-NOKm8xhkzAjzFx8B2v5OAHT+u5pRQc2UCa2Vq9jYL/31o2wi9mxBA7LIFs3sV5VSC49z6pEhfbMULvShKj26WA==}
@@ -2485,8 +2477,8 @@ packages:
     peerDependencies:
       react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0
 
-  lzma-purejs-requirejs@1.0.0:
-    resolution: {integrity: sha512-nQgC+oDmBKPdWoC//X51scWTN5D3zdIL7oN+plbKjhZ+u5LAZsF0/yIiYTNtj+TjB1o6mp9R4Ey5DW6elBEu8w==}
+  lzma@2.3.2:
+    resolution: {integrity: sha512-DcfiawQ1avYbW+hsILhF38IKAlnguc/fjHrychs9hdxe4qLykvhT5VTGNs5YRWgaNePh7NTxGD4uv4gKsRomCQ==}
     hasBin: true
 
   magic-string@0.30.21:
@@ -4655,8 +4647,6 @@ snapshots:
       '@ai-sdk/provider-utils': 5.0.29(zod@4.4.3)
       zod: 4.4.3
 
-  amdefine@0.1.1: {}
-
   any-promise@1.3.0: {}
 
   aria-hidden@1.2.6:
@@ -4735,8 +4725,6 @@ snapshots:
   clsx@2.1.1: {}
 
   comma-separated-tokens@2.0.3: {}
-
-  commander@2.2.0: {}
 
   commander@4.1.1: {}
 
@@ -5196,10 +5184,7 @@ snapshots:
     dependencies:
       react: 19.2.8
 
-  lzma-purejs-requirejs@1.0.0:
-    dependencies:
-      amdefine: 0.1.1
-      commander: 2.2.0
+  lzma@2.3.2: {}
 
   magic-string@0.30.21:
     dependencies:

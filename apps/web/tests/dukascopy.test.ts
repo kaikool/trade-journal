@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { compressFile } from "lzma-purejs-requirejs";
+import { compress } from "lzma";
 import { dukascopy, decodeArchive, decodeDukascopy } from "../src/server/market-data/dukascopy";
 import { dukascopySymbol } from "../src/lib/market-providers";
 const start = Date.parse("2025-09-19T00:00:00Z");
@@ -14,7 +14,7 @@ function archive(seconds = [0, 60]) {
     buffer.writeUInt32BE(4171000 + i * 1000, offset + 16);
     buffer.writeFloatBE(2, offset + 20);
   }
-  return Buffer.from(compressFile(buffer));
+  return Buffer.from(compress(buffer, 1));
 }
 afterEach(() => vi.unstubAllGlobals());
 it("decodes the public archive's big-endian OHLC records with the gold price scale", () => {
