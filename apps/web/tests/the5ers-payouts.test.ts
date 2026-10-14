@@ -333,17 +333,15 @@ it("corrects an untouched imported opening bound when the confirmed payout prove
     .set({ id: "the5ers_source", openedOn: "2026-03-01" })
     .where(eq(propAccounts.id, "funded"));
   const [account] = await db.select().from(propAccounts);
-  await db
-    .insert(propAudit)
-    .values({
-      id: "import-audit",
-      entityType: "account",
-      entityId: account!.id,
-      beforeJson: "null",
-      afterJson: JSON.stringify(account),
-      reason: "Imported verified The5ers funding phase from saved account metadata",
-      createdAt: account!.createdAt,
-    });
+  await db.insert(propAudit).values({
+    id: "import-audit",
+    entityType: "account",
+    entityId: account!.id,
+    beforeJson: "null",
+    afterJson: JSON.stringify(account),
+    reason: "Imported verified The5ers funding phase from saved account metadata",
+    createdAt: account!.createdAt,
+  });
   expect(await save({ ...payout, ownerConfirmedPaid: true })).toBe("imported");
   expect((await propData()).accounts[0]?.openedOn).toBe("2026-02-02");
   expect(await save({ ...payout, ownerConfirmedPaid: true })).toBe("matched");
