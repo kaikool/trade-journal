@@ -168,6 +168,123 @@ describe("trade history endpoint", () => {
     expect(await db.select().from(trades)).toEqual(before);
     expect(await db.select().from(executions)).toHaveLength(0);
   });
+  it("persists provider candles in the existing dataset table and storage, then restores a chart with the connection disabled", async () => {
+    const key = await seed();
+    const { providerFor } = await import("../src/server/market-data/connections");
+    const providerRead = vi.spyOn(providerFor(id), "history");
+    await saveConnection(id, "fixture-key-only");
+    const fetcher = vi.fn(async () =>
+      Response.json(
+        [0, 1, 2].map((minute) => ({
+          ts: `2026-01-02 10:0${minute}:00`,
+          open: 100,
+          low: 98,
+          high: 104,
+          close: 102,
+        })),
+      ),
+    );
+    vi.stubGlobal("fetch", fetcher);
+    const first = await loadHistory(request({ ...body, basisConfirmed: false }), {
+      params: Promise.resolve({ key }),
+    });
+    expect(first.status).toBe(200);
+    const loaded = await first.json();
+    const datasets = await db.select().from(marketCsvDatasets);
+    expect(datasets).toHaveLength(1);
+    expect(datasets[0]!.id).toMatch(/^provider_cache_/);
+    expect(datasets[0]!.barCount).toBe(3);
+    expect(
+      JSON.parse(Buffer.from(storageFiles.get(datasets[0]!.storagePath)!).toString("utf8")),
+    ).toHaveLength(3);
+    const calls = fetcher.mock.calls.length;
+    await loadHistory(request({ ...body, basisConfirmed: false }), {
+      params: Promise.resolve({ key }),
+    });
+    expect(fetcher.mock.calls).toHaveLength(calls);
+    expect(providerRead).toHaveBeenCalledOnce();
+    expect(await db.select().from(marketCsvDatasets)).toHaveLength(1);
+    await saveConnection(id, null);
+    fetcher.mockImplementation(async () => {
+      throw new Error("Provider unavailable");
+    });
+    const reopened = await savedHistory(request({}), { params: Promise.resolve({ key }) });
+    expect((await reopened.json()).history.bars).toEqual(loaded.bars);
+    expect(fetcher.mock.calls).toHaveLength(calls);
+    const manual = await listCsv();
+    expect((await manual.json()).datasets).toHaveLength(0);
+    expect(JSON.stringify(await db.select().from(settings))).not.toContain("fixture-key-only");
+    providerRead.mockRestore();
+  });
+  it("extends recent candle coverage by fetching only the tail and retains old candles on a delayed reply", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-01-02T10:06:00Z"));
+      const { cachedHistory } = await import("../src/server/market-data/cache");
+      const open = Date.parse("2026-01-02T10:00:00Z");
+      const bar = (time: number) => ({
+        time,
+        open: 100,
+        high: 104,
+        low: 98,
+        close: 102,
+        volume: 1,
+      });
+      const history = vi.fn(
+        async (query: import("../src/server/market-data/provider").HistoryRequest) => ({
+          provider: "Fixture",
+          symbol: query.symbol,
+          resolution: query.resolution,
+          bars: [bar(open)],
+          fetchedAt: new Date().toISOString(),
+          truncated: false,
+          warnings: [],
+        }),
+      );
+      const provider = {
+        id: "fixture",
+        name: "Fixture",
+        environmentKey: "",
+        test: async () => {},
+        history,
+      };
+      await cachedHistory(
+        provider,
+        { symbol: "TEST", resolution: "1m", from: open, to: open + 180000 },
+        "private-fixture",
+      );
+      vi.setSystemTime(new Date("2026-01-02T10:17:00Z"));
+      history.mockImplementation(async (query) => ({
+        provider: "Fixture",
+        symbol: query.symbol,
+        resolution: query.resolution,
+        bars: [bar(open + 900000)],
+        fetchedAt: new Date().toISOString(),
+        truncated: false,
+        warnings: [],
+      }));
+      const result = await cachedHistory(
+        provider,
+        { symbol: "TEST", resolution: "1m", from: open, to: open + 960000 },
+        "private-fixture",
+      );
+      expect(history.mock.calls).toHaveLength(2);
+      expect(history.mock.calls[1]![0]).toMatchObject({ from: Date.parse("2026-01-02T09:56:00Z") });
+      expect(result.history.bars.map((bar) => bar.time)).toEqual([open, open + 900000]);
+      expect(await db.select().from(marketCsvDatasets)).toHaveLength(1);
+      history.mockRejectedValue(new Error("Source failed"));
+      vi.setSystemTime(new Date("2026-01-02T10:19:00Z"));
+      const stale = await cachedHistory(
+        provider,
+        { symbol: "TEST", resolution: "1m", from: open, to: open + 960000 },
+        "private-fixture",
+      );
+      expect(stale.history.bars).toEqual(result.history.bars);
+      expect(stale.history.warnings.join(" ")).toContain("Showing saved");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("loads candles and estimates without changing journal facts or exposing credentials", async () => {
     const key = await seed();
     await saveConnection(id, "fixture-key-only");

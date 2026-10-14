@@ -43,6 +43,7 @@ export function TradeMarketData({
   const privacy = usePrivacy();
   const { data: saved, refresh: refreshSaved } = useApi<{
     saved: { estimate: ExcursionEstimate } | null;
+    history?: TradeMarketResult | null;
   }>(`/api/trades/${encodeURIComponent(trade.key)}/market-data`);
   const { data: connections, error: connectionError } = useApi<{ connections: MarketConnection[] }>(
     "/api/market-data/connections",
@@ -58,6 +59,9 @@ export function TradeMarketData({
   );
   const [confirmed, setConfirmed] = useState(false);
   const [result, setResult] = useState<TradeMarketResult | null>(null);
+  useEffect(() => {
+    if (saved?.history) setResult((current) => current ?? saved.history!);
+  }, [saved?.history]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const controller = useRef<AbortController | null>(null);
@@ -120,7 +124,7 @@ export function TradeMarketData({
               {connectionError}
             </p>
           )}
-          {!available.length && (
+          {!available.length && !saved?.history && (
             <p className="text-sm text-muted-foreground">
               <a className="underline" href="/settings#market-data">
                 Connect a market data provider in Settings

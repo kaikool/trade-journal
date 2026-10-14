@@ -1,3 +1,9 @@
+import {
+  cachedHistory,
+  savedChart,
+  rememberChart,
+  chartIdentity,
+} from "@/server/market-data/cache";
 import { accounts, db } from "@/db";
 import { eq } from "drizzle-orm";
 import { bad, handler, ok, requireValue } from "@/server/api";
@@ -17,7 +23,29 @@ export const GET = handler(
     if (!row) return bad("Trade not found", 404);
     const trade = await rowToTrade(row);
     const saved = await savedEstimates([trade]);
-    return ok({ saved: saved.get(key) ?? null });
+    const cached = await savedChart(key, chartIdentity(row));
+    const history = cached
+      ? (({ cacheEstimate: _estimate, cacheFingerprint: _fingerprint, ...bars }) => bars)(cached)
+      : null;
+    const savedEstimate =
+      cached && cached.cacheFingerprint === (await estimateFingerprint(trade))
+        ? cached.cacheEstimate
+        : undefined;
+    return ok({
+      saved: saved.get(key) ?? null,
+      history: history
+        ? {
+            ...history,
+            estimate: savedEstimate ?? {
+              mae: null,
+              mfe: null,
+              sampledBars: 0,
+              excludedBars: 0,
+              warnings: [],
+            },
+          }
+        : null,
+    });
   },
 );
 
@@ -80,7 +108,8 @@ export const POST = handler(
         );
       const trade = await rowToTrade(row);
       const fingerprint = await estimateFingerprint(trade);
-      const history = await provider.history(
+      const { history, cacheId } = await cachedHistory(
+        provider,
         {
           symbol: body.symbol.trim(),
           dataset: body.dataset || undefined,
@@ -91,6 +120,9 @@ export const POST = handler(
         },
         await connectionKey(provider.id),
       );
+      const savedId =
+        cacheId ??
+        (provider.id === "market-csv" && history.datasetId ? `csv:${history.datasetId}` : null);
       const [acc] = await db
         .select({ currency: accounts.currency })
         .from(accounts)
@@ -116,6 +148,26 @@ export const POST = handler(
       const current = await getTradeByKey(key);
       if (current && (await estimateFingerprint(await rowToTrade(current))) === fingerprint)
         await saveEstimate(trade, { ...history, estimate }, fingerprint);
+      if (
+        savedId &&
+        !history.truncated &&
+        current &&
+        (await estimateFingerprint(await rowToTrade(current))) === fingerprint
+      )
+        await rememberChart(key, {
+          cacheId: savedId,
+          estimate,
+          fingerprint,
+          fetchedAt: history.fetchedAt,
+          tradeIdentity: chartIdentity(row),
+          request: {
+            symbol: body.symbol.trim(),
+            dataset: body.dataset || undefined,
+            resolution: body.resolution,
+            from,
+            to,
+          },
+        });
       if (body.estimateOnly) {
         const { bars: _bars, ...metadata } = history;
         return ok({ ...metadata, estimate });

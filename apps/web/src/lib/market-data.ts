@@ -1,3 +1,6 @@
+/** Provider downloads share dataset storage without appearing as manual CSV uploads. */
+export const PROVIDER_DATASET_PREFIX = "provider_cache_";
+
 /** Provider-neutral candles. Time is the UTC bar-open timestamp in milliseconds. */
 export interface MarketBar {
   time: number;

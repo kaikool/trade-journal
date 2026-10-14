@@ -1,7 +1,12 @@
 import { randomUUID, createHash } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, notLike } from "drizzle-orm";
 import { db, marketCsvDatasets, tradeExcursions } from "@/db";
-import { RESOLUTIONS, type MarketBar, type Resolution } from "@/lib/market-data";
+import {
+  RESOLUTIONS,
+  PROVIDER_DATASET_PREFIX,
+  type MarketBar,
+  type Resolution,
+} from "@/lib/market-data";
 import { parseMarketCsv, type MarketCsvDataset } from "@/lib/market-csv";
 import { MarketDataError, type MarketDataProvider } from "./provider";
 import { result } from "./http";
@@ -62,7 +67,8 @@ export async function csvDatasets(): Promise<MarketCsvDataset[]> {
       firstTime: marketCsvDatasets.firstTime,
       lastTime: marketCsvDatasets.lastTime,
     })
-    .from(marketCsvDatasets);
+    .from(marketCsvDatasets)
+    .where(notLike(marketCsvDatasets.id, `${PROVIDER_DATASET_PREFIX}%`));
 
   return rows.map(({ firstTime, lastTime, ...row }) => ({
     ...row,
@@ -81,7 +87,10 @@ export async function importCsvDataset(input: {
   content: string;
 }): Promise<string> {
   const bars = parseMarketCsv(input.content, input.symbol, input.resolution);
-  const existing = await db.select({ id: marketCsvDatasets.id }).from(marketCsvDatasets);
+  const existing = await db
+    .select({ id: marketCsvDatasets.id })
+    .from(marketCsvDatasets)
+    .where(notLike(marketCsvDatasets.id, `${PROVIDER_DATASET_PREFIX}%`));
   if (existing.length >= 50)
     throw new MarketDataError("Remove an unused dataset before adding more (50-file limit).");
 
@@ -162,6 +171,7 @@ export const marketCsv: MarketDataProvider = {
       .from(marketCsvDatasets)
       .where(
         and(
+          notLike(marketCsvDatasets.id, `${PROVIDER_DATASET_PREFIX}%`),
           eq(marketCsvDatasets.symbol, request.symbol),
           eq(marketCsvDatasets.resolution, request.resolution),
           request.dataset ? eq(marketCsvDatasets.id, request.dataset) : undefined,
