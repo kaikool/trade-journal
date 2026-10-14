@@ -558,17 +558,15 @@ async function saveSnapshotPropAccount(
       .update(propAccounts)
       .set({ journalAccountId, updatedAt })
       .where(eq(propAccounts.id, tracked.id));
-    await tx
-      .insert(propAudit)
-      .values({
-        id: randomUUID(),
-        entityType: "account",
-        entityId: tracked.id,
-        beforeJson: JSON.stringify(tracked),
-        afterJson: JSON.stringify({ ...tracked, journalAccountId, updatedAt }),
-        reason: "Linked an existing imported funding phase to its selected trading account",
-        createdAt: updatedAt,
-      });
+    await tx.insert(propAudit).values({
+      id: randomUUID(),
+      entityType: "account",
+      entityId: tracked.id,
+      beforeJson: JSON.stringify(tracked),
+      afterJson: JSON.stringify({ ...tracked, journalAccountId, updatedAt }),
+      reason: "Linked an existing imported funding phase to its selected trading account",
+      createdAt: updatedAt,
+    });
   }
   if (!tracked && program && status) {
     const now = new Date().toISOString();
@@ -1315,7 +1313,7 @@ export async function syncSourceCash(signal?: AbortSignal, batch = false) {
         const history = JSON.parse(row.value);
         return (
           batch &&
-          history.importerVersion === 1 &&
+          history.importerVersion === 2 &&
           Date.now() - Date.parse(history.retrievedAt) < 15 * 60_000
         );
       })
@@ -1357,9 +1355,28 @@ export async function syncSourceCash(signal?: AbortSignal, batch = false) {
   } catch {
     purchases = { synced: false };
   }
+  const inventoryIds = new Set(inventory.accounts.map((a) => a.id));
+  const histories = await db.select().from(settings).where(like(settings.key, "the5ers:payouts:%"));
+  const payoutSummary = { found: 0, paid: 0, recorded: 0, missingSettlement: 0 };
+  for (const history of histories) {
+    if (!inventoryIds.has(history.key.slice("the5ers:payouts:".length))) continue;
+    const saved = JSON.parse(history.value);
+    for (const row of saved.rows ?? []) {
+      payoutSummary.found++;
+      const isPaid = ["paid", "completed", "received", "settled"].includes(
+        String(sourceFields(row.source).status).trim().toLowerCase(),
+      );
+      if (isPaid) payoutSummary.paid++;
+      if (["imported", "matched"].includes(row.status)) payoutSummary.recorded++;
+      else if (isPaid) payoutSummary.missingSettlement++;
+    }
+  }
   const outcome = {
+    payouts: payoutSummary,
+    expensesComplete: purchases.synced,
     accounts: inventory.accounts.map(({ ref: _ref, ...account }) => account),
-    complete: inventory.complete && !remaining && purchases.synced,
+    complete:
+      inventory.complete && !remaining && purchases.synced && !payoutSummary.missingSettlement,
     remaining,
     checked: fresh.size + synced,
     total: inventory.accounts.length,
@@ -1393,6 +1410,7 @@ async function fetchAndSavePayouts(
       ...(currency ? { currency } : {}),
     }));
   });
+  let payoutExplanation: unknown;
   // History's amount does not identify the trader's net receipt. Explain supplies
   // finalAmount for the latest payout only; never apply its split to older rows.
   if (
@@ -1403,9 +1421,8 @@ async function fetchAndSavePayouts(
     )
   ) {
     try {
-      const explanation = sourceFields(
-        await client.read("payout", "explain", { account_ref: account.ref }),
-      );
+      payoutExplanation = await client.read("payout", "explain", { account_ref: account.ref });
+      const explanation = sourceFields(payoutExplanation);
       const body = sourceFields(explanation.data);
       const latest = sourceFields(body.latestpayout);
       const breakdown = sourceFields(latest.breakdown);
@@ -1420,9 +1437,10 @@ async function fetchAndSavePayouts(
           row.currency === currency
         );
       });
+      const completedAt = latest.completedat ?? sourceFields(matches[0]).completedat;
       if (
         body.subject === "latest_payout" &&
-        sourceInstant(latest.completedat) &&
+        sourceInstant(completedAt) &&
         ["paid", "completed", "received", "settled"].includes(
           String(latest.status).toLowerCase(),
         ) &&
@@ -1431,7 +1449,7 @@ async function fetchAndSavePayouts(
       ) {
         Object.assign(matches[0]!, {
           netAmount: breakdown.finalamount,
-          completedAt: latest.completedat,
+          completedAt,
         });
       }
     } catch {
@@ -1500,7 +1518,8 @@ async function fetchAndSavePayouts(
     }
     const saved = {
       ...history,
-      importerVersion: 1,
+      importerVersion: 2,
+      explanation: payoutExplanation ? publicData(payoutExplanation) : undefined,
       account: sourceAccount,
       rows: results,
       imported,

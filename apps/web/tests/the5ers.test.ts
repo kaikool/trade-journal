@@ -1641,6 +1641,7 @@ it("imports the documented latest paid withdrawal using envelope currency and ex
                   subject: "latest_payout",
                   latestPayout: {
                     ...latest,
+                    completedAt: undefined,
                     breakdown: { finalAmount: 780, commission: 20, userShare: 800 },
                   },
                 }
@@ -1671,6 +1672,12 @@ it("imports the documented latest paid withdrawal using envelope currency and ex
   const history = overview.cashSnapshots.find((s) => s.account.program === "funded")!.sections
     .payoutHistory!.data as { pending: number };
   expect(history.pending).toBe(1);
+  expect(overview.cash).toMatchObject({
+    complete: false,
+    checked: 2,
+    total: 2,
+    payouts: { found: 2, paid: 2, recorded: 1, missingSettlement: 1 },
+  });
 });
 
 it("resumes bounded financial batches without refetching saved histories and prioritizes historical funded accounts", async () => {

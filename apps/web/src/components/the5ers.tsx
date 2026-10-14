@@ -31,12 +31,14 @@ interface Overview {
   cashSelection?: Selection[];
   cash?: {
     complete: boolean;
+    expensesComplete?: boolean;
     failures: { id: string; label: string }[];
     retrievedAt?: string;
     synced?: number;
     checked?: number;
     total?: number;
     remaining?: number;
+    payouts?: { found: number; paid: number; recorded: number; missingSettlement: number };
   } | null;
   purchases?: unknown;
 }
@@ -617,10 +619,28 @@ export function The5ersConnection() {
                   {formatSourceDate(overview.cash.retrievedAt, overview.timeZone ?? "UTC")}
                 </p>
               )}
+              {overview.cash?.checked != null && (
+                <p className="text-sm">
+                  Account histories: {overview.cash.checked}/{overview.cash.total}
+                </p>
+              )}
+              {overview.cash?.payouts && (
+                <p className="text-sm">
+                  Payouts found: {overview.cash.payouts.found} · Recorded receipts:{" "}
+                  {overview.cash.payouts.recorded}
+                  {overview.cash.payouts.missingSettlement > 0
+                    ? ` · Paid payouts missing settlement information: ${overview.cash.payouts.missingSettlement}`
+                    : ""}
+                </p>
+              )}
               {overview.cash?.complete === false && (
                 <p className="text-sm">
                   {overview.cash.checked != null && overview.cash.total != null
-                    ? `${overview.cash.checked}/${overview.cash.total} account histories saved. Sync finances continues the remaining accounts.`
+                    ? overview.cash.remaining
+                      ? `${overview.cash.remaining} account histories remain. Sync finances continues from saved data.`
+                      : overview.cash.expensesComplete === false
+                        ? "Expenses could not be updated. Sync expenses to retry."
+                        : "Some Paid payouts lack the settlement details required to record cash received."
                     : "Financial sync is incomplete. Existing ledger records are retained."}
                 </p>
               )}
