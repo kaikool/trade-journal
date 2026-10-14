@@ -1,6 +1,6 @@
-import { asc, eq, inArray } from "drizzle-orm";
+import { asc, eq, inArray, sql } from "drizzle-orm";
 import { matchesFilters, type AnalysisFilters, type AnnotatedTrade } from "@luxalgo/journal-core";
-import { getTimeZone, getMultipliers, getJournalDefaults } from "./settings";
+import { getTimeZone, getMultipliers, getJournalDefaults, getSetting } from "./settings";
 import { sourceTradeRows, sourceJournalData } from "./the5ers/journal";
 import { db, trades } from "@/db";
 
@@ -111,16 +111,35 @@ export const queryTrades = async (
   }[];
 }> => {
   const effective = { ...filters, accounts: filters.accounts ?? filters.accountIds?.join(",") };
-  const accountIds = effective.accounts
+  let accountIds = effective.accounts
     ?.split(",")
     .map((id) => id.trim())
     .filter(Boolean);
+
+  if (!accountIds?.length) {
+    const saved = await getSetting("journal:visible-accounts");
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          accountIds = parsed;
+        }
+      } catch {}
+    }
+  }
+
   const native = await db
     .select()
     .from(trades)
-    .where(accountIds?.length ? inArray(trades.accountId, accountIds) : undefined)
+    .where(
+      accountIds !== undefined
+        ? accountIds.length
+          ? inArray(trades.accountId, accountIds)
+          : sql`false`
+        : undefined,
+    )
     .orderBy(asc(trades.openedAt));
-  const projection = await sourceJournalData();
+  const projection = await sourceJournalData(accountIds);
   const source = projection.rows;
   const signature = (row: TradeRow) =>
     JSON.stringify([

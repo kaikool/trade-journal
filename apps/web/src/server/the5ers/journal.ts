@@ -298,7 +298,7 @@ export async function saveJournalPositions(
 }
 
 /** Project into the existing trade reader so all journal filters and net analytics apply. */
-export async function sourceJournalData() {
+export async function sourceJournalData(allowedAccountIds?: string[]) {
   const [stored, mapping, native, annotations] = await Promise.all([
     db
       .select()
@@ -326,6 +326,8 @@ export async function sourceJournalData() {
     const history = JSON.parse(row.value) as JournalSource;
     const accountId = links[history.sourceAccountId];
     if (!accountId || !native.some((a) => a.id === accountId && a.currency === history.currency))
+      continue;
+    if (allowedAccountIds && !allowedAccountIds.includes(accountId))
       continue;
     coverage.push({
       accountId,

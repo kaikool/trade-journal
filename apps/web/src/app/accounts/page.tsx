@@ -1,7 +1,7 @@
 "use client";
 
-import { Suspense, useState } from "react";
-import { Archive, ArchiveRestore, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Suspense, useState, useMemo } from "react";
+import { Archive, ArchiveRestore, Check, CheckSquare, Plus, RefreshCw, Search, Square, Trash2 } from "lucide-react";
 import { The5ersLinkedAccount } from "@/components/the5ers";
 import { AccountCreateForm } from "@/components/account-create-form";
 import { FilterBar } from "@/components/filter-bar";
@@ -34,6 +34,11 @@ interface AccountRow {
   the5ersSourceId?: string;
   name: string;
   the5ersSelected?: boolean;
+  visibleInJournal?: boolean;
+  propStatus?: string;
+  propProgram?: string;
+  propSizeMinor?: number;
+  isActive?: boolean;
   broker: string;
   kind: "sync" | "import" | "manual";
   currency: string;
@@ -55,13 +60,47 @@ export default function AccountsPage() {
 }
 
 function Accounts() {
-  const [showOtherSynced, setShowOtherSynced] = useState(false);
   const { data, refresh } = useApi<{ accounts: AccountRow[] }>("/api/accounts");
   const [syncing, setSyncing] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
-  const visibleAccounts = data?.accounts.filter(
-    (account) => showOtherSynced || !account.the5ersSourceId || account.the5ersSelected !== false,
-  );
+  const [updatingBulk, setUpdatingBulk] = useState(false);
+  const [search, setSearch] = useState("");
+  const [filterTab, setFilterTab] = useState<"all" | "visible" | "active">("all");
+
+  const accounts = data?.accounts ?? [];
+
+  const visibleCount = useMemo(() => accounts.filter((a) => a.visibleInJournal).length, [accounts]);
+  const activeCount = useMemo(() => accounts.filter((a) => a.isActive).length, [accounts]);
+
+  const filteredAccounts = useMemo(() => {
+    return accounts.filter((account) => {
+      if (filterTab === "visible" && !account.visibleInJournal) return false;
+      if (filterTab === "active" && !account.isActive) return false;
+      if (search.trim()) {
+        const query = search.toLowerCase();
+        return (
+          account.name.toLowerCase().includes(query) ||
+          account.broker.toLowerCase().includes(query) ||
+          account.id.toLowerCase().includes(query) ||
+          (account.propProgram && account.propProgram.toLowerCase().includes(query))
+        );
+      }
+      return true;
+    });
+  }, [accounts, filterTab, search]);
+
+  const handleBulkVisibility = async (action: "select-all" | "select-active" | "deselect-all") => {
+    setUpdatingBulk(true);
+    try {
+      await postJson("/api/accounts", { action }, "PUT");
+      refresh();
+      window.dispatchEvent(new Event("journal-data-changed"));
+    } catch (error) {
+      alert(error instanceof Error ? error.message : "Cập nhật hiển thị thất bại");
+    } finally {
+      setUpdatingBulk(false);
+    }
+  };
 
   const action = async <T = unknown,>(id: string, body: Record<string, unknown>) => {
     const result = await postJson<T>(`/api/accounts/${id}/actions`, body);
@@ -115,40 +154,139 @@ function Accounts() {
           />
         </DialogContent>
       </Dialog>
-      {data?.accounts.some(
-        (account) => account.the5ersSourceId && account.the5ersSelected === false,
-      ) && (
-        <label className="mx-4 mt-4 flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={showOtherSynced}
-            onChange={(event) => setShowOtherSynced(event.target.checked)}
-          />
-          Show other synced accounts
-        </label>
-      )}
+
+      <div className="border-b bg-card/60 px-4 py-3">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h2 className="text-sm font-semibold tracking-tight text-foreground">
+              Thiết lập tài khoản hiển thị trong Dashboard & Trades
+            </h2>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Tổng số: {accounts.length} tài khoản · Đang hiển thị: {visibleCount} · Active: {activeCount}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={updatingBulk || accounts.length === 0}
+              onClick={() => void handleBulkVisibility("select-all")}
+              title="Tích chọn tất cả tài khoản để hiển thị trên Dashboard & Trades"
+            >
+              <CheckSquare className="h-3.5 w-3.5 mr-1" />
+              Tích chọn tất cả
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={updatingBulk || accounts.length === 0}
+              onClick={() => void handleBulkVisibility("select-active")}
+              title="Chỉ tích chọn các tài khoản Active"
+            >
+              <Check className="h-3.5 w-3.5 mr-1" />
+              Chỉ chọn Active
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={updatingBulk || accounts.length === 0}
+              onClick={() => void handleBulkVisibility("deselect-all")}
+              title="Bỏ chọn tất cả tài khoản"
+            >
+              <Square className="h-3.5 w-3.5 mr-1" />
+              Bỏ chọn tất cả
+            </Button>
+          </div>
+        </div>
+
+        <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between pt-2 border-t border-border/50">
+          <div className="flex items-center gap-1.5">
+            <Button
+              size="sm"
+              variant={filterTab === "all" ? "secondary" : "ghost"}
+              className="h-7 text-xs"
+              onClick={() => setFilterTab("all")}
+            >
+              Tất cả ({accounts.length})
+            </Button>
+            <Button
+              size="sm"
+              variant={filterTab === "visible" ? "secondary" : "ghost"}
+              className="h-7 text-xs"
+              onClick={() => setFilterTab("visible")}
+            >
+              Đang hiển thị ({visibleCount})
+            </Button>
+            <Button
+              size="sm"
+              variant={filterTab === "active" ? "secondary" : "ghost"}
+              className="h-7 text-xs"
+              onClick={() => setFilterTab("active")}
+            >
+              Chỉ Active ({activeCount})
+            </Button>
+          </div>
+          <div className="relative w-full sm:w-64">
+            <Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-muted-foreground" />
+            <Input
+              type="text"
+              placeholder="Tìm tài khoản..."
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="h-7.5 pl-8 text-xs"
+            />
+          </div>
+        </div>
+      </div>
+
       <div className="grid gap-3 p-4 md:grid-cols-2">
-        {data?.accounts.length === 0 && (
+        {filteredAccounts.length === 0 && (
           <p className="col-span-full py-16 text-center text-sm text-muted-foreground">
-            No accounts yet — use New account to create your first one.
+            {accounts.length === 0
+              ? "Chưa có tài khoản nào — hãy kết nối The5ers trong Settings hoặc tạo tài khoản mới."
+              : "Không tìm thấy tài khoản phù hợp với bộ lọc."}
           </p>
         )}
-        {visibleAccounts?.map((account) => (
+        {filteredAccounts.map((account) => (
           <Card key={account.id} className={account.archivedAt ? "opacity-60" : undefined}>
             <CardHeader className="flex-row flex-wrap items-center justify-between gap-2">
               <CardTitle className="min-w-0 flex-1 text-base font-semibold normal-case tracking-normal text-foreground">
                 <span className="block break-words">
                   <MonetaryValue>{account.name}</MonetaryValue>
                 </span>
-                <Badge variant="secondary" className="mt-1.5 mr-2">
-                  {account.the5ersSourceId ? "Synced" : account.kind}
-                </Badge>
-                {account.broker &&
-                  (account.kind !== "sync" || isEnabledSyncBroker(account.broker)) && (
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                  {account.isActive ? (
+                    <Badge className="bg-emerald-600 text-white hover:bg-emerald-700 text-xs py-0">
+                      Active
+                    </Badge>
+                  ) : account.propStatus ? (
+                    <Badge variant="outline" className="text-xs py-0">
+                      {account.propStatus.toUpperCase()}
+                    </Badge>
+                  ) : account.archivedAt ? (
+                    <Badge variant="secondary" className="text-xs py-0">
+                      Archived
+                    </Badge>
+                  ) : null}
+                  <Badge variant="secondary" className="text-xs py-0">
+                    {account.the5ersSourceId ? "Synced" : account.kind}
+                  </Badge>
+                  {account.the5ersSourceId && (
+                    <Badge variant="outline" className="text-xs py-0">
+                      The5ers
+                    </Badge>
+                  )}
+                  {account.propProgram && (
+                    <Badge variant="outline" className="text-xs py-0">
+                      {account.propProgram}
+                    </Badge>
+                  )}
+                  {account.broker && account.broker !== "The5ers" && (
                     <span className="text-xs font-normal text-muted-foreground">
                       {account.broker}
                     </span>
                   )}
+                </div>
               </CardTitle>
               <div className="ml-auto flex shrink-0 items-center gap-1">
                 {account.kind === "sync" && isEnabledSyncBroker(account.broker) && (
@@ -195,6 +333,37 @@ function Accounts() {
               </div>
             </CardHeader>
             <CardContent className="space-y-3">
+              <div className="flex items-center justify-between rounded-lg border bg-muted/40 p-2.5">
+                <label
+                  htmlFor={`toggle-${account.id}`}
+                  className="flex items-center gap-2.5 cursor-pointer select-none"
+                >
+                  <input
+                    type="checkbox"
+                    id={`toggle-${account.id}`}
+                    className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary cursor-pointer accent-primary"
+                    checked={account.visibleInJournal ?? true}
+                    onChange={async (e) => {
+                      await postJson(`/api/accounts/${account.id}/actions`, {
+                        action: "set-visibility",
+                        visible: e.target.checked,
+                      });
+                      refresh();
+                      window.dispatchEvent(new Event("journal-data-changed"));
+                    }}
+                  />
+                  <span className="text-xs font-medium sm:text-sm">Hiển thị trong Dashboard & Trades</span>
+                </label>
+                {account.visibleInJournal ? (
+                  <Badge variant="outline" className="text-xs border-emerald-500/40 text-emerald-500 bg-emerald-500/10">
+                    Đang hiển thị
+                  </Badge>
+                ) : (
+                  <Badge variant="outline" className="text-xs text-muted-foreground">
+                    Đã ẩn
+                  </Badge>
+                )}
+              </div>
               {account.the5ersSourceId && <The5ersLinkedAccount accountId={account.id} />}
               {account.snapshot && (
                 <div className="text-sm">

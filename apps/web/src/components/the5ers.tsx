@@ -542,11 +542,6 @@ export function The5ersConnection() {
   const state = useSource("/api/the5ers?view=connection"),
     overview = state.data;
   const privacy = usePrivacy();
-  const [manageAccounts, setManageAccounts] = useState(false);
-  useEffect(() => {
-    if (new URLSearchParams(window.location.search).get("connected") === "the5ers")
-      setManageAccounts(true);
-  }, []);
   return (
     <Card>
       <CardHeader>
@@ -554,8 +549,9 @@ export function The5ersConnection() {
       </CardHeader>
       <CardContent className="space-y-3">
         <p className="text-sm text-muted-foreground">
-          Read-only Hub connection. Choose accounts here; view linked accounts in Accounts and
-          finances in Prop firms.
+          Kết nối Hub The5ers ở chế độ chỉ đọc. Sử dụng nút đồng bộ bên dưới để nạp toàn bộ
+          tài khoản, chi phí, payout và lịch sử giao dịch vào database. Quản lý tài khoản hiển thị
+          tại trang Accounts.
         </p>
         <Messages state={state} />
         {overview && !overview.configured && (
@@ -606,120 +602,33 @@ export function The5ersConnection() {
         </div>
         {overview?.connected && (
           <>
-            <p className="text-sm">
-              Connected · {overview.selection.length} accounts selected for daily updates
-              {!overview.canRefresh ? " · Reconnect required when access expires" : ""}
+            <p className="text-sm text-muted-foreground">
+              Connected {!overview.canRefresh ? " · Reconnect required when access expires" : ""}
             </p>
-            <details
-              open={manageAccounts}
-              onToggle={(event) => setManageAccounts(event.currentTarget.open)}
-            >
-              <summary className="cursor-pointer rounded-md border p-3 text-sm font-medium">
-                Select accounts for daily updates
-              </summary>
-              {manageAccounts && (
-                <div className="mt-3">
-                  <The5ersAccounts />
+            <div className="space-y-3 rounded-md border p-4 bg-muted/20">
+              <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm font-semibold">Đồng bộ toàn bộ dữ liệu The5ers vào Database</p>
+                  <p className="text-xs text-muted-foreground">
+                    Tự động đồng bộ toàn bộ tài khoản, chi phí thi cử, payout tài chính và toàn bộ lịch sử vị thế vào Database.
+                  </p>
                 </div>
-              )}
-            </details>
-            <div className="space-y-2 rounded-md border p-3">
-              <p className="text-sm font-medium">All module sync</p>
-              <p className="text-xs text-muted-foreground">
-                Save all available modules and trade history for every account. Expenses and payouts
-                use the same Prop firms ledger as manual records.
-              </p>
-              {overview.moduleSync && (
-                <p className="text-sm">
-                  Module sections saved: {overview.moduleSync.saved}/{overview.moduleSync.total}
-                  {overview.moduleSync.failed
-                    ? ` · ${overview.moduleSync.failed} source reads failed`
-                    : ""}
-                  {overview.moduleSync.projectionFailed
-                    ? ` · ${overview.moduleSync.projectionFailed} trade imports need retry`
-                    : ""}
-                </p>
-              )}
-              {(overview.moduleSync?.updatedAt ?? overview.cash?.retrievedAt) && (
-                <p className="text-xs text-muted-foreground">
-                  Last attempt:{" "}
-                  {formatSourceDate(
-                    overview.moduleSync?.updatedAt ?? overview.cash?.retrievedAt,
-                    overview.timeZone ?? "UTC",
-                  )}
-                </p>
-              )}
-              {overview.moduleSync?.errors?.[0]?.message && (
-                <p className="text-sm text-destructive">{overview.moduleSync.errors[0].message}</p>
-              )}
-              {overview.cash?.checked != null && (
-                <p className="text-sm">
-                  Account histories: {overview.cash.checked}/{overview.cash.total}
-                </p>
-              )}
-              {overview.cash?.payouts && (
-                <p className="text-sm">
-                  Payouts found: {overview.cash.payouts.found} · Recorded receipts:{" "}
-                  {overview.cash.payouts.recorded}
-                  {overview.cash.payouts.missingSettlement > 0
-                    ? ` · Paid payouts not yet recorded: ${overview.cash.payouts.missingSettlement}`
-                    : ""}
-                </p>
-              )}
-              {Object.entries(overview.cash?.payouts?.blocked ?? {}).map(([reason, count]) => (
-                <p key={reason} className="text-xs text-muted-foreground">
-                  {(
-                    {
-                      account: "Matching funded account unavailable",
-                      amount: "Payout amount unavailable or invalid",
-                      currency: "Payout currency unavailable",
-                      "opening-date": "Payout predates the account opening date",
-                      duplicate: "Matching receipt already exists",
-                      "changed-receipt": "Saved receipt differs from source",
-                      "future-date": "Source date is in the future",
-                      "dates-or-status": "Source settlement status or dates unavailable",
-                    } as Record<string, string>
-                  )[reason] ?? "Payout requires another sync"}
-                  : {count}
-                </p>
-              ))}
-              {overview.cash?.complete === false && (
-                <p className="text-sm">
-                  {overview.cash.checked != null && overview.cash.total != null
-                    ? overview.cash.remaining
-                      ? `${overview.cash.remaining} account histories remain. Sync all data continues from saved data.`
-                      : overview.cash.expensesComplete === false
-                        ? "Expenses could not be updated. Sync expenses to retry."
-                        : "Some Paid payouts have not been recorded in the ledger."
-                    : "Financial sync is incomplete. Existing ledger records are retained."}
-                </p>
-              )}
-              <div className="flex flex-wrap gap-2">
                 <Button
-                  size="sm"
-                  variant="outline"
+                  className="mt-2 shrink-0 sm:mt-0 font-medium"
                   disabled={state.busy}
                   onClick={() =>
                     void state.run(async () => {
-                      const result = await postJson<{
-                        data: { imported: number; matched: number; pending: number };
-                      }>("/api/the5ers", { action: "purchases.sync" });
-                      state.refresh();
+                      state.setNotice("Đang kiểm tra và khởi tạo danh sách tất cả tài khoản The5ers...");
+                      await postJson("/api/the5ers", { action: "sync.init" });
                       window.dispatchEvent(new Event("journal-data-changed"));
-                      state.setNotice(
-                        `Expenses: ${result.data.imported} imported, ${result.data.matched} already linked, ${result.data.pending} not imported. Existing matching expenses are not duplicated.`,
-                      );
-                    })
-                  }
-                >
-                  Sync expenses
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={state.busy}
-                  onClick={() =>
-                    void state.run(async () => {
+
+                      state.setNotice("Đang đồng bộ chi phí (expenses & purchases)...");
+                      try {
+                        await postJson("/api/the5ers", { action: "purchases.sync" });
+                      } catch {}
+                      window.dispatchEvent(new Event("journal-data-changed"));
+
+                      state.setNotice("Đang đồng bộ payout và lịch sử tài chính (cash)...");
                       let previousRemaining = Infinity;
                       for (let batch = 0; batch < 90; batch++) {
                         const result = await postJson<{
@@ -732,21 +641,18 @@ export function The5ersConnection() {
                         }>("/api/the5ers", { action: "cash.sync" });
                         state.refresh();
                         window.dispatchEvent(new Event("journal-data-changed"));
-                        if (result.data.complete) {
-                          state.setNotice(
-                            "Financial sync completed. Open Prop firms to view the ledger.",
-                          );
-                          break;
-                        }
+                        if (result.data.complete) break;
                         state.setNotice(
                           result.data.checked != null
-                            ? `${result.data.checked}/${result.data.total} account histories saved.`
-                            : "Financial sync is incomplete. Existing ledger records are retained.",
+                            ? `Tài chính: ${result.data.checked}/${result.data.total} tài khoản đã lưu.`
+                            : "Đang đồng bộ tài chính...",
                         );
                         if (!result.data.remaining || result.data.remaining >= previousRemaining)
                           break;
                         previousRemaining = result.data.remaining;
                       }
+
+                      state.setNotice("Đang đồng bộ các module và toàn bộ lịch sử lệnh giao dịch...");
                       await continueModuleSync(
                         async () =>
                           (
@@ -761,17 +667,72 @@ export function The5ersConnection() {
                           }
                           state.setNotice(
                             result.busy
-                              ? "Waiting for the current batch; sync will continue automatically."
+                              ? "Đang lưu lịch sử lệnh The5ers vào Database..."
                               : result.complete
-                                ? "All available module data is saved in the database."
-                                : `Module sections saved: ${result.saved}/${result.total}. ${result.failed ?? 0} source reads failed.`,
+                                ? "Hoàn tất! Toàn bộ tài khoản và dữ liệu The5ers đã được lưu thành công vào Database."
+                                : `Đã lưu ${result.saved}/${result.total} module. ${result.failed ?? 0} lỗi đọc nguồn.`,
                           );
                         },
+                      );
+                      state.refresh();
+                      window.dispatchEvent(new Event("journal-data-changed"));
+                    })
+                  }
+                >
+                  Sync toàn bộ dữ liệu The5ers vào Database (Sync all data)
+                </Button>
+              </div>
+
+              {overview.moduleSync && (
+                <p className="text-xs text-muted-foreground">
+                  Trạng thái module: {overview.moduleSync.saved}/{overview.moduleSync.total} đã lưu
+                  {overview.moduleSync.failed
+                    ? ` · ${overview.moduleSync.failed} lỗi đọc nguồn`
+                    : ""}
+                </p>
+              )}
+              {(overview.moduleSync?.updatedAt ?? overview.cash?.retrievedAt) && (
+                <p className="text-xs text-muted-foreground">
+                  Lần đồng bộ gần nhất:{" "}
+                  {formatSourceDate(
+                    overview.moduleSync?.updatedAt ?? overview.cash?.retrievedAt,
+                    overview.timeZone ?? "UTC",
+                  )}
+                </p>
+              )}
+              {overview.moduleSync?.errors?.[0]?.message && (
+                <p className="text-sm text-destructive">{overview.moduleSync.errors[0].message}</p>
+              )}
+              {overview.cash?.checked != null && (
+                <p className="text-xs text-muted-foreground">
+                  Lịch sử tài khoản: {overview.cash.checked}/{overview.cash.total}
+                </p>
+              )}
+              {overview.cash?.payouts && (
+                <p className="text-xs text-muted-foreground">
+                  Payouts tìm thấy: {overview.cash.payouts.found} · Đã ghi nhận:{" "}
+                  {overview.cash.payouts.recorded}
+                </p>
+              )}
+              <div className="flex flex-wrap gap-2 pt-1 border-t">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={state.busy}
+                  onClick={() =>
+                    void state.run(async () => {
+                      const result = await postJson<{
+                        data: { imported: number; matched: number; pending: number };
+                      }>("/api/the5ers", { action: "purchases.sync" });
+                      state.refresh();
+                      window.dispatchEvent(new Event("journal-data-changed"));
+                      state.setNotice(
+                        `Expenses: ${result.data.imported} imported, ${result.data.matched} already linked.`,
                       );
                     })
                   }
                 >
-                  Sync all data
+                  Sync expenses
                 </Button>
                 <Button
                   size="sm"

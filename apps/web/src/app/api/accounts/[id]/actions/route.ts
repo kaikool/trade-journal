@@ -13,7 +13,7 @@ import {
   importBatches,
 } from "@/db";
 import { bad, handler, ok, requireValue } from "@/server/api";
-import { getSetting } from "@/server/settings";
+import { getSetting, setSetting } from "@/server/settings";
 import { JOURNAL_SOURCE_PREFIX } from "@/server/the5ers/journal";
 import { nowIso } from "@/server/ids";
 import { rebuildAccountInTransaction } from "@/server/rebuild";
@@ -23,9 +23,11 @@ import { ibkrTransferTimeZone } from "@/server/ibkr-sync-timezone";
 type Params = { params: Promise<{ id: string }> };
 
 interface ActionBody {
-  action: "archive" | "unarchive" | "clear" | "sync" | "transfer";
+  action: "archive" | "unarchive" | "clear" | "sync" | "transfer" | "toggle-visibility" | "set-visibility";
   /** For "transfer": destination account id. */
   toAccountId?: string;
+  /** For "set-visibility": boolean flag. */
+  visible?: boolean;
 }
 
 export const POST = handler(async (request: Request, { params }: Params) => {
@@ -35,6 +37,42 @@ export const POST = handler(async (request: Request, { params }: Params) => {
   const body = (await request.json()) as ActionBody;
 
   switch (body.action) {
+    case "toggle-visibility": {
+      const saved = await getSetting("journal:visible-accounts");
+      let list: string[] = [];
+      if (saved) {
+        try {
+          list = JSON.parse(saved);
+        } catch {}
+      } else {
+        const all = await db.select().from(accounts);
+        list = all.filter((a) => !a.archivedAt).map((a) => a.id);
+      }
+      const set = new Set(list);
+      if (set.has(id)) set.delete(id);
+      else set.add(id);
+      const next = [...set];
+      await setSetting("journal:visible-accounts", JSON.stringify(next));
+      return ok({ visibleAccounts: next, visible: set.has(id) });
+    }
+    case "set-visibility": {
+      const saved = await getSetting("journal:visible-accounts");
+      let list: string[] = [];
+      if (saved) {
+        try {
+          list = JSON.parse(saved);
+        } catch {}
+      } else {
+        const all = await db.select().from(accounts);
+        list = all.filter((a) => !a.archivedAt).map((a) => a.id);
+      }
+      const set = new Set(list);
+      if (body.visible === false) set.delete(id);
+      else set.add(id);
+      const next = [...set];
+      await setSetting("journal:visible-accounts", JSON.stringify(next));
+      return ok({ visibleAccounts: next, visible: set.has(id) });
+    }
     case "archive":
       await db.update(accounts).set({ archivedAt: nowIso() }).where(eq(accounts.id, id));
       return ok({ archived: true });

@@ -10,6 +10,8 @@ import {
   syncSourcePurchases,
   syncSourceCash,
   syncAllSourceModules,
+  syncAllSourceToDatabase,
+  ensureAllInventoryAccountsSaved,
   sourceOverview,
   sourceSyncOverview,
   selectSourceAccounts,
@@ -107,6 +109,11 @@ export const POST = handler(async (request: Request) => {
           receivedOn: body.receivedOn,
         }),
       );
+    case "sync.all":
+    case "sync.full":
+      return ok({ data: await syncAllSourceToDatabase(AbortSignal.timeout(120_000)) });
+    case "sync.init":
+      return ok({ data: await ensureAllInventoryAccountsSaved(AbortSignal.timeout(60_000)) });
     case "modules.sync":
       return ok({ data: await syncAllSourceModules(AbortSignal.timeout(100_000)) });
     case "cash.sync":

@@ -292,7 +292,7 @@ export async function selectedAccounts(): Promise<Selection[]> {
   const parsed: unknown = JSON.parse(value);
   requireValue(
     Array.isArray(parsed) &&
-      parsed.length <= 10 &&
+      parsed.length <= 1000 &&
       parsed.every(
         (item) =>
           item &&
@@ -314,14 +314,14 @@ export async function selectSourceAccounts(
 ) {
   requireValue(
     Array.isArray(ids) &&
-      ids.length <= 10 &&
+      ids.length <= 1000 &&
       ids.every((id) => typeof id === "string" && /^[a-f0-9]{64}$/.test(id)) &&
       new Set(ids).size === ids.length &&
       typeof autoSync === "boolean",
-    "Select up to 10 accounts and choose automatic sync.",
+    "Select accounts and choose automatic sync.",
   );
   requireValue(
-    Object.keys(journalLinks).length <= 10 &&
+    Object.keys(journalLinks).length <= 1000 &&
       Object.entries(journalLinks).every(
         ([source, target]) =>
           (ids as string[]).includes(source) &&
@@ -1710,6 +1710,109 @@ export async function confirmSourcePayout(
     await setSetting(`the5ers:payouts:${id}`, JSON.stringify(history), tx);
     return { status };
   });
+}
+
+/** Ensure every account in The5ers inventory is registered in journalAccounts, the5ers:journal-links, and the5ers:selection */
+export async function ensureAllInventoryAccountsSaved(signal?: AbortSignal) {
+  const { connection, client } = await sourceClient(signal);
+  const inventory = await inventoryResult(client);
+  await db.transaction(async (tx) => {
+    await assertConnection(connection.id, tx);
+    await tx.select().from(settings).where(eq(settings.key, CONNECTION_KEY)).for("update");
+    const links = JSON.parse((await getSetting("the5ers:journal-links", tx)) ?? "{}") as Record<
+      string,
+      string
+    >;
+    const selection = JSON.parse((await getSetting(SELECTION_KEY, tx)) ?? "[]") as Selection[];
+    const selectionMap = new Map(selection.map((s) => [s.id, s]));
+    const now = new Date().toISOString();
+
+    for (const account of inventory.accounts) {
+      const journalAccountId = links[account.id] ?? `the5ers_${account.id}`;
+      links[account.id] = journalAccountId;
+      const currency = sourceCurrency(account.currency) ? account.currency! : "USD";
+      const name = the5ersDefaultName(account);
+
+      await tx
+        .insert(journalAccounts)
+        .values({
+          id: journalAccountId,
+          name,
+          broker: "The5ers",
+          kind: "import",
+          currency,
+          initialBalance: 0,
+          autoSync: false,
+          createdAt: now,
+        })
+        .onConflictDoNothing();
+
+      if (!selectionMap.has(account.id)) {
+        selectionMap.set(account.id, {
+          id: account.id,
+          label: account.label,
+          autoSync: isActiveSource(account.status),
+          journalAccountId,
+        });
+      }
+
+      const program = sourceProgram(account.program);
+      const status = sourcePropStatus(account.status);
+      if (program && status) {
+        await tx
+          .insert(propAccounts)
+          .values({
+            id: `the5ers_${account.id}`,
+            firm: "The5ers",
+            name,
+            program,
+            status,
+            currency,
+            journalAccountId,
+            openedOn: account.createdAt ? account.createdAt.slice(0, 10) : now.slice(0, 10),
+            createdAt: now,
+            updatedAt: now,
+          })
+          .onConflictDoNothing();
+      }
+    }
+
+    await setSetting("the5ers:journal-links", JSON.stringify(links), tx);
+    await setSetting(SELECTION_KEY, JSON.stringify([...selectionMap.values()]), tx);
+  });
+  return { accountsCount: inventory.accounts.length };
+}
+
+/** Complete 1-click sync of all The5ers MCP data into the database */
+export async function syncAllSourceToDatabase(signal?: AbortSignal) {
+  // 1. Ensure all accounts in inventory exist in DB
+  await ensureAllInventoryAccountsSaved(signal);
+
+  // 2. Sync purchases / expenses
+  let purchasesResult = null;
+  try {
+    purchasesResult = await syncSourcePurchases(signal);
+  } catch (err) {
+    console.error("The5ers purchases sync error during full sync:", err);
+  }
+
+  // 3. Sync cash / payouts
+  let cashResult = null;
+  try {
+    cashResult = await syncSourceCash(signal, false);
+  } catch (err) {
+    console.error("The5ers cash sync error during full sync:", err);
+  }
+
+  // 4. Sync modules & positions
+  const moduleResult = await syncAllSourceModules(signal);
+
+  return {
+    success: true,
+    modules: moduleResult,
+    cash: cashResult,
+    purchases: purchasesResult,
+  };
 }
 
 /** Archive every supported read module, and project available positions into the existing journal. */

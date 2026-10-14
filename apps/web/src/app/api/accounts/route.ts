@@ -1,5 +1,5 @@
 import { asc, eq } from "drizzle-orm";
-import { accounts, trades, db } from "@/db";
+import { accounts, trades, propAccounts, db } from "@/db";
 import { bad, handler, ok } from "@/server/api";
 import { encryptJson } from "@/server/crypto";
 import { newId, nowIso } from "@/server/ids";
@@ -19,6 +19,7 @@ export const GET = handler(async (request: Request) => {
     journalAccountId?: string;
   }[];
   const selected = new Set(selection.map((a) => a.journalAccountId ?? links[a.id]));
+
   const traded = new Set(
     (await db.select({ accountId: trades.accountId }).from(trades).groupBy(trades.accountId)).map(
       (a) => a.accountId,
@@ -40,6 +41,28 @@ export const GET = handler(async (request: Request) => {
         )
       ),
   );
+
+  // Load prop firm account metadata to reflect status
+  const propList = await db.select().from(propAccounts);
+  const propByJournalId = new Map(
+    propList.filter((p) => p.journalAccountId).map((p) => [p.journalAccountId!, p]),
+  );
+  const propById = new Map(propList.map((p) => [p.id, p]));
+
+  // Read visible accounts configured for Journal / Dashboard / Trades
+  const visibleSetting = await getSetting("journal:visible-accounts");
+  let visibleSet: Set<string>;
+  if (visibleSetting) {
+    try {
+      visibleSet = new Set(JSON.parse(visibleSetting));
+    } catch {
+      visibleSet = new Set(rows.filter((a) => !a.archivedAt).map((a) => a.id));
+    }
+  } else {
+    // By default, all unarchived accounts are visible
+    visibleSet = new Set(rows.filter((a) => !a.archivedAt).map((a) => a.id));
+  }
+
   if (new URL(request.url).searchParams.get("summary") === "1") {
     return ok({
       accounts: rows.map((a) => ({
@@ -48,20 +71,68 @@ export const GET = handler(async (request: Request) => {
         broker: a.broker,
         currency: a.currency,
         archivedAt: a.archivedAt,
+        visibleInJournal: visibleSet.has(a.id),
       })),
     });
   }
 
   return ok({
-    accounts: rows.map(({ credentialsEnc, ...safe }) => ({
-      ...safe,
-      name: safe.name,
-      the5ersSourceId: Object.entries(links).find(([, target]) => target === safe.id)?.[0],
-      the5ersSelected: selected.has(safe.id),
-      connected: credentialsEnc !== null,
-      snapshot: safe.snapshotJson ? JSON.parse(safe.snapshotJson) : null,
-    })),
+    accounts: rows.map(({ credentialsEnc, ...safe }) => {
+      const prop = propByJournalId.get(safe.id) ?? propById.get(safe.id);
+      const isPropActive = prop
+        ? ["active", "funded", "open"].includes(prop.status.toLowerCase())
+        : !safe.archivedAt;
+      return {
+        ...safe,
+        name: safe.name,
+        the5ersSourceId: Object.entries(links).find(([, target]) => target === safe.id)?.[0],
+        the5ersSelected: selected.has(safe.id),
+        visibleInJournal: visibleSet.has(safe.id),
+        propStatus: prop?.status ?? (safe.archivedAt ? "archived" : "active"),
+        propProgram: prop?.program,
+        propSizeMinor: prop?.sizeMinor,
+        isActive: isPropActive,
+        connected: credentialsEnc !== null,
+        snapshot: safe.snapshotJson ? JSON.parse(safe.snapshotJson) : null,
+      };
+    }),
   });
+});
+
+export const PUT = handler(async (request: Request) => {
+  const body = (await request.json()) as {
+    action?: "set" | "select-all" | "select-active" | "deselect-all";
+    accountIds?: string[];
+  };
+  const all = await db.select().from(accounts);
+  const propList = await db.select().from(propAccounts);
+  const propByJournalId = new Map(
+    propList.filter((p) => p.journalAccountId).map((p) => [p.journalAccountId!, p]),
+  );
+  const propById = new Map(propList.map((p) => [p.id, p]));
+
+  let nextVisible: string[] = [];
+  if (body.action === "select-all") {
+    nextVisible = all.map((a) => a.id);
+  } else if (body.action === "select-active") {
+    nextVisible = all
+      .filter((a) => {
+        const prop = propByJournalId.get(a.id) ?? propById.get(a.id);
+        if (prop) return ["active", "funded", "open"].includes(prop.status.toLowerCase());
+        return !a.archivedAt;
+      })
+      .map((a) => a.id);
+  } else if (body.action === "deselect-all") {
+    nextVisible = [];
+  } else if (body.action === "set" && Array.isArray(body.accountIds)) {
+    const allSet = new Set(all.map((a) => a.id));
+    nextVisible = body.accountIds.filter((id) => allSet.has(id));
+  } else {
+    return bad("Provide a valid visibility action.");
+  }
+
+  await setSetting("journal:visible-accounts", JSON.stringify(nextVisible));
+  return ok({ visibleAccounts: nextVisible });
 });
 
 interface CreateBody {
