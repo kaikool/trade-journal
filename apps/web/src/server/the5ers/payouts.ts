@@ -66,9 +66,9 @@ export function settledPayout(value: unknown) {
   if (
     !["completed", "paid", "received", "settled"].includes(status) ||
     !currency ||
-    !receivedAt ||
+    (!receivedAt && row.ownerconfirmedpaid !== true) ||
     !requestedAt ||
-    requestedAt > receivedAt ||
+    (receivedAt && requestedAt > receivedAt) ||
     !amountMinor ||
     row.reversed === true
   )
@@ -132,7 +132,9 @@ export async function recordPayoutReceipt(
     amountMinor !== undefined && amountMinor > 0,
     "Enter the positive amount actually received, after fees and profit split.",
   );
-  const receivedOn = confirmation?.receivedOn ?? dayKeyOf(settlement!.receivedAt, timeZone);
+  const receivedOn =
+    confirmation?.receivedOn ??
+    dayKeyOf(settlement!.receivedAt ?? settlement!.requestedAt, timeZone);
   const requestedAt = sourceInstant(
     sourceFields(source).requestedat ?? sourceFields(source).createdat,
   );
@@ -239,7 +241,9 @@ export async function recordPayoutReceipt(
     reference: receiptId,
     notes: confirmation
       ? "Actual money received confirmed by the journal owner."
-      : "Explicit net settlement reported by The5ers.",
+      : settlement?.receivedAt
+        ? "The5ers Paid payout received, as confirmed by the journal owner."
+        : "[settlement-date-unknown] The5ers Paid payout received, as confirmed by the journal owner. Payment date was not supplied by The5ers.",
   });
   const [received] = await tx.select().from(propEntries).where(eq(propEntries.id, entryId));
   await mutatePropInTransaction(tx, {

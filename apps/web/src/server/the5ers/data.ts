@@ -1313,7 +1313,7 @@ export async function syncSourceCash(signal?: AbortSignal, batch = false) {
         const history = JSON.parse(row.value);
         return (
           batch &&
-          history.importerVersion === 2 &&
+          history.importerVersion === 3 &&
           Date.now() - Date.parse(history.retrievedAt) < 15 * 60_000
         );
       })
@@ -1456,6 +1456,21 @@ async function fetchAndSavePayouts(
       // Retain fetched history; a missing breakdown must never become guessed cash.
     }
   }
+  // The journal owner has confirmed that The5ers Paid records represent money received.
+  for (const source of sources) {
+    const row = sourceFields(source);
+    if (String(row.status).trim().toLowerCase() === "paid") {
+      Object.assign(source, { ownerConfirmedPaid: true });
+      if (
+        row.netamount == null &&
+        row.paidamount == null &&
+        row.receivedamount == null &&
+        row.netpaid == null
+      ) {
+        Object.assign(source, { netAmount: row.amount });
+      }
+    }
+  }
   const rows = sources.map((source) => ({ key: payoutKey(id, source), source }));
   requireValue(
     new Set(rows.map((row) => row.key)).size === rows.length,
@@ -1518,7 +1533,7 @@ async function fetchAndSavePayouts(
     }
     const saved = {
       ...history,
-      importerVersion: 2,
+      importerVersion: 3,
       explanation: payoutExplanation ? publicData(payoutExplanation) : undefined,
       account: sourceAccount,
       rows: results,

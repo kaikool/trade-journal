@@ -1648,7 +1648,10 @@ it("imports the documented latest paid withdrawal using envelope currency and ex
               : {
                   coverage: { complete: false },
                   payouts: funded
-                    ? [latest, { ...latest, requestedAt: "2026-01-20T10:00:00Z" }]
+                    ? [
+                        latest,
+                        { ...latest, completedAt: undefined, requestedAt: "2026-01-20T10:00:00Z" },
+                      ]
                     : [],
                 };
           return json({
@@ -1665,19 +1668,25 @@ it("imports the documented latest paid withdrawal using envelope currency and ex
   );
   await syncSourceCash();
   const { propReceipts } = await import("../src/db");
-  expect((await db.select().from(propReceipts)).map((r) => r.amountMinor)).toEqual([78000]);
+  expect((await db.select().from(propReceipts)).map((r) => r.amountMinor)).toEqual([78000, 100000]);
   await syncSourceCash();
-  expect(await db.select().from(propReceipts)).toHaveLength(1);
+  expect(await db.select().from(propReceipts)).toHaveLength(2);
   const overview = await sourceOverview();
   const history = overview.cashSnapshots.find((s) => s.account.program === "funded")!.sections
     .payoutHistory!.data as { pending: number };
-  expect(history.pending).toBe(1);
+  expect(history.pending).toBe(0);
   expect(overview.cash).toMatchObject({
-    complete: false,
+    complete: true,
     checked: 2,
     total: 2,
-    payouts: { found: 2, paid: 2, recorded: 1, missingSettlement: 1 },
+    payouts: { found: 2, paid: 2, recorded: 2, missingSettlement: 0 },
   });
+  const { propData } = await import("../src/server/prop-firms");
+  const { cashMovements, cashSummary } = await import("../src/lib/prop-firms");
+  const ledger = await propData();
+  const movements = cashMovements(ledger.entries, ledger.receipts);
+  expect(cashSummary(movements).received).toBe(178000);
+  expect(movements.filter((row) => row.date === null)).toHaveLength(1);
 });
 
 it("resumes bounded financial batches without refetching saved histories and prioritizes historical funded accounts", async () => {

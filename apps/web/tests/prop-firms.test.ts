@@ -176,7 +176,7 @@ describe("prop cash arithmetic", () => {
     const d = await propData(),
       flows = cashMovements(d.entries, d.receipts);
     expect(await totals()).toMatchObject({ received: 80000, net: 72000, roi: 9 });
-    expect(cashSummary(flows.filter((r) => r.date < "2026"))).toMatchObject({
+    expect(cashSummary(flows.filter((r) => r.date !== null && r.date < "2026"))).toMatchObject({
       received: 0,
       net: -8000,
     });

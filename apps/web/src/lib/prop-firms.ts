@@ -143,12 +143,16 @@ export type CashMovement = {
   accountId: string | null;
   firm: string;
   currency: string;
-  date: string;
+  date: string | null;
   kind: "expense" | "refund" | "receipt" | "reversal";
   amountMinor: number;
   category: string;
   reference: string;
 };
+export const receiptSettlementDate = (
+  receipt: Pick<PropReceipt, "notes" | "occurredOn">,
+): string | null =>
+  receipt.notes.startsWith("[settlement-date-unknown]") ? null : receipt.occurredOn;
 export function cashMovements(entries: PropEntry[], receipts: PropReceipt[]): CashMovement[] {
   const byId = new Map(entries.filter((e) => !e.voided).map((e) => [e.id, e]));
   const direct = [...byId.values()]
@@ -178,7 +182,7 @@ export function cashMovements(entries: PropEntry[], receipts: PropReceipt[]): Ca
               accountId: entry.accountId,
               firm: entry.firm,
               currency: entry.currency,
-              date: r.occurredOn,
+              date: receiptSettlementDate(r),
               kind: r.kind,
               amountMinor: r.amountMinor,
               category: "payout",
@@ -186,7 +190,7 @@ export function cashMovements(entries: PropEntry[], receipts: PropReceipt[]): Ca
             },
           ];
     }),
-  ].sort((a, b) => a.date.localeCompare(b.date) || a.id.localeCompare(b.id));
+  ].sort((a, b) => (a.date ?? "").localeCompare(b.date ?? "") || a.id.localeCompare(b.id));
 }
 export function cashSummary(rows: CashMovement[]) {
   const currencies = [...new Set(rows.map((r) => r.currency))];
@@ -206,10 +210,10 @@ export function cashSummary(rows: CashMovement[]) {
 export function cashTimeline(rows: CashMovement[]) {
   cashSummary(rows); // Fail closed on mixed currencies.
   const days = new Map<string, number>();
-  for (const row of rows)
+  for (const row of rows.filter((r) => r.date !== null))
     days.set(
-      row.date,
-      (days.get(row.date) ?? 0) +
+      row.date!,
+      (days.get(row.date!) ?? 0) +
         row.amountMinor * (["expense", "reversal"].includes(row.kind) ? -1 : 1),
     );
   let net = 0;

@@ -33,12 +33,13 @@ import {
   label,
   type PropData,
   type PropEntry,
+  receiptSettlementDate,
   type CashMovement,
   type PropReceipt,
 } from "@/lib/prop-firms";
 const PAGE_SIZE = 40;
-const inDates = (day: string, from: string, to: string) =>
-  (!from || day >= from) && (!to || day <= to);
+const inDates = (day: string | null, from: string, to: string) =>
+  day === null ? !from && !to : (!from || day >= from) && (!to || day <= to);
 function downloadCsv(rows: CashMovement[]) {
   const cell = (value: string) => {
     const safe = /^[\s]*[=+@-]/.test(value) ? `'${value}` : value;
@@ -54,7 +55,7 @@ function downloadCsv(rows: CashMovement[]) {
         row.accountId ?? "",
         row.firm,
         row.currency,
-        row.date,
+        row.date ?? "",
         row.kind,
         fromMinor(row.amountMinor, row.currency),
         row.category,
@@ -244,12 +245,14 @@ export function PropFirmTracker() {
     }))
     .sort((a, b) => b.net - a.net);
   const byCategory = EXPENSE_ROWS(summaryCash);
-  const months = [...new Set(summaryCash.map((row) => row.date.slice(0, 7)))]
+  const months = [
+    ...new Set(summaryCash.filter((row) => row.date !== null).map((row) => row.date!.slice(0, 7))),
+  ]
     .sort()
     .reverse()
     .map((month) => ({
       month,
-      ...cashSummary(summaryCash.filter((row) => row.date.startsWith(month))),
+      ...cashSummary(summaryCash.filter((row) => row.date?.startsWith(month))),
     }));
   const rowCount =
     tab === "accounts"
@@ -1031,8 +1034,8 @@ export function PropFirmTracker() {
                                   className="flex flex-wrap items-center justify-between gap-2 rounded border p-2 text-xs"
                                 >
                                   <span>
-                                    {r.occurredOn} · {label(r.kind)} ·{" "}
-                                    {money(r.amountMinor, row.entry.currency)}
+                                    {receiptSettlementDate(r) ?? "Payment date unavailable"} ·{" "}
+                                    {label(r.kind)} · {money(r.amountMinor, row.entry.currency)}
                                     {r.voided ? " · Voided" : ""}
                                   </span>
                                   <Button
