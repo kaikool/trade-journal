@@ -17,7 +17,11 @@ it("declares an installable standalone journal with real PWA icons", () => {
     const icon = manifest().icons?.find((candidate) => candidate.sizes === size);
     expect(icon).toBeTruthy();
     expect(icon?.type).toBe("image/png");
-    expect(existsSync(resolve(publicDir, icon!.src.replace(/^\//, "")))).toBe(true);
+    expect(
+      existsSync(
+        resolve(publicDir, new URL(icon!.src, "https://journal.test").pathname.replace(/^\//, "")),
+      ),
+    ).toBe(true);
   }
 });
 
