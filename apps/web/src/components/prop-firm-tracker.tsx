@@ -1,14 +1,6 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
-import {
-  ArrowDownLeft,
-  ArrowUpRight,
-  Clock3,
-  Landmark,
-  Plus,
-  Download,
-  Upload,
-} from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, Landmark, Plus, Download, Upload } from "lucide-react";
 import { FilterBar } from "./filter-bar";
 import { Field } from "./filter-fields";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";

@@ -100,7 +100,7 @@ Maximum file size is 2 MB, with 1,000 rows per batch. Convert a bank or firm exp
 
 ## Implementation and reliability
 
-- Four additive SQLite tables: `prop_accounts`, `prop_entries`, `prop_receipts`, `prop_audit`. Foreign keys protect account/entry relationships; removing a linked journal account clears the optional link without deleting prop history.
+- Four PostgreSQL tables: `prop_accounts`, `prop_entries`, `prop_receipts`, `prop_audit`. Foreign keys protect account/entry relationships; removing a linked journal account clears the optional link without deleting prop history.
 - All mutations are transactions. Server validation enforces currency, amount, status, date, lineage, refund and receipt constraints independently of the UI.
 - Account and entry revisions prevent stale edits overwriting another view's changes. Receipt mutations also increment/check the parent payout revision. New-record requests carry stable IDs for safe retry.
 - Refunds cannot exceed the original charge. An expense with active refunds cannot be voided. Receipt corrections cannot produce a negative received balance at any historical date. A paid payout cannot be cancelled/rejected while it retains net cash receipts.

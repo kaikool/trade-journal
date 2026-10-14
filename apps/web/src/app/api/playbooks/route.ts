@@ -1,4 +1,4 @@
-import { asc, eq } from "drizzle-orm";
+import { asc } from "drizzle-orm";
 import { db, playbooks, trades } from "@/db";
 import { bad, handler, ok } from "@/server/api";
 import { newId, nowIso } from "@/server/ids";

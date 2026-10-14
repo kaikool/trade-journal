@@ -5,6 +5,8 @@
     "jsx": "preserve",
     "allowJs": true,
     "incremental": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "module": "esnext",
     "moduleResolution": "bundler",
     "plugins": [{ "name": "next" }],

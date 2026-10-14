@@ -2,7 +2,7 @@
 import { AiNotice } from "@/components/ai-notice";
 import { Checkbox } from "@/components/ui/checkbox";
 
-import { use, useEffect, useMemo, useRef, useState } from "react";
+import { use, useRef, useState } from "react";
 import { Sparkles } from "lucide-react";
 import { netReturnOnEntry } from "@luxalgo/journal-core";
 import { FilterBar } from "@/components/filter-bar";
@@ -164,8 +164,6 @@ function TradeView({ tradeKey }: { tradeKey: string }) {
       setAiBusy(false);
     }
   };
-
-  const riskAmount = trade.riskAmount;
 
   return (
     <div>

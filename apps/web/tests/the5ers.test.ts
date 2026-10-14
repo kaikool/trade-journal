@@ -2033,7 +2033,7 @@ it("keeps archiving source pages and details when native projection fails, and n
   const { syncModuleArchive, readArchivedModule } = await import("../src/server/the5ers/modules");
   const connection = await accessConnection();
   const accountId = "a".repeat(64);
-  const read = vi.fn(async (tool: string, operation: string, args: Record<string, unknown>) => {
+  const read = vi.fn(async (_tool: string, operation: string, args: Record<string, unknown>) => {
     if (operation === "list")
       return {
         data: { positions: [{ ref: `position-${args.page}`, symbol: "XAUUSD", quantity: 1 }] },

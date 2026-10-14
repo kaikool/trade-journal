@@ -7,7 +7,7 @@ import {
   type ImportMetadata,
   type ProfitCalcMethod,
 } from "@luxalgo/journal-core";
-import type { ImportedExecution, ParsedImport } from "@luxalgo/journal-importers";
+import type { ParsedImport } from "@luxalgo/journal-importers";
 import {
   db,
   accounts,
@@ -22,7 +22,7 @@ import { defaultFee } from "@/lib/journal-defaults";
 import { requireValue } from "./api";
 import { executionHash, newId, nowIso } from "./ids";
 import { getMultipliers, getJournalDefaults, getTimeZone } from "./settings";
-import { rebuildAccount, rebuildAccountInTransaction } from "./rebuild";
+import { rebuildAccountInTransaction } from "./rebuild";
 import type { JournalExecutor } from "@/db/postgres";
 import { orderNinjaTraderFills } from "./ninjatrader-order";
 

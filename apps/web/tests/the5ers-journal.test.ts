@@ -214,7 +214,6 @@ it("imports simultaneous MT5 positions separately using size/entry or provider I
   await save([position]);
   const original = (await queryTrades()).trades[0]!.key;
   await save([position]);
-  const legacyKey = (await queryTrades()).rows[0]!.key;
   expect(await save([position, second])).toMatchObject({
     importedPositions: 1,
     journaledPositions: 2,

@@ -1,33 +1,47 @@
 # Contributing
 
-Thanks for helping build the open trade journal.
+This customized fork keeps the upstream MIT license and attribution. Read
+[README.md](README.md) for the current architecture and deployment requirements.
 
 ## Setup
 
+Use Node.js 22+ and the pinned pnpm 11.0.8. Install with
+`pnpm install --frozen-lockfile`, copy `apps/web/.env.example` to
+`apps/web/.env.local`, configure PostgreSQL, login/encryption secrets and private
+Supabase Storage, then run `pnpm --filter web db:migrate` and `pnpm dev`.
+Tests use their own fixtures/PGlite and do not require production credentials.
+
+## Checks
+
+CI runs these gates:
+
 ```bash
-pnpm install
-pnpm dev          # app on :3000
-pnpm test         # vitest (packages/core, packages/importers)
-pnpm typecheck    # all packages
-pnpm format       # prettier
+pnpm format:check
+pnpm typecheck
+pnpm test
+node scripts/check-licenses.mjs
+pnpm -r --filter './packages/*' build
+DATABASE_URL=postgres://build:build@127.0.0.1:9/journal pnpm build
 ```
 
-## The gates
-
-CI runs `pnpm format:check`, `pnpm typecheck`, `pnpm test`, the dependency license
-gate, and builds the packages and the app. Run them locally before pushing.
+The final URL is a deliberately unreachable build fixture. Do not migrate or
+run the application against it. Use `--maxWorkers=1` for Vitest on a constrained
+development machine. Type checks reject unused locals and parameters in the web app.
 
 ## Ground rules
 
-- **Broker connectivity goes through `@luxalgo/broker-sdk`, never direct broker API
-  code here.** Missing something? Propose it against
-  [broker-sdk](https://github.com/LuxAlgo/broker-sdk) instead of working around it.
-- **Analytics live in `packages/core`** as pure, unit-tested functions. The app renders;
-  it doesn't compute.
-- **Tests defend product invariants, not implementations.** Titles read as plain
-  product statements ("a fill that crosses through flat splits into two trades").
-- **Importers never guess.** A file either matches a documented signature or goes to
-  the column mapper. New formats need a fixture test; real anonymized exports are the
-  most valuable contribution this repo can receive (see docs/importers.md).
-- **P&L color is never load-bearing**; see docs/design.md before touching charts.
-- No telemetry. No hosted-service assumptions. Keys stay on the user's machine.
+- Use `@luxalgo/broker-sdk` for its supported broker connections. The The5ers
+  integration is a separate read-only MCP adapter with allowlisted operations.
+- Keep shared analytics in `packages/core`; isolate provider normalization and
+  persistence from UI components. Do not change financial semantics as cleanup.
+- Tests should defend behavior, account isolation, cash correctness and data
+  preservation. Do not treat mocked requests as evidence of live provider access.
+- Importers must match a documented format or use the column mapper. New formats
+  need fixtures; anonymized source exports are preferable to invented contracts.
+- Read [design.md](docs/design.md) before chart/UI changes. P&L color must not be
+  the only indication of an outcome.
+- Keep credentials server-side and encrypted at rest. Never commit keys or
+  database dumps. External providers are optional and require verified access.
+- Preserve user names, annotations and existing history during synchronization.
+  Partial reads must not erase saved data or fabricate complete coverage.
+- Update the relevant feature guide whenever its behavior or configuration changes.

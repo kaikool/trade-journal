@@ -19,8 +19,8 @@ by default. No API key or provider history is shipped with the project.
    instrument, price adjustment basis and quote currency match the executions and
    account currency. Derivatives also require a contract multiplier in Settings.
 
-Before history is explicitly loaded, Vela displays a price path from recorded
-fills for every asset class. Opening a trade never automatically contacts a market
+When no saved candles exist, Vela displays a price path from recorded fills or
+reported entry/exit prices. Opening a trade never automatically contacts a market
 data provider, including public crypto feeds.
 
 ## What MAE and MFE mean here
@@ -77,8 +77,9 @@ contain only configuration state. Requests go from the server to fixed provider 
 using provider-specific authentication headers; redirects are rejected and provider error bodies are never relayed.
 The application's mandatory session authentication also protects these endpoints.
 Set a non-empty `JOURNAL_PASSWORD` in every environment; missing or blank values block access with HTTP 503.
-Keys and candles are excluded from journal exports; candles are not persisted or shared
-through a global cache. Use provider data within the permissions of your own account.
+Keys and candles are excluded from journal exports. Candles are persisted in the
+journal's private Supabase Storage, with metadata in PostgreSQL; they are not shared
+with other deployments. Use provider data within the permissions of your account.
 
 The adapter reads `/vault/candles` and tests `/vault/usage`, following the official
 [LSE SDK](https://github.com/londonstrategicedge/lse-data/blob/main/lse/client.py)
@@ -97,7 +98,7 @@ user-supplied key. Permissions and instrument coverage remain specific to each a
 
 ## Reports and saved estimates
 
-Confirmed, valid MAE/MFE estimates are saved locally when a trade's history loads.
+Confirmed, valid MAE/MFE estimates are saved in PostgreSQL when a trade's history loads.
 Reports → Trade explorer offers MAE vs net P&L, MFE vs net P&L, and MAE vs MFE presets,
 as well as excursion axis selectors. MAE is a positive adverse amount; dot colors
 always describe final net P&L, not the sign of an excursion. Excursions are gross,
@@ -168,7 +169,7 @@ unzoned/invalid times, duplicate timestamps, mixed symbols, incomplete/future ba
 and timestamps that do not align to the selected resolution. Intraday bars may use
 a consistent offset; daily candles must open at 00:00 UTC. Gaps are preserved.
 Limits are 5 MB, 50,000 rows/file, and 50 datasets. Validation/preview writes nothing;
-Import market candles saves the immutable dataset locally. It is separate from trade
+Import market candles saves the immutable dataset in private Supabase Storage. It is separate from trade
 execution imports and excluded from full journal exports. Files must therefore be
 retained separately for backup.
 
@@ -206,7 +207,7 @@ window reuse those pages. Other adapters keep their existing pagination and
 coverage checks. Provider outages, latency and plan quotas can still cause waits.
 
 CSV imports validate once per import. Dataset bounds and counts are materialized
-in SQLite, with an additive upgrade for existing files. History selects metadata
+in PostgreSQL. History selects metadata
 first, decodes only the chosen file, then uses binary search to slice the requested
 range. At most 200,000 decoded candles are retained across immutable files. Removal
 invalidates the local cached file and its saved estimates. Large first-time CSV
@@ -219,3 +220,28 @@ estimate reads batch currencies and execution records while retaining fingerprin
 invalidation. Replay reuses each computed frame, coalesces chart updates during
 rapid scrubbing, and stops advancing while the page is hidden. Vela still renders
 the charts, with 4× replay speed as the default.
+
+## Persistent candle cache
+
+Provider candle arrays are saved as immutable JSON objects in the private
+`journal-attachments` bucket. The existing `market_csv_datasets` table holds
+checksum/coverage metadata; `settings` holds coverage and trade-chart pointers.
+Generated `provider_cache_` datasets are hidden from the manual CSV list and do
+not consume its upload limit. No additional OHLC table is required.
+
+Cache identity includes provider, symbol, dataset, resolution and credential scope.
+Finalized covered periods are reused across trades. On an explicit load, recent
+coverage can refresh after 60 seconds, with a ten-minute overlap for corrections.
+Merely opening a trade restores its saved chart without fetching provider data.
+If refreshed history fails but saved coverage is sufficient, the cache is retained
+and returned with a warning. Failed persistence is reported rather than claiming
+the chart was saved. Truncated results do not become complete saved coverage.
+
+Candle rendering does not require a contract multiplier. Monetary derivative
+MAE/MFE and notional ROI do; volume in lots is not itself a contract size. A
+reported position without executions can still show candles and entry/exit marks,
+but cannot reconstruct missing intratrade fills for excursion calculation.
+
+No default free XAUUSD source has been verified for this deployment. Check actual
+server access, instrument entitlement, historical coverage, delay and permission
+to store data before adding another adapter.

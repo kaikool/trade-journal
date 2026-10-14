@@ -17,7 +17,9 @@ vi.mock("../src/lib/use-api", () => ({
       configured: true,
       connected: true,
       canRefresh: true,
-      selection: [{ id: "account", label: "Account •1234", autoSync: true }],
+      selection: [
+        { id: "account", journalAccountId: "account", label: "Account •1234", autoSync: true },
+      ],
       cash: { complete: state.cashComplete, failures: [] },
       cashSelection: [
         ...Array.from({ length: 108 }, (_, i) => ({
@@ -80,7 +82,7 @@ vi.mock("../src/lib/use-api", () => ({
 }));
 import {
   The5ersConnection,
-  The5ersSource,
+  The5ersLinkedAccount,
   The5ersBalance,
   The5ersProgramSummary,
 } from "../src/components/the5ers";
@@ -89,30 +91,28 @@ afterEach(() => {
   state.hasPayouts = true;
   state.cashComplete = true;
 });
-it("keeps connected technical panels off Dashboard and Trades", () => {
-  for (const view of ["dashboard", "trades"] as const) {
-    expect(renderToStaticMarkup(createElement(The5ersSource, { view }))).toBe("");
-  }
+it("shows stored balances on the matching linked account", () => {
+  const html = renderToStaticMarkup(createElement(The5ersLinkedAccount, { accountId: "account" }));
+  expect(html).toContain("12,345.67");
 });
 it("hides source financial values while journal privacy mode is enabled", () => {
   state.privacy = true;
-  const html = renderToStaticMarkup(createElement(The5ersSource, { view: "dashboard" }));
-  expect(html).not.toContain("12345.67");
+  const html = renderToStaticMarkup(createElement(The5ersLinkedAccount, { accountId: "account" }));
+  expect(html).not.toContain("12,345.67");
   expect(html).not.toContain("alert(1)");
-  expect(html).toBe("");
 });
 
 it("keeps financial data out of connection settings and provides links to existing sections", () => {
   const html = renderToStaticMarkup(createElement(The5ersConnection));
-  expect(html).not.toContain("12345.67");
+  expect(html).not.toContain("12,345.67");
   expect(html).toContain('href="/accounts"');
   expect(html).toContain('href="/prop-firms"');
 });
 it("scopes source balances to the same journal account filter", () => {
   const html = renderToStaticMarkup(
-    createElement(The5ersSource, { view: "dashboard", query: "accounts=other-account" }),
+    createElement(The5ersLinkedAccount, { accountId: "other-account" }),
   );
-  expect(html).not.toContain("12345.67");
+  expect(html).not.toContain("12,345.67");
 });
 
 it("labels effective balance separately and does not invent equity when the provider omitted it", () => {
@@ -144,13 +144,6 @@ it("renders program rules as compact labelled metrics without raw records", () =
   expect(html).toContain("4%");
   expect(html).not.toContain("Source details");
   expect(html).not.toContain("<details open");
-});
-
-it("uses the common prop ledger instead of rendering separate source finances", () => {
-  for (const section of ["overview", "accounts", "payouts", "ledger"]) {
-    const html = renderToStaticMarkup(createElement(The5ersSource, { view: "prop", section }));
-    expect(html).toBe("");
-  }
 });
 
 it("keeps financial sync controls in connection settings, without repeating source payments", () => {

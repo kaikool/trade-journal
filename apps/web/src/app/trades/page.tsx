@@ -1,5 +1,4 @@
 "use client";
-import { The5ersSource } from "@/components/the5ers";
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -326,7 +325,6 @@ function Trades() {
           </div>
         }
       />
-      <The5ersSource view="trades" query={query} />
       <div className="space-y-3 p-4">
         {m && (
           <div className="grid grid-cols-1 gap-3 min-[420px]:grid-cols-2 xl:grid-cols-4">

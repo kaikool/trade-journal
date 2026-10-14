@@ -1,5 +1,4 @@
 import { afterAll, beforeEach, expect, it, vi } from "vitest";
-import { eq } from "drizzle-orm";
 import { createTestDatabase } from "./helpers/postgres";
 const upstream = vi.hoisted(() => ({
   snapshot: {

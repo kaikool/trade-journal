@@ -6,7 +6,7 @@ The journal uses the [official The5ers MCP service](https://www.the5ers.com/the5
 
 1. Open **Settings → Connections**. **Check connection** checks discovery; **Connect The5ers** starts OAuth authorization-code flow with PKCE S256.
 2. Authorize the read scopes in The5ers. The callback returns to **Settings → Connections**, with account selection open.
-3. Expand **Choose accounts to sync**, choose accounts, optionally select an existing same-currency journal account, and click **Save links**. Links are saved first; the app then refreshes each account's history and distinguishes a link failure from a history-refresh failure.
+3. Expand **Select trading accounts**, choose accounts, optionally select an existing same-currency journal account, and click **Save links**. Links are saved first; the app then refreshes each account's history and distinguishes a link failure from a history-refresh failure.
 4. Enable daily refresh if desired. Automatic account reads recheck the current lifecycle status and run only for active accounts. Available/disabled accounts remain selectable and support manual refresh.
 
 Accounts uses the journal's existing cards, badges, checkboxes and buttons. Active/available is the default filter; other statuses and counts are available through the status selector. Provider `disabled` is not interpreted as breached or closed. Existing journal names, capital, annotations, manual records and cash entries are retained. Starting capital is configured independently; current balance is never substituted for initial capital.
@@ -37,7 +37,7 @@ Normalized positions live in bounded per-source history settings and are project
 
 Net P&L, wins/losses, profit factor, equity, drawdown, calendar and intraday curves use reported position outcomes. Invalidated program positions still happened and are included in journal outcomes; this is not a program risk-engine verdict. Provider account statistics can describe a different scope and are not asserted to equal the journal's filtered history.
 
-Fee/swap sign conventions and size units are not assumed. Gross P&L and aggregate costs are unavailable when a selection contains net-only source positions. ROI on notional, monetary R and market-excursion estimates are unavailable for unverified position units. Reported fee/swap remain visible individually. Absolute drawdown is computed; percentage drawdown requires valid initial capital. Missing history is disclosed on Trades/Dashboard instead of presented as a complete account history.
+Fee/swap sign conventions and size units are not assumed. Verified signed commission/swap can establish gross P&L from reported net outcomes; missing or unsupported cost facts remain unavailable. ROI on notional, monetary R and market-excursion estimates are unavailable for unverified position units. Reported fee/swap remain visible individually. Absolute drawdown is computed; percentage drawdown requires valid initial capital. Partial source coverage is retained in sync status; journal statistics describe available saved trades.
 
 Verified reported positions are also persisted in the existing `trades` table without inventing execution records. Refresh writes new or changed economics only; unchanged rows, local annotations and exclusions survive repeat syncs and execution rebuilds. Legacy snapshots with corroborated account currency are imported automatically when their journal section is opened; no provider refetch is needed. A version marker prevents repeated conversion. One explicit account-scoped currency is sufficient when no source disagrees and it matches the journal account; missing or conflicting currency remains visible in Sync details rather than silently choosing USD. Legacy selected accounts missing a journal link get a same-currency import account, without replacing user records. Normal page reads use stored database history; an explicit source refresh still scans the paginated provider history to detect new positions and corrections. No unverified remote date filter or cursor is assumed.
 
@@ -45,7 +45,7 @@ Journal annotations, tags, playbooks, review status and local exclusion work for
 
 ### Purchase expenses
 
-Purchase history loads automatically in **Prop Firms → Transactions**, with a manual refresh button. Completed, valid orders are reconciled into the same audited ledger used by manual entries. One order is one expense: `priceUsd` is a conversion of `price`, not another charge. Amounts retain each order's own currency and use exact integer minor units. Program categories are mapped only when explicit; otherwise they are Other.
+Purchase costs are synchronized from **Settings → Connections → Sync expenses** or **Sync all data**. Prop firms reads the saved common ledger. Completed, valid orders are reconciled into the same audited ledger used by manual entries. One order is one expense: `priceUsd` is a conversion of `price`, not another charge. Amounts retain each order's own currency and use exact integer minor units. Program categories are mapped only when explicit; otherwise they are Other.
 
 Line `netPaid`, credits and discounts are USD even when the order was paid in another currency. When credits were applied, line `netPaid` can establish USD cash, but a non-USD cash conversion is not invented. Unsupported amounts, pending orders, refunded items and possible duplicate manual costs remain for review. Local identity uses purchase time/currency/product names rather than the expiring order ref. Indistinguishable orders are rejected; changed cash amounts require review instead of creating another charge. Previously posted amounts are not silently overwritten.
 
@@ -53,9 +53,22 @@ Expense date is the order's `placedAt` instant converted to the journal timezone
 
 ### Payout settlements
 
-Account refresh and **Prop firms → Payouts → Payout history** fetch and persist payout history. Opening Payouts loads history once for selected accounts that have no saved payout section. Both `payouts` and `withdrawals` collections are supported; withdrawal IDs remain stable across refreshes. Subsequent page reads use the saved history. Explicit completed settlements with a verified currency, request timestamp, payment timestamp and net received amount are recorded in the existing audited `prop_entries` and `prop_receipts` tables. A generic request `amount` is not treated as net cash after profit split and commission.
+Financial sync scans discovered accounts, including historical/disabled accounts,
+using the advertised `payout` read operations. Both `payouts` and `withdrawals`
+collections are supported. The adapter reads history and, when available, the
+latest-payout explanation to obtain `finalAmount`; it never applies the latest
+payout's split to older records. Subsequent UI reads use PostgreSQL.
 
-Records missing settlement facts offer **Record money received**: select a funded The5ers prop account and confirm the actual amount and payment date. Saving records the net settlement and updates **Payouts received** immediately. This writes only to the local journal, never requests a payout from The5ers. The receipt identity remains stable across refreshes and repeated confirmations; matching manual receipts prevent automatic duplicate posting. Corrections and local reversals remain under the existing ledger workflow.
+The current application incorporates the journal owner's confirmation that Paid,
+Completed, Received and Settled records represent received cash. An explicit net
+amount takes precedence; otherwise the reported amount is used under that owner
+confirmation. This policy is specific to this journal, not a guarantee that every
+provider's generic amount is net. Missing request/payment dates are marked in notes
+rather than represented as verified settlement timestamps. Valid amounts/currencies
+and unambiguous identity are still required. Imports use the existing audited
+`prop_entries` and `prop_receipts` tables, preserving local edits and avoiding
+matching manual receipt duplicates. Unconfirmed records can use the manual ledger
+receipt workflow; this never requests a payout from The5ers.
 
 The official payout history excludes cancelled, declined, terminated and reversed records. Its coverage is incomplete even after all pages are read; absence from a later response does not delete a receipt or imply reversal. Requests without settlement evidence stay separate from cash totals. Provider field contracts beyond explicit supported settlement fields require owner confirmation rather than guessed profit splits, fees or payment dates.
 
@@ -79,9 +92,12 @@ The current public `tools/list` schemas were inspected on 2026-10-13. User scree
 
 OAuth implementation follows the [MCP authorization specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization), [Descope discovery](https://docs.descope.com/agentic-identity-hub/core-components/mcp-servers/discovery-url) and [registration](https://docs.descope.com/agentic-identity-hub/core-components/mcp-servers/registration-methods).
 
-Account cards expose the actual database trade count and a collapsed Sync diagnostics download. The exported snapshot is already sanitized provider data and excludes OAuth tokens and encrypted reference caches. Use this snapshot to diagnose a production response contract; synthetic tests alone do not establish successful production ingestion.
+Connection settings provide sync progress and a sanitized downloadable report. The exported snapshot is already sanitized provider data and excludes OAuth tokens and encrypted reference caches. Use this snapshot to diagnose a production response contract; synthetic tests alone do not establish successful production ingestion.
 
-The current payout importer requests history with an account ref. This does not establish that account-scoped history covers the user’s complete withdrawal history. The authenticated `GET /api/the5ers?view=payout-contract` reads the provider’s current `tools/list` catalog (including pagination) and returns the payout/withdrawal/payment/wallet tool descriptions and schemas, without executing their operations. Use that contract to verify the correct source and required arguments before changing money imports. A failed or partial retrieval is not an empty payout history.
+The authenticated `GET /api/the5ers?view=payout-contract` reads the live
+`tools/list` catalogue and exposes sanitized payout/withdrawal/payment/wallet
+schemas without executing their operations. Financial sync follows the advertised
+read contract. A failed or partial retrieval is not an empty payout history.
 
 Position pagination stops when the reported total is satisfied, even if a provider incorrectly keeps `has_more` true. Repeated complete page payloads do not append duplicate records; absent proof of full coverage, the retained history is marked partial. The snapshot records reported totals and repeated-page evidence for troubleshooting.
 
@@ -94,3 +110,6 @@ Prop firms shows one Accounts / Payouts / Transactions interface. It does not re
 Account selection and link configuration belong to Settings → Connections. Accounts displays each linked journal account once, with inline cached balances and an explicit reported starting balance when available. Journal capital overrides and destructive maintenance actions are under Account settings; the journal capital is not replaced with the current provider balance. FIFO/LIFO choices are not shown for provider-reported positions, which do not reconstruct executions.
 
 Payout IDs such as `N/A` are placeholders, not unique payment identities. The importer skips placeholder IDs, uses an available real payment ID, or falls back to timestamp/currency/amount identity. Ambiguous records still do not become duplicate receipts. The MCP contract report discovers withdrawal/payment tools regardless of their naming prefix, without executing them.
+
+For the all-module archive, resumable work queue, database keys and projection
+rules, see [The5ers source archive](the5ers-module-cache.md).

@@ -6,7 +6,6 @@ import { useApi, postJson } from "@/lib/use-api";
 import { Badge } from "./ui/badge";
 import {
   normalizePurchase,
-  normalizePosition,
   sourceInstant,
   sourceObject,
   sourceFields,
@@ -1191,19 +1190,6 @@ function LinkedAccountBalances({
     </div>
   );
 }
-export function The5ersSource({
-  view,
-  section,
-  query = "",
-}: {
-  view: "prop" | "trades" | "dashboard";
-  section?: string;
-  query?: string;
-}) {
-  useSource();
-  return null;
-}
-
 export function The5ersLinkedAccount({ accountId }: { accountId: string }) {
   const state = useSource();
   if (!state.data?.connected) return null;
