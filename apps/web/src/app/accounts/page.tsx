@@ -75,6 +75,7 @@ function Accounts() {
       const { sync: outcome } = await action<{
         sync: { inserted: number; skipped: number; skippedReasons: string[] };
       }>(id, { action: "sync" });
+      window.dispatchEvent(new Event("journal-data-changed"));
       if (outcome.skipped > 0)
         alert(
           `Sync finished with ${outcome.inserted} new fills. ${outcome.skipped} broker record(s) were skipped: ${outcome.skippedReasons.join(" ")}`,
