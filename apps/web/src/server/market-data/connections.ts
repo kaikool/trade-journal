@@ -2,21 +2,13 @@ import { decryptJson, encryptJson } from "@/server/crypto";
 import { deleteSetting, getSetting, setSetting } from "@/server/settings";
 import type { MarketConnection } from "@/lib/market-data";
 import { providerInfo } from "@/lib/market-providers";
-import { londonStrategicEdge } from "./london-strategic-edge";
-import { alpaca } from "./alpaca";
-import { binance, coinbase } from "./public-crypto";
+import { binance } from "./public-crypto";
 import { oanda } from "./oanda";
-import { csvDatasets, marketCsv } from "./csv";
 import { MarketDataError, type MarketDataProvider } from "./provider";
 
-const providers: MarketDataProvider[] = [
-  londonStrategicEdge,
-  alpaca,
-  binance,
-  coinbase,
-  oanda,
-  marketCsv,
-].sort((a, b) => a.name.localeCompare(b.name));
+const providers: MarketDataProvider[] = [binance, oanda].sort((a, b) =>
+  a.name.localeCompare(b.name),
+);
 
 export const providerFor = (id: string) => {
   const provider = providers.find((entry) => entry.id === id);
@@ -39,20 +31,9 @@ const environment = (id: string) => {
 };
 
 export const connections = async (): Promise<MarketConnection[]> => {
-  const datasets = await csvDatasets();
   const list: MarketConnection[] = [];
   for (const provider of providers) {
     const info = providerInfo(provider.id)!;
-    if (info.mode === "csv") {
-      const configured = datasets.length > 0;
-      list.push({
-        id: provider.id,
-        name: provider.name,
-        configured,
-        source: configured ? "uploaded" : null,
-      });
-      continue;
-    }
     if (info.mode === "public") {
       const stored = await getSetting(settingKey(provider.id));
       const configured = stored === "enabled";

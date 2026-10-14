@@ -7,7 +7,7 @@ import type { TradeMarketResult } from "../src/lib/market-data";
 const state = vi.hoisted(() => ({
   saved: { saved: null, history: null as TradeMarketResult | null },
   connections: {
-    connections: [{ id: "coinbase", name: "Coinbase", configured: true, source: "public" }],
+    connections: [{ id: "binance", name: "Binance", configured: true, source: "public" }],
   },
   create: vi.fn(),
 }));
@@ -42,19 +42,19 @@ vi.mock("@luxalgo/vela", () => ({
 const { TradeMarketData } = await import("../src/components/trade-market-data");
 const trade = {
   key: "reported",
-  symbol: "XAUUSD",
-  assetClass: "cfd",
+  symbol: "BTCUSDT",
+  assetClass: "crypto",
   direction: "long",
   openedAt: "2025-09-19T10:00:00Z",
   closedAt: "2025-09-19T10:01:00Z",
   avgEntry: 4169,
   avgExit: 4170,
   netPnl: 1,
-  currency: "USD",
+  currency: "USDT",
 };
 const history: TradeMarketResult = {
   provider: "Saved source",
-  symbol: "XAUUSD",
+  symbol: "BTCUSDT",
   resolution: "1m",
   fetchedAt: "2025-09-19T11:00:00Z",
   bars: [
@@ -70,7 +70,7 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 it.each([false, true])(
-  "restores saved candles without automatic provider requests (cached=%s)",
+  "restores saved candles when cached, or auto-fetches when unrendered (cached=%s)",
   async (cached) => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
     await import("@luxalgo/vela");
@@ -93,10 +93,10 @@ it.each([false, true])(
       if (cached) {
         expect(container.textContent).toContain("Historical candles");
         expect(state.create.mock.calls[0]?.[1].data).toEqual(history.bars);
+        expect(fetcher).not.toHaveBeenCalled();
       } else {
-        expect(state.create).not.toHaveBeenCalled();
+        expect(fetcher).toHaveBeenCalled();
       }
-      expect(fetcher).not.toHaveBeenCalled();
     } finally {
       await act(async () => root.unmount());
       container.remove();

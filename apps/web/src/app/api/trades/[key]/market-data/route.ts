@@ -11,9 +11,9 @@ import { connectionKey, providerFor } from "@/server/market-data/connections";
 import { MarketDataError } from "@/server/market-data/provider";
 import { getTradeByKey, rowToTrade } from "@/server/trades-query";
 import { listExecutions } from "@/server/executions";
-import { isResolution } from "@/lib/market-data";
+import { isResolution, RESOLUTIONS, type Resolution } from "@/lib/market-data";
 import { estimateExcursions } from "@/lib/excursions";
-
+import { normalizeMarketSymbol } from "@/lib/market-normalize";
 import { estimateFingerprint, saveEstimate, savedEstimates } from "@/server/market-data/estimates";
 
 export const GET = handler(
@@ -90,39 +90,39 @@ export const POST = handler(
     );
     try {
       const provider = providerFor(body.provider);
-      if (["binance", "coinbase"].includes(provider.id))
+      if (provider.id === "binance")
         requireValue(
           row.assetClass == null || row.assetClass === "crypto",
           "This provider supplies spot crypto candles only. Choose a crypto trade.",
-        );
-      if (provider.id === "alpaca")
-        requireValue(
-          row.assetClass == null ||
-            (body.dataset === "crypto" ? row.assetClass === "crypto" : row.assetClass === "equity"),
-          "Choose the Alpaca dataset that matches this trade's asset class.",
         );
       if (provider.id === "oanda")
         requireValue(
           row.assetClass == null || ["forex", "cfd"].includes(row.assetClass),
           "This provider supports forex and CFD instruments.",
         );
+      const normalizedSymbol = normalizeMarketSymbol(body.symbol.trim(), provider.id);
+      const resolutionMs = RESOLUTIONS[body.resolution as Resolution] ?? 15 * 60_000;
+      // Add context before entry and after exit (e.g. at least 60m / 4 bars before)
+      const beforePadding = Math.max(60 * 60_000, resolutionMs * 4);
+      const afterPadding = Math.max(30 * 60_000, resolutionMs * 2);
+      const fetchFrom = from - beforePadding;
+      const fetchTo = Math.min(to + afterPadding, Date.now());
+
       const trade = await rowToTrade(row);
       const fingerprint = await estimateFingerprint(trade);
       const { history, cacheId } = await cachedHistory(
         provider,
         {
-          symbol: body.symbol.trim(),
+          symbol: normalizedSymbol,
           dataset: body.dataset || undefined,
           resolution: body.resolution,
-          from,
-          to,
+          from: fetchFrom,
+          to: fetchTo,
           signal: request.signal,
         },
         await connectionKey(provider.id),
       );
-      const savedId =
-        cacheId ??
-        (provider.id === "market-csv" && history.datasetId ? `csv:${history.datasetId}` : null);
+      const savedId = cacheId;
       const [acc] = await db
         .select({ currency: accounts.currency })
         .from(accounts)
@@ -161,11 +161,11 @@ export const POST = handler(
           fetchedAt: history.fetchedAt,
           tradeIdentity: chartIdentity(row),
           request: {
-            symbol: body.symbol.trim(),
+            symbol: normalizedSymbol,
             dataset: body.dataset || undefined,
             resolution: body.resolution,
-            from,
-            to,
+            from: fetchFrom,
+            to: fetchTo,
           },
         });
       if (body.estimateOnly) {

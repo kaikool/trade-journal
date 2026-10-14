@@ -20,7 +20,7 @@ import {
   type TradeMarketResult,
 } from "@/lib/market-data";
 import { providerInfo } from "@/lib/market-providers";
-import type { MarketCsvDataset } from "@/lib/market-csv";
+import { detectProviderForSymbol, normalizeMarketSymbol } from "@/lib/market-normalize";
 import { replayFrame } from "@/lib/trade-replay";
 import { uploadChartScreenshot } from "@/lib/chart-screenshot-upload";
 import { useApi } from "@/lib/use-api";
@@ -49,15 +49,30 @@ export function TradeMarketData({
     "/api/market-data/connections",
   );
   const available = connections?.connections.filter((connection) => connection.configured) ?? [];
-  const [provider, setProvider] = useState("");
-  const [symbol, setSymbol] = useState(trade.symbol);
-  const [dataset, setDataset] = useState("");
-  const [resolution, setResolution] = useState<Resolution>("1m");
-  const info = providerInfo(provider);
-  const { data: csv } = useApi<{ datasets: MarketCsvDataset[] }>(
-    info?.mode === "csv" ? "/api/market-data/csv" : null,
+
+  // Auto-detect best provider and normalize symbol
+  const detectedProvider = useMemo(
+    () => detectProviderForSymbol(trade.symbol, trade.assetClass),
+    [trade.symbol, trade.assetClass],
   );
-  const [confirmed, setConfirmed] = useState(false);
+  const autoProvider = useMemo(
+    () => available.find((c) => c.id === detectedProvider)?.id ?? available[0]?.id ?? "",
+    [available, detectedProvider],
+  );
+  const [providerOverride, setProviderOverride] = useState("");
+  const provider = providerOverride || autoProvider;
+
+  const autoSymbol = useMemo(
+    () => (provider ? normalizeMarketSymbol(trade.symbol, provider) : trade.symbol),
+    [trade.symbol, provider],
+  );
+  const [symbolOverride, setSymbolOverride] = useState("");
+  const symbol = symbolOverride || autoSymbol;
+
+  const [dataset, setDataset] = useState("");
+  const [resolution, setResolution] = useState<Resolution>("15m");
+  const info = providerInfo(provider);
+  const [confirmed, setConfirmed] = useState(true);
   const [result, setResult] = useState<TradeMarketResult | null>(null);
   useEffect(() => {
     if (saved?.history) setResult((current) => current ?? saved.history!);
@@ -65,6 +80,7 @@ export function TradeMarketData({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const controller = useRef<AbortController | null>(null);
+  const autoLoadedRef = useRef(false);
   const saveScreenshot = (dataUrl: string) =>
     uploadChartScreenshot(trade.key, trade.symbol, dataUrl);
   useEffect(() => () => controller.current?.abort(), []);
@@ -74,8 +90,11 @@ export function TradeMarketData({
     setResult(null);
     setError("");
   };
-  const load = async () => {
-    if (!available.some((item) => item.id === provider) || (info?.datasets && !dataset)) return;
+  const load = async (opts?: { resolution?: Resolution }) => {
+    const res = opts?.resolution ?? resolution;
+    const prov = provider;
+    const sym = symbol;
+    if (!prov || !available.some((item) => item.id === prov)) return;
     controller.current?.abort();
     const request = new AbortController();
     controller.current = request;
@@ -87,10 +106,10 @@ export function TradeMarketData({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          provider,
-          symbol,
+          provider: prov,
+          symbol: sym,
           dataset,
-          resolution,
+          resolution: res,
           basisConfirmed: confirmed,
         }),
         signal: request.signal,
@@ -108,6 +127,23 @@ export function TradeMarketData({
       if (!request.signal.aborted) setBusy(false);
     }
   };
+
+  // Auto-fetch on mount when trade is closed, provider available, and no saved data yet
+  useEffect(() => {
+    if (
+      autoLoadedRef.current ||
+      !trade.closedAt ||
+      !provider ||
+      !available.length ||
+      saved === undefined // still loading
+    ) return;
+    // If we already have saved history, skip auto-fetch
+    if (saved?.history) return;
+    autoLoadedRef.current = true;
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [trade.closedAt, provider, available.length, saved]);
+
   return (
     <div className="space-y-3">
       <Card>
@@ -115,10 +151,6 @@ export function TradeMarketData({
           <CardTitle>Market data & replay</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          <p className="text-sm text-muted-foreground">
-            Load candles for this trade to use replay. Enable the checkbox to also calculate and
-            save monetary MAE/MFE estimates for Reports.
-          </p>
           {connectionError && (
             <p role="alert" className="text-sm text-destructive">
               {connectionError}
@@ -137,154 +169,118 @@ export function TradeMarketData({
           ) : (
             available.length > 0 && (
               <>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="space-y-1">
-                    <Label htmlFor="market-provider">Data provider</Label>
-                    <OptionSelect
-                      id="market-provider"
-                      value={provider}
-                      onValueChange={(value) => {
-                        invalidate();
-                        setProvider(value);
-                        setDataset("");
-                        setConfirmed(false);
-                      }}
-                    >
-                      <option value="" disabled>
-                        Choose a data source
-                      </option>
-                      {available.map((item) => (
-                        <option key={item.id} value={item.id}>
-                          {item.name}
-                        </option>
-                      ))}
-                    </OptionSelect>
-                  </div>
-                  <div className="space-y-1">
-                    <Label htmlFor="market-symbol">Provider symbol</Label>
-                    <Input
-                      id="market-symbol"
-                      value={symbol}
-                      onChange={(event) => {
-                        invalidate();
-                        setSymbol(event.target.value);
-                        setConfirmed(false);
-                      }}
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <Label htmlFor="market-resolution">Candle resolution</Label>
-                    <OptionSelect
-                      id="market-resolution"
-                      value={resolution}
-                      onValueChange={(value) => {
-                        invalidate();
-                        setResolution(value as Resolution);
-                      }}
-                    >
-                      {Object.keys(RESOLUTIONS).map((value) => (
-                        <option key={value} value={value}>
-                          {value}
-                        </option>
-                      ))}
-                    </OptionSelect>
-                  </div>
-                  {(info?.datasets ||
-                    info?.mode === "csv" ||
-                    info?.id === "london-strategic-edge") && (
+                {/* Auto-detected summary */}
+                <p className="text-sm text-muted-foreground">
+                  Auto-detected: <strong>{provider}</strong> · <strong>{symbol}</strong> ·{" "}
+                  <strong>{resolution}</strong>
+                  {busy && " — Loading…"}
+                </p>
+
+                {/* Collapsible manual override */}
+                <details className="rounded-md border p-2">
+                  <summary className="cursor-pointer text-xs text-muted-foreground select-none">
+                    Override provider, symbol, or resolution
+                  </summary>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
                     <div className="space-y-1">
-                      <Label htmlFor="market-dataset">Data feed / dataset</Label>
-                      {info?.datasets || info?.mode === "csv" ? (
+                      <Label htmlFor="market-provider">Data provider</Label>
+                      <OptionSelect
+                        id="market-provider"
+                        value={provider}
+                        onValueChange={(value) => {
+                          invalidate();
+                          setProviderOverride(value);
+                          setDataset("");
+                        }}
+                      >
+                        {available.map((item) => (
+                          <option key={item.id} value={item.id}>
+                            {item.name}
+                          </option>
+                        ))}
+                      </OptionSelect>
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor="market-symbol">Provider symbol</Label>
+                      <Input
+                        id="market-symbol"
+                        value={symbol}
+                        onChange={(event) => {
+                          invalidate();
+                          setSymbolOverride(event.target.value);
+                        }}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor="market-resolution">Candle resolution</Label>
+                      <OptionSelect
+                        id="market-resolution"
+                        value={resolution}
+                        onValueChange={(value) => {
+                          invalidate();
+                          setResolution(value as Resolution);
+                        }}
+                      >
+                        {Object.keys(RESOLUTIONS).map((value) => (
+                          <option key={value} value={value}>
+                            {value}
+                          </option>
+                        ))}
+                      </OptionSelect>
+                    </div>
+                    {info?.datasets && (
+                      <div className="space-y-1">
+                        <Label htmlFor="market-dataset">Data feed / dataset</Label>
                         <OptionSelect
                           id="market-dataset"
                           value={dataset}
                           onValueChange={(value) => {
                             invalidate();
                             setDataset(value);
-                            setConfirmed(false);
                           }}
                         >
-                          {(
-                            info.datasets ?? [
-                              { value: "", label: "Automatic matching file" },
-                              ...(csv?.datasets ?? []).map((item) => ({
-                                value: item.id,
-                                label: `${item.name} · ${item.symbol} · ${item.resolution}`,
-                              })),
-                            ]
-                          ).map((item) => (
+                          {info.datasets.map((item) => (
                             <option key={item.value} value={item.value}>
                               {item.label}
                             </option>
                           ))}
                         </OptionSelect>
-                      ) : (
-                        <Input
-                          id="market-dataset"
-                          value={dataset}
-                          placeholder="Leave blank for automatic selection"
-                          onChange={(event) => {
-                            invalidate();
-                            setDataset(event.target.value);
-                            setConfirmed(false);
-                          }}
-                        />
-                      )}
-                    </div>
-                  )}
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  {info?.description} {info?.symbolHint} Option contract history is not supported
-                  yet.
-                </p>
-                <label className="flex items-start gap-2 text-xs text-muted-foreground">
-                  <input
-                    type="checkbox"
-                    checked={confirmed}
-                    className="mt-0.5"
-                    onChange={(event) => {
-                      invalidate();
-                      setConfirmed(event.target.checked);
-                    }}
-                  />
-                  <span>
-                    Calculate and save MAE/MFE estimates for Reports. I confirm that this
-                    instrument, price adjustments and quote currency match my fills and account (
-                    {trade.currency}).
-                  </span>
-                </label>
-                <p className="text-xs text-muted-foreground">
-                  Unchecked: load candles and replay only. Checked: also calculate monetary
-                  estimates and save valid results to Reports. Missing or mismatched data stays
-                  unavailable.
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    disabled={
-                      busy ||
-                      !symbol.trim() ||
-                      !available.some((item) => item.id === provider) ||
-                      Boolean(info?.datasets && !dataset)
-                    }
-                    onClick={() => void load()}
-                  >
-                    {busy
-                      ? "Loading history…"
-                      : confirmed
-                        ? "Load data & save estimates"
-                        : "Load candles & replay"}
-                  </Button>
-                  {busy && (
-                    <Button variant="outline" onClick={invalidate}>
-                      Cancel
+                      </div>
+                    )}
+                  </div>
+                  <label className="mt-2 flex items-start gap-2 text-xs text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      checked={confirmed}
+                      className="mt-0.5"
+                      onChange={(event) => {
+                        invalidate();
+                        setConfirmed(event.target.checked);
+                      }}
+                    />
+                    <span>
+                      Calculate and save MAE/MFE estimates ({trade.currency}).
+                    </span>
+                  </label>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <Button
+                      size="sm"
+                      disabled={busy || !symbol.trim() || !available.some((item) => item.id === provider)}
+                      onClick={() => void load()}
+                    >
+                      {busy
+                        ? "Loading…"
+                        : confirmed
+                          ? "Load & save estimates"
+                          : "Load candles only"}
                     </Button>
-                  )}
-                  {result && (
-                    <Button variant="outline" onClick={invalidate}>
-                      Show original chart
-                    </Button>
-                  )}
-                </div>
+                    {busy && (
+                      <Button variant="outline" size="sm" onClick={invalidate}>
+                        Cancel
+                      </Button>
+                    )}
+                  </div>
+                </details>
               </>
             )
           )}
@@ -308,6 +304,12 @@ export function TradeMarketData({
           executions={executions}
           privacy={privacy}
           onSaveScreenshot={saveScreenshot}
+          currentResolution={resolution}
+          onResolutionChange={(res) => {
+            setResolution(res);
+            void load({ resolution: res });
+          }}
+          busy={busy}
         />
       ) : (
         <>
@@ -373,12 +375,18 @@ export function HistoricalReplay({
   executions,
   privacy,
   onSaveScreenshot,
+  currentResolution,
+  onResolutionChange,
+  busy,
 }: {
   history: TradeMarketResult;
   trade: ChartTrade & { currency: string };
   executions: ChartExecution[];
   privacy: boolean;
   onSaveScreenshot?: (dataUrl: string) => Promise<void>;
+  currentResolution?: Resolution;
+  onResolutionChange?: (resolution: Resolution) => void;
+  busy?: boolean;
 }) {
   const positionPoints = useMemo(
     () =>
@@ -412,15 +420,37 @@ export function HistoricalReplay({
   );
   return (
     <Card className="journal-replay-enter">
-      <CardHeader>
-        <CardTitle>Historical candles</CardTitle>
+      <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
+        <div>
+          <CardTitle>Historical candles</CardTitle>
+          <p className="text-xs text-muted-foreground mt-1">
+            {history.provider} · {history.symbol} · {history.resolution} ·{" "}
+            {history.bars.length.toLocaleString()} candles · Retrieved{" "}
+            {new Date(history.fetchedAt).toLocaleString()}
+          </p>
+        </div>
+        {onResolutionChange && (
+          <div
+            className="flex items-center gap-1 rounded-md bg-muted p-1"
+            role="group"
+            aria-label="Timeframe selector"
+          >
+            {(["1m", "5m", "15m", "1h", "1d"] as const).map((tf) => (
+              <Button
+                key={tf}
+                variant={(currentResolution ?? history.resolution) === tf ? "default" : "ghost"}
+                size="sm"
+                className="h-7 px-2.5 text-xs font-semibold"
+                disabled={busy}
+                onClick={() => onResolutionChange(tf)}
+              >
+                {tf}
+              </Button>
+            ))}
+          </div>
+        )}
       </CardHeader>
       <CardContent className="space-y-3">
-        <p className="text-xs text-muted-foreground">
-          {history.provider} · {history.symbol} · {history.resolution} ·{" "}
-          {history.bars.length.toLocaleString()} candles · Retrieved{" "}
-          {new Date(history.fetchedAt).toLocaleString()}
-        </p>
         {privacy ? (
           <p className="text-sm text-muted-foreground">
             Historical prices and excursion amounts are hidden in privacy mode.

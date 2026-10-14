@@ -9,7 +9,6 @@ import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { OptionSelect } from "./ui/option-select";
 import { providerInfo } from "@/lib/market-providers";
-import { MarketCsvSettings } from "./market-csv-settings";
 
 export function MarketDataSettings() {
   const { data, error, refresh } = useApi<{ connections: MarketConnection[] }>(
@@ -22,9 +21,8 @@ export function MarketDataSettings() {
       </CardHeader>
       <CardContent className="space-y-4">
         <p className="text-sm text-muted-foreground">
-          Connect historical prices for estimated MAE/MFE and candle replay on closed trades. Vela
-          renders the charts. No data source is enabled or selected by default. Choose a connection
-          or upload your own candles. Market data connections are separate from broker sync and AI.
+          Connect historical prices for estimated MAE/MFE and candle replay on closed trades.
+          Supports Binance (spot crypto) and OANDA v20 (forex, commodities &amp; CFDs).
         </p>
         {error && (
           <p role="alert" className="text-sm text-destructive">
@@ -32,12 +30,9 @@ export function MarketDataSettings() {
           </p>
         )}
         {!data && !error && <p className="text-sm text-muted-foreground">Loading connections…</p>}
-        {data?.connections
-          .filter((connection) => connection.id !== "market-csv")
-          .map((connection) => (
-            <Connection key={connection.id} connection={connection} refresh={refresh} />
-          ))}
-        <MarketCsvSettings onChange={refresh} />
+        {data?.connections.map((connection) => (
+          <Connection key={connection.id} connection={connection} refresh={refresh} />
+        ))}
       </CardContent>
     </Card>
   );

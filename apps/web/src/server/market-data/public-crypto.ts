@@ -1,3 +1,4 @@
+import { normalizeMarketSymbol } from "@/lib/market-normalize";
 import { RESOLUTIONS } from "@/lib/market-data";
 import { MarketDataError, type MarketDataProvider } from "./provider";
 import { array, number, readJson, record, result, validateBars, windows } from "./http";
@@ -10,9 +11,11 @@ export const binance: MarketDataProvider = {
   async test() {
     await readJson(`${BINANCE}/api/v3/time`, {}, undefined, { cache: false });
   },
-  async history(request) {
-    if (!/^[A-Z0-9]{4,30}$/.test(request.symbol))
+  async history(rawRequest) {
+    const symbol = normalizeMarketSymbol(rawRequest.symbol, "binance");
+    if (!/^[A-Z0-9]{4,30}$/.test(symbol))
       throw new MarketDataError("Use a Binance spot symbol such as BTCUSDT.");
+    const request = { ...rawRequest, symbol };
     if (request.dataset)
       throw new MarketDataError("Binance uses spot candles; leave the dataset blank.");
     const info = record(

@@ -1,3 +1,4 @@
+import { normalizeMarketSymbol } from "@/lib/market-normalize";
 import { MarketDataError, type MarketDataProvider } from "./provider";
 import {
   array,
@@ -38,9 +39,11 @@ export const oanda: MarketDataProvider = {
       { cache: false },
     );
   },
-  async history(request, key) {
-    if (!/^[A-Z0-9]+_[A-Z0-9]+$/.test(request.symbol))
-      throw new MarketDataError("Use an OANDA instrument such as EUR_USD.");
+  async history(rawRequest, key) {
+    const symbol = normalizeMarketSymbol(rawRequest.symbol, "oanda");
+    if (!/^[A-Z0-9]+_[A-Z0-9]+$/.test(symbol))
+      throw new MarketDataError("Use an OANDA instrument such as XAU_USD or EUR_USD.");
+    const request = { ...rawRequest, symbol };
     if (request.dataset)
       throw new MarketDataError("OANDA uses midpoint candles; leave the dataset blank.");
     const c = configFor(key);
