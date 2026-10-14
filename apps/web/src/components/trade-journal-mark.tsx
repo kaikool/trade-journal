@@ -4,7 +4,7 @@ import Image from "next/image";
 export function TradeJournalMark({ className }: { className?: string }) {
   return (
     <Image
-      src="/icon-192.png?v=4"
+      src="/icon-192.png?v=5"
       alt="Trade Journal"
       width={24}
       height={24}
