@@ -1,6 +1,6 @@
 import type { AnnotatedTrade } from "./types";
 import { dailyStats, type DayStats } from "./equity";
-import { WEEKDAYS, dayKeyOf, hourOf, weekdayOf } from "./time";
+import { WEEKDAYS, TRADING_SESSIONS, dayKeyOf, hourOf, weekdayOf, sessionOf } from "./time";
 
 export interface BucketStats {
   key: string;
@@ -88,6 +88,16 @@ export const byHour = (trades: AnnotatedTrade[], timeZone = "UTC"): BucketStats[
   groupInto(trades, (t) => [String(hourOf(t.openedAt, timeZone)).padStart(2, "0")]).sort((a, b) =>
     a.key.localeCompare(b.key),
   );
+
+/** Performance by trading session of trade open (Asian, London, London/NY Overlap, New York, Off-hours). */
+export const bySession = (trades: AnnotatedTrade[]): BucketStats[] => {
+  const buckets = groupInto(trades, (t) => [sessionOf(t.openedAt)]);
+  return [...buckets].sort(
+    (a, b) =>
+      TRADING_SESSIONS.indexOf(a.key as (typeof TRADING_SESSIONS)[number]) -
+      TRADING_SESSIONS.indexOf(b.key as (typeof TRADING_SESSIONS)[number]),
+  );
+};
 
 export const DURATION_BUCKETS = [
   { key: "< 1m", maxMs: 60_000 },

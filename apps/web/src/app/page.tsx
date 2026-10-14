@@ -65,7 +65,7 @@ interface StatsPayload {
   calendar: CalendarMonth;
   calendarCurrencies: string[];
   runningPnl: Record<string, CalendarPnlPoint[]>;
-  buckets: Record<"symbol" | "weekday" | "hour" | "duration" | "direction", Bucket[]>;
+  buckets: Record<"symbol" | "weekday" | "hour" | "session" | "duration" | "direction", Bucket[]>;
   openPositions: {
     key: string;
     symbol: string;

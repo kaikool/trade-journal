@@ -129,4 +129,26 @@ describe("risk and filtering preserve the meaning of trade data", () => {
     expect(m.breakevens).toBe(1);
     expect(m.winRate).toBe(0);
   });
+  it("classifies trades into standard trading sessions accurately", async () => {
+    const { sessionOf } = await import("../src/time");
+    const { bySession } = await import("../src/aggregate");
+    expect(sessionOf("2026-03-09T03:30:00Z")).toBe("Asian");
+    expect(sessionOf("2026-03-09T09:15:00Z")).toBe("London");
+    expect(sessionOf("2026-03-09T14:30:00Z")).toBe("London/NY Overlap");
+    expect(sessionOf("2026-03-09T18:00:00Z")).toBe("New York");
+    expect(sessionOf("2026-03-09T22:00:00Z")).toBe("Off-hours");
+
+    const ts = [
+      { ...sample(), key: "t1", openedAt: "2026-03-09T03:30:00Z", netPnl: 100, status: "win" as const },
+      { ...sample(), key: "t2", openedAt: "2026-03-09T14:30:00Z", netPnl: -50, status: "loss" as const },
+    ];
+    const sessions = bySession(ts);
+    expect(sessions).toHaveLength(2);
+    expect(sessions[0]?.key).toBe("Asian");
+    expect(sessions[0]?.trades).toBe(1);
+    expect(sessions[0]?.netPnl).toBe(100);
+    expect(sessions[1]?.key).toBe("London/NY Overlap");
+    expect(sessions[1]?.trades).toBe(1);
+    expect(sessions[1]?.netPnl).toBe(-50);
+  });
 });

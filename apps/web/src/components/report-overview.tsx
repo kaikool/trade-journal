@@ -13,7 +13,7 @@ import { describeFilters } from "@/lib/filter-description";
 
 interface OverviewData {
   buckets: Record<
-    "symbol" | "tag" | "mistake" | "playbook" | "weekday" | "hour" | "duration" | "direction",
+    "symbol" | "tag" | "mistake" | "playbook" | "weekday" | "hour" | "session" | "duration" | "direction",
     BucketStats[]
   >;
   currencies: string[];
@@ -25,6 +25,7 @@ interface OverviewData {
 // Keep the original overview's aggregations and ordering alongside the advanced reports.
 const SECTIONS = [
   { key: "symbol", title: "By symbol" },
+  { key: "session", title: "By trading session" },
   { key: "direction", title: "Long vs short" },
   { key: "weekday", title: "By weekday" },
   { key: "duration", title: "By holding time" },

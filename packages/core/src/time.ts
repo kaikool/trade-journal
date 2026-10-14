@@ -54,3 +54,29 @@ export const hourOf = (iso: string, timeZone = "UTC"): number => {
   const hour = Number(parts.find((p) => p.type === "hour")?.value ?? "0");
   return hour === 24 ? 0 : hour;
 };
+
+export const TRADING_SESSIONS = [
+  "Asian",
+  "London",
+  "London/NY Overlap",
+  "New York",
+  "Off-hours",
+] as const;
+export type TradingSession = (typeof TRADING_SESSIONS)[number];
+
+/**
+ * Standard trading session based on trade open time in UTC:
+ * - Asian: 00:00 - 08:00 UTC (Tokyo/Sydney)
+ * - London: 08:00 - 13:00 UTC (European morning)
+ * - London/NY Overlap: 13:00 - 16:00 UTC (Peak global liquidity & volatility)
+ * - New York: 16:00 - 21:00 UTC (US afternoon)
+ * - Off-hours: 21:00 - 24:00 UTC
+ */
+export const sessionOf = (iso: string): TradingSession => {
+  const utcHour = hourOf(iso, "UTC");
+  if (utcHour >= 0 && utcHour < 8) return "Asian";
+  if (utcHour >= 8 && utcHour < 13) return "London";
+  if (utcHour >= 13 && utcHour < 16) return "London/NY Overlap";
+  if (utcHour >= 16 && utcHour < 21) return "New York";
+  return "Off-hours";
+};
