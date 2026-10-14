@@ -5,7 +5,7 @@ const fixture = await createTestDatabase();
 vi.resetModules();
 const { db, settings, accounts, propAccounts, propEntries, propReceipts, propAudit } =
   await import("../src/db");
-const { recordPayoutReceipt, settledPayout, sourceRecords } =
+const { recordPayoutReceipt, settledPayout, sourceRecords, payoutKey } =
   await import("../src/server/the5ers/payouts");
 const { cashMovements, cashSummary } = await import("../src/lib/prop-firms");
 const { propData, mutatePropInTransaction } = await import("../src/server/prop-firms");
@@ -251,4 +251,24 @@ it("combines imported The5ers finances and another firm's manual records in one 
   expect(
     cashSummary(cashMovements((await propData()).entries, (await propData()).receipts)),
   ).toMatchObject({ received: 100000 });
+});
+
+it("does not merge paid withdrawals with placeholder payout IDs and reimports them idempotently", async () => {
+  const first = { ...payout, id: undefined, payoutId: "N/A", amount: 100, netAmount: 100 };
+  const second = { ...first, amount: 200, netAmount: 200 };
+  expect(payoutKey("source", first)).not.toBe(payoutKey("source", second));
+  expect(await save(first)).toBe("imported");
+  expect(await save(second)).toBe("imported");
+  expect(await save(first)).toBe("matched");
+  const data = await propData();
+  expect(data.receipts).toHaveLength(2);
+  expect(cashSummary(cashMovements(data.entries, data.receipts)).received).toBe(30000);
+});
+
+it("uses a real payment ID when payout IDs are unavailable and retains existing real IDs", () => {
+  const record = { payoutId: "N/A", paymentId: "payment-1" };
+  expect(payoutKey("source", record)).toBe(payoutKey("source", { id: "payment-1" }));
+  expect(payoutKey("source", { id: "known", paymentId: "different" })).toBe(
+    payoutKey("source", { id: "known" }),
+  );
 });

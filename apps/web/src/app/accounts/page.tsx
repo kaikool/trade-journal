@@ -2,7 +2,7 @@
 
 import { Suspense, useState } from "react";
 import { Archive, ArchiveRestore, Plus, RefreshCw, Trash2 } from "lucide-react";
-import { The5ersAccounts, The5ersLinkedAccount } from "@/components/the5ers";
+import { The5ersLinkedAccount } from "@/components/the5ers";
 import { AccountCreateForm } from "@/components/account-create-form";
 import { FilterBar } from "@/components/filter-bar";
 import { Badge } from "@/components/ui/badge";
@@ -92,7 +92,6 @@ function Accounts() {
           </Button>
         }
       />
-      <The5ersAccounts onLinked={refresh} />
       <Dialog open={creating} onOpenChange={setCreating}>
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
@@ -122,7 +121,7 @@ function Accounts() {
               <CardTitle className="min-w-0 flex-1 text-base font-semibold normal-case tracking-normal text-foreground">
                 <span className="block break-words">{account.name}</span>
                 <Badge variant="secondary" className="mt-1.5 mr-2">
-                  {account.kind}
+                  {account.the5ersSourceId ? "Synced" : account.kind}
                 </Badge>
                 {account.broker &&
                   (account.kind !== "sync" || isEnabledSyncBroker(account.broker)) && (
@@ -198,90 +197,97 @@ function Accounts() {
                     onSaved={refresh}
                   />
                 )}
-              <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-2">
-                <div className="min-w-0">
-                  <label className="mb-1 block text-xs text-muted-foreground">
-                    Initial balance (anchors drawdown %)
-                  </label>
-                  <MonetaryField>
-                    <Input
-                      defaultValue={account.initialBalance || ""}
-                      placeholder="0"
-                      inputMode="decimal"
-                      onBlur={async (event) => {
-                        const value = Number(event.target.value || 0);
-                        if (value !== account.initialBalance) {
+              <details className="rounded-md border p-3">
+                <summary className="cursor-pointer text-sm">Account settings</summary>
+                <div className="mt-3 grid grid-cols-1 items-end gap-3 sm:grid-cols-2">
+                  <div className="min-w-0">
+                    <label className="mb-1 block text-xs text-muted-foreground">
+                      Journal starting capital
+                    </label>
+                    <MonetaryField>
+                      <Input
+                        defaultValue={account.initialBalance || ""}
+                        placeholder="0"
+                        inputMode="decimal"
+                        onBlur={async (event) => {
+                          const value = Number(event.target.value || 0);
+                          if (value !== account.initialBalance) {
+                            await postJson(
+                              `/api/accounts/${account.id}`,
+                              { initialBalance: value },
+                              "PATCH",
+                            );
+                            refresh();
+                          }
+                        }}
+                      />
+                    </MonetaryField>
+                  </div>
+                  {!account.the5ersSourceId && (
+                    <div className="min-w-0">
+                      <label className="mb-1 block text-xs text-muted-foreground">
+                        Profit calculation
+                      </label>
+                      <Select
+                        value={account.profitCalcMethod}
+                        onValueChange={async (value) => {
                           await postJson(
                             `/api/accounts/${account.id}`,
-                            { initialBalance: value },
+                            { profitCalcMethod: value },
                             "PATCH",
                           );
                           refresh();
-                        }
-                      }}
-                    />
-                  </MonetaryField>
+                        }}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="fifo">FIFO</SelectItem>
+                          <SelectItem value="lifo">LIFO</SelectItem>
+                          <SelectItem value="wavg">Weighted average</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
                 </div>
-                <div className="min-w-0">
-                  <label className="mb-1 block text-xs text-muted-foreground">
-                    Profit calculation
-                  </label>
-                  <Select
-                    value={account.profitCalcMethod}
-                    onValueChange={async (value) => {
-                      await postJson(
-                        `/api/accounts/${account.id}`,
-                        { profitCalcMethod: value },
-                        "PATCH",
-                      );
-                      refresh();
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={async () => {
+                      if (confirm(`Clear ALL trades from "${account.name}"? The account stays.`)) {
+                        await action(account.id, { action: "clear" });
+                      }
                     }}
                   >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="fifo">FIFO</SelectItem>
-                      <SelectItem value="lifo">LIFO</SelectItem>
-                      <SelectItem value="wavg">Weighted average</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={async () => {
-                    if (confirm(`Clear ALL trades from "${account.name}"? The account stays.`)) {
-                      await action(account.id, { action: "clear" });
-                    }
-                  }}
-                >
-                  Clear trades
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={async () => {
-                    const others = data.accounts.filter((candidate) => candidate.id !== account.id);
-                    if (others.length === 0) return alert("No other account to transfer into.");
-                    const target = prompt(
-                      `Transfer all data into which account?\n${others.map((candidate, index) => `${index + 1}. ${candidate.name}`).join("\n")}\n\nEnter a number:`,
-                    );
-                    const chosen = others[Number(target) - 1];
-                    if (chosen) {
-                      try {
-                        await action(account.id, { action: "transfer", toAccountId: chosen.id });
-                      } catch (error) {
-                        alert(error instanceof Error ? error.message : "Transfer failed");
+                    Clear trades
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={async () => {
+                      const others = data.accounts.filter(
+                        (candidate) => candidate.id !== account.id,
+                      );
+                      if (others.length === 0) return alert("No other account to transfer into.");
+                      const target = prompt(
+                        `Transfer all data into which account?\n${others.map((candidate, index) => `${index + 1}. ${candidate.name}`).join("\n")}\n\nEnter a number:`,
+                      );
+                      const chosen = others[Number(target) - 1];
+                      if (chosen) {
+                        try {
+                          await action(account.id, { action: "transfer", toAccountId: chosen.id });
+                        } catch (error) {
+                          alert(error instanceof Error ? error.message : "Transfer failed");
+                        }
                       }
-                    }
-                  }}
-                >
-                  Transfer data
-                </Button>
-              </div>
+                    }}
+                  >
+                    Transfer data
+                  </Button>
+                </div>
+              </details>
             </CardContent>
           </Card>
         ))}

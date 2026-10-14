@@ -11,14 +11,24 @@ import { mutatePropInTransaction, propToday } from "@/server/prop-firms";
 
 export const payoutKey = (accountId: string, value: unknown) => {
   const row = sourceFields(value);
-  const identity = row.id ?? row.payoutid ?? row.withdrawalid ?? row.requestid;
+  const identity = [row.id, row.payoutid, row.withdrawalid, row.requestid, row.paymentid].find(
+    (value) =>
+      (typeof value === "number" && Number.isFinite(value)) ||
+      (typeof value === "string" &&
+        value.trim().length > 0 &&
+        !/^(?:n\/?a|none|null|undefined|unknown|not available|[-–—]+)$/i.test(value.trim())),
+  );
   return createHash("sha256")
     .update(
       JSON.stringify([
         accountId,
         identity ??
           ((row.requestedat ?? row.createdat ?? row.requestdate)
-            ? [row.requestedat ?? row.createdat ?? row.requestdate, row.currency, row.amount]
+            ? [
+                row.requestedat ?? row.createdat ?? row.requestdate,
+                row.currency,
+                row.amount ?? row.total ?? row.netamount ?? row.paidamount ?? row.receivedamount,
+              ]
             : value),
       ]),
     )

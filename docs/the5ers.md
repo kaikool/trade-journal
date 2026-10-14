@@ -5,8 +5,8 @@ The journal uses the [official The5ers MCP service](https://www.the5ers.com/the5
 ## Connect and link
 
 1. Open **Settings → Connections**. **Check connection** checks discovery; **Connect The5ers** starts OAuth authorization-code flow with PKCE S256.
-2. Authorize the read scopes in The5ers. The callback returns to **Accounts**.
-3. Choose accounts, optionally select an existing same-currency journal account, and click **Save links**. Links are saved first; the app then refreshes each account's history and distinguishes a link failure from a history-refresh failure.
+2. Authorize the read scopes in The5ers. The callback returns to **Settings → Connections**, with account selection open.
+3. Expand **Choose accounts to sync**, choose accounts, optionally select an existing same-currency journal account, and click **Save links**. Links are saved first; the app then refreshes each account's history and distinguishes a link failure from a history-refresh failure.
 4. Enable daily refresh if desired. Automatic account reads recheck the current lifecycle status and run only for active accounts. Available/disabled accounts remain selectable and support manual refresh.
 
 Accounts uses the journal's existing cards, badges, checkboxes and buttons. Active/available is the default filter; other statuses and counts are available through the status selector. Provider `disabled` is not interpreted as breached or closed. Existing journal names, capital, annotations, manual records and cash entries are retained. Starting capital is configured independently; current balance is never substituted for initial capital.
@@ -90,3 +90,7 @@ Position pagination stops when the reported total is satisfied, even if a provid
 The5ers is a firm value in the common `propAccounts`, `propEntries` and `propReceipts` models, rather than a separate financial book. Verified imported expenses and payout receipts pass through `mutatePropInTransaction`, just like manual and CSV records, and share audit, void/reversal handling, currency precision, filters, summaries and cash exports. Another firm entered manually uses these same models and calculations. Provider-specific refs, pagination, settlement verification and duplicate prevention belong to the import adapter.
 
 Prop firms shows one Accounts / Payouts / Transactions interface. It does not render a second provider history above the journal ledger. Manage source connection, expense/finance sync and import failures in Settings → Connections. Unverified amounts stay outside received cash. Equal manual expenses do not authorize a second imported charge; source conflicts and incomplete responses must not overwrite the ledger. Connection reports include the live MCP read schemas and cached, sanitized financial history for troubleshooting; they are not a second financial view.
+
+Account selection and link configuration belong to Settings → Connections. Accounts displays each linked journal account once, with inline cached balances and an explicit reported starting balance when available. Journal capital overrides and destructive maintenance actions are under Account settings; the journal capital is not replaced with the current provider balance. FIFO/LIFO choices are not shown for provider-reported positions, which do not reconstruct executions.
+
+Payout IDs such as `N/A` are placeholders, not unique payment identities. The importer skips placeholder IDs, uses an available real payment ID, or falls back to timestamp/currency/amount identity. Ambiguous records still do not become duplicate receipts. The MCP contract report discovers withdrawal/payment tools regardless of their naming prefix, without executing them.

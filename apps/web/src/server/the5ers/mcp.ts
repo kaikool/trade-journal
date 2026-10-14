@@ -140,7 +140,6 @@ export class The5ersMcp {
         if (typeof tool.name !== "string")
           throw new RequestError("The5ers returned an invalid tool name.");
         if (
-          tool.name.startsWith("the5ers_") &&
           /payout|withdraw|payment|wallet/i.test(
             `${tool.name} ${typeof tool.description === "string" ? tool.description : ""}`,
           )

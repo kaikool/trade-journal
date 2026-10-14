@@ -73,13 +73,22 @@ export function formatSourceDate(value: unknown, timeZone: string) {
       }).format(new Date(instant))
     : "Date unavailable";
 }
-export function The5ersBalance({ value, currency }: { value: unknown; currency?: string }) {
+export function The5ersBalance({
+  value,
+  currency,
+  showInitialBalance = false,
+}: {
+  value: unknown;
+  currency?: string;
+  showInitialBalance?: boolean;
+}) {
   const envelope = sourceObject(value),
     data = sourceObject(envelope.data ?? envelope);
   const code = typeof envelope.currency === "string" ? envelope.currency : currency;
   return (
     <dl className="grid grid-cols-2 gap-3 text-sm">
       {[
+        ["Starting balance", showInitialBalance ? data.initialBalance : undefined],
         ["Balance", data.balance],
         ["Equity", data.equity],
         ["Effective balance", data.equity === undefined ? data.effectiveBalance : undefined],
@@ -512,6 +521,11 @@ export function The5ersConnection() {
   const state = useSource(),
     overview = state.data;
   const privacy = usePrivacy();
+  const [manageAccounts, setManageAccounts] = useState(false);
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("connected") === "the5ers")
+      setManageAccounts(true);
+  }, []);
   return (
     <Card>
       <CardHeader>
@@ -519,8 +533,8 @@ export function The5ersConnection() {
       </CardHeader>
       <CardContent className="space-y-3">
         <p className="text-sm text-muted-foreground">
-          Read-only Hub connection. Manage linked accounts in Accounts and program finances in Prop
-          firms.
+          Read-only Hub connection. Choose accounts here; view linked accounts in Accounts and
+          finances in Prop firms.
         </p>
         <Messages state={state} />
         {overview && !overview.configured && (
@@ -575,6 +589,19 @@ export function The5ersConnection() {
               Connected · {overview.selection.length} selected accounts
               {!overview.canRefresh ? " · Reconnect required when access expires" : ""}
             </p>
+            <details
+              open={manageAccounts}
+              onToggle={(event) => setManageAccounts(event.currentTarget.open)}
+            >
+              <summary className="cursor-pointer text-sm font-medium">
+                Choose accounts to sync
+              </summary>
+              {manageAccounts && (
+                <div className="mt-3">
+                  <The5ersAccounts />
+                </div>
+              )}
+            </details>
             <div className="space-y-2 rounded-md border p-3">
               <p className="text-sm font-medium">Financial sync</p>
               <p className="text-xs text-muted-foreground">
@@ -1021,38 +1048,34 @@ function LinkedAccountBalances({
   return (
     <div className="space-y-3">
       {snapshots.map((snapshot) => (
-        <Card key={snapshot.account.id}>
-          <CardHeader>
-            <CardTitle>{snapshot.account.label}</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <p className="text-xs text-muted-foreground">
-              Updated {formatSourceDate(snapshot.retrievedAt, state.data?.timeZone ?? "UTC")}
-            </p>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={state.busy}
-              onClick={() =>
-                void state.run(async () => {
-                  await postJson("/api/the5ers", { action: "sync", id: snapshot.account.id });
-                  state.refresh();
-                  window.dispatchEvent(new Event("journal-data-changed"));
-                })
-              }
-            >
-              Refresh account
-            </Button>
-            {snapshot.sections.balance?.available ? (
-              <The5ersBalance
-                value={snapshot.sections.balance.data}
-                currency={snapshot.account.currency}
-              />
-            ) : (
-              <p className="text-sm text-muted-foreground">Balance unavailable.</p>
-            )}
-          </CardContent>
-        </Card>
+        <div key={snapshot.account.id} className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Updated {formatSourceDate(snapshot.retrievedAt, state.data?.timeZone ?? "UTC")}
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={state.busy}
+            onClick={() =>
+              void state.run(async () => {
+                await postJson("/api/the5ers", { action: "sync", id: snapshot.account.id });
+                state.refresh();
+                window.dispatchEvent(new Event("journal-data-changed"));
+              })
+            }
+          >
+            Refresh account
+          </Button>
+          {snapshot.sections.balance?.available ? (
+            <The5ersBalance
+              value={snapshot.sections.balance.data}
+              currency={snapshot.account.currency}
+              showInitialBalance
+            />
+          ) : (
+            <p className="text-sm text-muted-foreground">Balance unavailable.</p>
+          )}
+        </div>
       ))}
     </div>
   );

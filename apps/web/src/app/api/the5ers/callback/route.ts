@@ -6,5 +6,5 @@ import { finishAuthorization } from "@/server/the5ers/oauth";
 export const GET = handler(async (request: Request) => {
   const url = new URL(request.url);
   await finishAuthorization(url, (await cookies()).get(AUTH_COOKIE)!.value);
-  return NextResponse.redirect(new URL("/accounts?connected=the5ers", url.origin));
+  return NextResponse.redirect(new URL("/settings?connected=the5ers#the5ers", url.origin));
 });

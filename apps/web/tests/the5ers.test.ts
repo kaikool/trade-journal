@@ -226,7 +226,7 @@ describe("The5ers OAuth and journal access", () => {
     );
     expect(completed.status).toBe(307);
     expect(completed.headers.get("location")).toBe(
-      "https://journal.example/accounts?connected=the5ers",
+      "https://journal.example/settings?connected=the5ers#the5ers",
     );
     const overview = await (await GET(new Request("https://journal.example/api/the5ers"))).json();
     expect(overview.connected).toBe(true);
@@ -1677,6 +1677,7 @@ it("reads the actual payout and withdrawal tool schemas through the authenticate
                       },
                     },
                     { name: "the5ers_positions", inputSchema: {} },
+                    { name: "hub_withdrawals", inputSchema: { required: ["operation"] } },
                   ],
                   nextCursor: "next-page",
                 },
@@ -1694,6 +1695,7 @@ it("reads the actual payout and withdrawal tool schemas through the authenticate
   const result = await response.json();
   expect(result.tools.map((t: { name: string }) => t.name)).toEqual([
     "the5ers_payout",
+    "hub_withdrawals",
     "the5ers_wallet",
   ]);
   expect(result.tools[0].inputSchema.properties.account_ref).toEqual({ type: "string" });
