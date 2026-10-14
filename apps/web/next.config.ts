@@ -2,7 +2,7 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   transpilePackages: ["@luxalgo/journal-core", "@luxalgo/journal-importers"],
-  serverExternalPackages: ["postgres", "lzma"],
+  serverExternalPackages: ["postgres"],
   outputFileTracingExcludes: {
     "/*": ["./data/**/*", "../../outputs/**/*", "../../.runtime-backup*/**/*"],
   },

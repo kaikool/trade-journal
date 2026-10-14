@@ -109,9 +109,6 @@ importers:
       lucide-react:
         specifier: ^1.34.0
         version: 1.34.0(react@19.2.8)
-      lzma:
-        specifier: 2.3.2
-        version: 2.3.2
       next:
         specifier: ^15.5.27
         version: 15.5.27(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -2476,10 +2473,6 @@ packages:
     resolution: {integrity: sha512-vnjGJNI7Htk5+oWW8gXGuaLgwgAb0T6/iZbBrp9JCfRFwdNWZ0YTm3eyxjOLgwN6r8iyAf3UA70zNmBRBNv7yg==}
     peerDependencies:
       react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0
-
-  lzma@2.3.2:
-    resolution: {integrity: sha512-DcfiawQ1avYbW+hsILhF38IKAlnguc/fjHrychs9hdxe4qLykvhT5VTGNs5YRWgaNePh7NTxGD4uv4gKsRomCQ==}
-    hasBin: true
 
   magic-string@0.30.21:
     resolution: {integrity: sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ==}
@@ -5183,8 +5176,6 @@ snapshots:
   lucide-react@1.34.0(react@19.2.8):
     dependencies:
       react: 19.2.8
-
-  lzma@2.3.2: {}
 
   magic-string@0.30.21:
     dependencies:

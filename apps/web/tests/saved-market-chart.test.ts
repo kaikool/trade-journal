@@ -7,7 +7,7 @@ import type { TradeMarketResult } from "../src/lib/market-data";
 const state = vi.hoisted(() => ({
   saved: { saved: null, history: null as TradeMarketResult | null },
   connections: {
-    connections: [{ id: "dukascopy", name: "Dukascopy", configured: true, source: "public" }],
+    connections: [{ id: "coinbase", name: "Coinbase", configured: true, source: "public" }],
   },
   create: vi.fn(),
 }));
@@ -53,7 +53,7 @@ const trade = {
   currency: "USD",
 };
 const history: TradeMarketResult = {
-  provider: "Dukascopy",
+  provider: "Saved source",
   symbol: "XAUUSD",
   resolution: "1m",
   fetchedAt: "2025-09-19T11:00:00Z",
@@ -70,7 +70,7 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 it.each([false, true])(
-  "automatically shows candles, using saved data first (cached=%s)",
+  "restores saved candles without automatic provider requests (cached=%s)",
   async (cached) => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
     await import("@luxalgo/vela");
@@ -90,13 +90,13 @@ it.each([false, true])(
           ),
         );
       });
-      expect(container.textContent).toContain("Historical candles");
-      expect(state.create.mock.calls[0]?.[1].data).toEqual(history.bars);
-      expect(fetcher).toHaveBeenCalledTimes(cached ? 0 : 1);
-      if (!cached)
-        expect(
-          JSON.parse((fetcher.mock.calls[0] as unknown as [string, RequestInit])[1].body as string),
-        ).toMatchObject({ provider: "dukascopy", symbol: "XAUUSD", basisConfirmed: false });
+      if (cached) {
+        expect(container.textContent).toContain("Historical candles");
+        expect(state.create.mock.calls[0]?.[1].data).toEqual(history.bars);
+      } else {
+        expect(state.create).not.toHaveBeenCalled();
+      }
+      expect(fetcher).not.toHaveBeenCalled();
     } finally {
       await act(async () => root.unmount());
       container.remove();

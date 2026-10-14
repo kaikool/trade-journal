@@ -547,20 +547,12 @@ afterAll(async () => {
 });
 
 describe("market data credential lifecycle", () => {
-  it("enables the free default without contacting providers, while credential sources start disabled", async () => {
+  it("starts sources disabled without contacting providers", async () => {
     const fetcher = vi.fn();
     vi.stubGlobal("fetch", fetcher);
     const state = await connections();
-    expect(state).toHaveLength(7);
-    expect(
-      state
-        .filter((item) => item.id !== "dukascopy")
-        .every((item) => !item.configured && item.source === null),
-    ).toBe(true);
-    expect(state.find((item) => item.id === "dukascopy")).toMatchObject({
-      configured: true,
-      source: "public",
-    });
+    expect(state).toHaveLength(6);
+    expect(state.every((item) => !item.configured && item.source === null)).toBe(true);
     expect(state.map((item) => item.name)).toEqual(
       state.map((item) => item.name).sort((a, b) => a.localeCompare(b)),
     );

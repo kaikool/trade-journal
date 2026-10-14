@@ -20,6 +20,6 @@ This update addresses the confirmed findings from the review of commit `afe1770b
 
 The additional RLS migration blocks journal reads by non-owner public database roles even if they receive SELECT grants. Server access uses the table owner or a trusted BYPASSRLS role. Apply migrations before deploying; use a private Supabase Storage bucket.
 
-The Dukascopy prototype is excluded from this update. Broker/AI production requests and production database migration were not performed by the regression suite. Tests use synthetic data, PGlite and mocked external broker/storage services.
+Broker/AI production requests and production database migration were not performed by the regression suite. Tests use synthetic data, PGlite and mocked external broker/storage services.
 
 Fee sign conventions in broker exports and the distinction between relative drawdown at maximum absolute drawdown versus maximum relative drawdown were review questions, not confirmed defects. This update preserves those definitions rather than changing financial semantics without a format-specific requirement.

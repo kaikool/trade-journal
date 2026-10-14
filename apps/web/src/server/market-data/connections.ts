@@ -1,4 +1,3 @@
-import { dukascopy } from "./dukascopy";
 import { decryptJson, encryptJson } from "@/server/crypto";
 import { deleteSetting, getSetting, setSetting } from "@/server/settings";
 import type { MarketConnection } from "@/lib/market-data";
@@ -11,7 +10,6 @@ import { csvDatasets, marketCsv } from "./csv";
 import { MarketDataError, type MarketDataProvider } from "./provider";
 
 const providers: MarketDataProvider[] = [
-  dukascopy,
   londonStrategicEdge,
   alpaca,
   binance,
@@ -57,7 +55,7 @@ export const connections = async (): Promise<MarketConnection[]> => {
     }
     if (info.mode === "public") {
       const stored = await getSetting(settingKey(provider.id));
-      const configured = provider.id === "dukascopy" ? stored !== "disabled" : stored === "enabled";
+      const configured = stored === "enabled";
       list.push({
         id: provider.id,
         name: provider.name,
@@ -87,11 +85,7 @@ export async function connectionKey(id: string): Promise<string> {
   const info = providerInfo(id)!;
   if (info.mode === "csv") return "";
   if (info.mode === "public") {
-    if (
-      id === "dukascopy"
-        ? (await getSetting(settingKey(id))) === "disabled"
-        : (await getSetting(settingKey(id))) !== "enabled"
-    )
+    if ((await getSetting(settingKey(id))) !== "enabled")
       throw new MarketDataError("Enable this public market data source in Settings first.");
     return "";
   }
@@ -121,8 +115,7 @@ export async function saveConnection(id: string, key: string | null): Promise<vo
     throw new MarketDataError(
       "This connection is managed by the server environment. Update it there.",
     );
-  if (key === null && id === "dukascopy") await setSetting(settingKey(id), "disabled");
-  else if (key === null) await deleteSetting(settingKey(id));
+  if (key === null) await deleteSetting(settingKey(id));
   else await setSetting(settingKey(id), info.mode === "public" ? "enabled" : encryptJson(key));
 }
 
