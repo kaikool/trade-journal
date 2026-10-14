@@ -27,7 +27,10 @@ are retained when another operation fails. Failed tasks remain retryable.
 
 Pagination and dependent operations (position details/executions, purchase
 accounts, contest details) add work to the queue, so the total can increase during
-sync. Every API call advances up to 16 sections. Closing the browser stops the
+sync. The app advances up to six sections per API call, with a 35-second work budget.
+Queue/progress checkpoints are saved before work and after each result, not only
+at the end of a batch. Completed sections are skipped when resuming; failed native
+projections retry their saved source page without another MCP read. Closing the browser stops the
 client runner; another click resumes the saved queue. An incomplete run is never
 reported as complete. A completed run is reused for 15 minutes. The next run
 updates snapshots. Unknown/unallowlisted operations are reported rather than
@@ -73,3 +76,10 @@ not converted into invented execution rows. Existing native executions from
 other imports remain unchanged. Payouts and costs still use `prop_accounts`,
 `prop_entries`, `prop_receipts`, and their audited shared ledger, rather than
 being counted twice from source snapshots.
+
+Settings reads a lightweight connection/progress response rather than transferring
+all payout and position history after every batch. The browser waits for an occupied
+lease and keeps advancing pending work even if one batch contains only failed reads.
+Once only failures remain and a retry makes no progress, it stops with an incomplete
+status. Partial financial runs retain successful account coverage beyond the
+15-minute freshness interval, so long-running syncs do not restart saved histories.

@@ -11,6 +11,7 @@ import {
   syncSourceCash,
   syncAllSourceModules,
   sourceOverview,
+  sourceSyncOverview,
   selectSourceAccounts,
   syncSourceAccount,
   readSourceSection,
@@ -34,6 +35,8 @@ export const GET = handler(async (request: Request) => {
       ),
     );
   }
+  if (new URL(request.url).searchParams.get("view") === "connection")
+    return ok(await sourceSyncOverview());
   return ok(await sourceOverview());
 });
 export const POST = handler(async (request: Request) => {

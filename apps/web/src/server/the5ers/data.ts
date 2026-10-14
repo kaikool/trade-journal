@@ -277,6 +277,7 @@ export async function inspectPayoutContract() {
   return {
     ...contract,
     financialSync: overview.cash,
+    moduleSync: overview.moduleSync,
     purchases: overview.purchases,
     payoutHistory: overview.cashSnapshots,
   };
@@ -998,6 +999,24 @@ export async function syncSourceAccount(
   });
   return snapshot;
 }
+/** Small status response for settings/progress; never transfers account history pages. */
+export async function sourceSyncOverview() {
+  const [connection, selection, timeZone, cash, moduleSync] = await Promise.all([
+    connectionSummary(),
+    selectedAccounts(),
+    getTimeZone(),
+    getSetting("the5ers:cash"),
+    moduleArchiveSummary(),
+  ]);
+  return {
+    ...connection,
+    selection,
+    timeZone,
+    cash: JSON.parse(cash ?? "null"),
+    moduleSync,
+    snapshots: [],
+  };
+}
 export async function sourceOverview() {
   const selection = await selectedAccounts();
   const mappings = JSON.parse((await getSetting("the5ers:journal-links")) ?? "{}") as Record<
@@ -1400,6 +1419,12 @@ export async function syncSourceCash(signal?: AbortSignal, batch = false) {
   const failures: { id: string; label: string }[] = [];
   let synced = 0;
   const previous = JSON.parse((await getSetting("the5ers:cash")) ?? "{}");
+  // An unfinished cash run keeps its successful coverage even after 15 minutes.
+  const previousCoverage = Date.parse(previous.coverageSince ?? previous.retrievedAt);
+  const coverageSince =
+    batch && previous.remaining > 0 && Number.isFinite(previousCoverage)
+      ? previousCoverage - (previous.coverageSince ? 0 : 15 * 60_000)
+      : Date.now() - 15 * 60_000;
   const failed = new Set((previous.failures ?? []).map((a: { id: string }) => a.id));
   const cached = await db.select().from(settings).where(like(settings.key, "the5ers:payouts:%"));
   const fresh = new Set(
@@ -1407,9 +1432,7 @@ export async function syncSourceCash(signal?: AbortSignal, batch = false) {
       .filter((row) => {
         const history = JSON.parse(row.value);
         return (
-          batch &&
-          history.importerVersion === 4 &&
-          Date.now() - Date.parse(history.retrievedAt) < 15 * 60_000
+          batch && history.importerVersion === 4 && Date.parse(history.retrievedAt) >= coverageSince
         );
       })
       .map((row) => row.key.slice("the5ers:payouts:".length)),
@@ -1477,6 +1500,7 @@ export async function syncSourceCash(signal?: AbortSignal, batch = false) {
     }
   }
   const outcome = {
+    coverageSince: new Date(coverageSince).toISOString(),
     payouts: payoutSummary,
     expensesComplete: purchases.synced,
     accounts: inventory.accounts.map(({ ref: _ref, ...account }) => account),
@@ -1696,7 +1720,7 @@ export async function syncAllSourceModules(signal?: AbortSignal) {
     client,
     connection.id,
     inventory.accounts,
-    16,
+    6,
     async (page) => {
       if (page.tool !== "positions" || page.operation !== "list") return;
       const account = inventory.accounts.find((account) => account.id === page.subject);

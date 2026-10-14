@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { sourceStatus, defaultSourceVisible } from "@/lib/the5ers-status";
+import { continueModuleSync, type ModuleSyncProgress } from "@/lib/the5ers-sync-runner";
 import { useApi, postJson } from "@/lib/use-api";
 import { Badge } from "./ui/badge";
 import {
@@ -53,6 +54,8 @@ interface Overview {
     failed: number;
     remaining: number;
     projectionFailed?: number;
+    updatedAt?: string;
+    errors?: { message?: string }[];
   } | null;
 }
 const heading = (name: string) =>
@@ -415,8 +418,8 @@ export function The5ersProgramSummary({ value }: { value: unknown }) {
   );
 }
 
-function useSource() {
-  const state = useApi<Overview>("/api/the5ers");
+function useSource(url = "/api/the5ers") {
+  const state = useApi<Overview>(url);
   const [busy, setBusy] = useState(false),
     [error, setError] = useState<string | null>(null),
     [notice, setNotice] = useState("");
@@ -536,7 +539,7 @@ function SourceValue({ value, depth = 0 }: { value: unknown; depth?: number }) {
   );
 }
 export function The5ersConnection() {
-  const state = useSource(),
+  const state = useSource("/api/the5ers?view=connection"),
     overview = state.data;
   const privacy = usePrivacy();
   const [manageAccounts, setManageAccounts] = useState(false);
@@ -637,11 +640,17 @@ export function The5ersConnection() {
                     : ""}
                 </p>
               )}
-              {overview.cash?.retrievedAt && (
+              {(overview.moduleSync?.updatedAt ?? overview.cash?.retrievedAt) && (
                 <p className="text-xs text-muted-foreground">
                   Last attempt:{" "}
-                  {formatSourceDate(overview.cash.retrievedAt, overview.timeZone ?? "UTC")}
+                  {formatSourceDate(
+                    overview.moduleSync?.updatedAt ?? overview.cash?.retrievedAt,
+                    overview.timeZone ?? "UTC",
+                  )}
                 </p>
+              )}
+              {overview.moduleSync?.errors?.[0]?.message && (
+                <p className="text-sm text-destructive">{overview.moduleSync.errors[0].message}</p>
               )}
               {overview.cash?.checked != null && (
                 <p className="text-sm">
@@ -678,7 +687,7 @@ export function The5ersConnection() {
                 <p className="text-sm">
                   {overview.cash.checked != null && overview.cash.total != null
                     ? overview.cash.remaining
-                      ? `${overview.cash.remaining} account histories remain. Sync finances continues from saved data.`
+                      ? `${overview.cash.remaining} account histories remain. Sync all data continues from saved data.`
                       : overview.cash.expensesComplete === false
                         ? "Expenses could not be updated. Sync expenses to retry."
                         : "Some Paid payouts have not been recorded in the ledger."
@@ -738,34 +747,27 @@ export function The5ersConnection() {
                           break;
                         previousRemaining = result.data.remaining;
                       }
-                      for (;;) {
-                        const result = await postJson<{
-                          data: {
-                            complete: boolean;
-                            saved: number;
-                            total: number;
-                            remaining: number;
-                            failed: number;
-                            processed: number;
-                            busy?: boolean;
-                            unsupported?: string[];
-                          };
-                        }>("/api/the5ers", { action: "modules.sync" });
-                        state.refresh();
-                        window.dispatchEvent(new Event("journal-data-changed"));
-                        state.setNotice(
-                          result.data.complete
-                            ? "All available module data is saved in the database."
-                            : `Module sections saved: ${result.data.saved}/${result.data.total}. ${result.data.failed ?? 0} source reads failed.`,
-                        );
-                        if (
-                          result.data.complete ||
-                          !result.data.remaining ||
-                          !result.data.processed ||
-                          result.data.busy
-                        )
-                          break;
-                      }
+                      await continueModuleSync(
+                        async () =>
+                          (
+                            await postJson<{ data: ModuleSyncProgress }>("/api/the5ers", {
+                              action: "modules.sync",
+                            })
+                          ).data,
+                        (result) => {
+                          if (!result.busy) {
+                            state.refresh();
+                            window.dispatchEvent(new Event("journal-data-changed"));
+                          }
+                          state.setNotice(
+                            result.busy
+                              ? "Waiting for the current batch; sync will continue automatically."
+                              : result.complete
+                                ? "All available module data is saved in the database."
+                                : `Module sections saved: ${result.saved}/${result.total}. ${result.failed ?? 0} source reads failed.`,
+                          );
+                        },
+                      );
                     })
                   }
                 >

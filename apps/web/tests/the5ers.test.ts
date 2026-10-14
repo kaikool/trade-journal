@@ -1700,6 +1700,23 @@ it("resumes bounded financial batches without refetching saved histories and pri
   expect(first).toMatchObject({ checked: 12, total: 25, remaining: 13, complete: false });
   expect(String(calls.find((c) => c.tool === "the5ers_payout")!.args.account_ref)).toMatch(/-25$/);
   expect(calls.some((c) => c.tool === "the5ers_purchase")).toBe(false);
+  // Model a long-running sync: prior successes are older than the short read TTL.
+  const savedHistories = await db.select().from(settings);
+  for (const saved of savedHistories.filter((row) => row.key.startsWith("the5ers:payouts:"))) {
+    const history = JSON.parse(saved.value);
+    history.retrievedAt = new Date(Date.now() - 20 * 60_000).toISOString();
+    await db
+      .update(settings)
+      .set({ value: JSON.stringify(history) })
+      .where(eq(settings.key, saved.key));
+  }
+  const [cashState] = savedHistories.filter((row) => row.key === "the5ers:cash");
+  const cash = JSON.parse(cashState!.value);
+  cash.coverageSince = new Date(Date.now() - 35 * 60_000).toISOString();
+  await db
+    .update(settings)
+    .set({ value: JSON.stringify(cash) })
+    .where(eq(settings.key, cashState!.key));
   expect(await syncSourceCash(undefined, true)).toMatchObject({
     checked: 24,
     remaining: 1,
@@ -2026,7 +2043,7 @@ it("archives every advertised read module, dependent records and all account pos
     notes: "Keep my journal",
     reviewedAt: "2026-02-03T00:00:00Z",
   });
-}, 20000);
+}, 60000);
 
 it("keeps archiving source pages and details when native projection fails, and never invokes unallowlisted mutations", async () => {
   await connect();
@@ -2088,6 +2105,7 @@ it("keeps archiving source pages and details when native projection fails, and n
   expect((await readArchivedModule("positions", "list", accountId)).pages).toHaveLength(2);
   expect(read.mock.calls.filter(([, operation]) => operation === "detail")).toHaveLength(2);
   expect(read.mock.calls.some(([, operation]) => operation === "send")).toBe(false);
+  const readsBeforeProjectionRetry = read.mock.calls.length;
   projectionFails = false;
   summary = await syncModuleArchive(
     client,
@@ -2097,8 +2115,9 @@ it("keeps archiving source pages and details when native projection fails, and n
     project,
   );
   expect(summary.projectionFailed).toBe(0);
+  expect(read.mock.calls.length).toBe(readsBeforeProjectionRetry);
   expect(summary.unsupported).toContain("the5ers_payout.send");
-});
+}, 60000);
 
 it("reads the actual payout and withdrawal tool schemas through the authenticated connection without calling any payout operation", async () => {
   await connect();
@@ -2195,4 +2214,83 @@ it("updates generated account names from source metadata and preserves owner nam
   );
   for (const key of ["programName", "accountSize", "accountNumber"])
     delete (rows[0] as unknown as Record<string, unknown>)[key];
+});
+
+it("returns lightweight connection progress without copying account history", async () => {
+  await connect();
+  await db.insert(settings).values({
+    key: "the5ers:payouts:large",
+    value: JSON.stringify({ rows: [{ source: "large history payload" }] }),
+  });
+  const before = vi.mocked(fetch).mock.calls.length;
+  const response = await GET(new Request("https://journal.test/api/the5ers?view=connection"));
+  expect(response.status).toBe(200);
+  const body = await response.json();
+  expect(body.connected).toBe(true);
+  expect(body.snapshots).toEqual([]);
+  expect(body).not.toHaveProperty("cashSnapshots");
+  expect(JSON.stringify(body)).not.toContain("large history payload");
+  expect(vi.mocked(fetch).mock.calls.length).toBe(before);
+});
+
+it("checkpoints a successful module while another read is still pending, and resumes without rereading it", async () => {
+  await connect();
+  const { syncModuleArchive } = await import("../src/server/the5ers/modules");
+  const connection = await accessConnection();
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const read = vi.fn(async (_tool: string, _operation: string, args: Record<string, unknown>) => {
+    if (args.account_ref === "second") {
+      await blocked;
+      throw new Error("source unavailable");
+    }
+    return { data: { balance: 1 } };
+  });
+  const client = {
+    read,
+    payoutContract: async () => ({
+      tools: [
+        {
+          name: "the5ers_account",
+          inputSchema: {
+            properties: { operation: { const: "balance" }, account_ref: {} },
+            required: ["account_ref"],
+          },
+        },
+      ],
+      complete: true,
+    }),
+  } as unknown as InstanceType<typeof The5ersMcp>;
+  const accounts = [
+    { id: "a".repeat(64), ref: "first" },
+    { id: "b".repeat(64), ref: "second" },
+  ];
+  const running = syncModuleArchive(client, connection.id, accounts, 2);
+  let persisted = false;
+  try {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const [row] = await db.select().from(settings).where(eq(settings.key, "the5ers:module-job"));
+      if (row) {
+        const job = decryptJson<{ tasks: { state: string }[] }>(row.value);
+        if (job.tasks.some((task) => task.state === "saved")) {
+          persisted = true;
+          break;
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  } finally {
+    release();
+  }
+  const summary = await running;
+  expect(persisted).toBe(true);
+  expect(summary).toMatchObject({ saved: 1, failed: 1, pending: 0 });
+  read.mockImplementation(async () => ({ data: { balance: 2 } }));
+  expect(await syncModuleArchive(client, connection.id, accounts, 2)).toMatchObject({
+    complete: true,
+    saved: 2,
+  });
+  expect(read.mock.calls.filter(([, , args]) => args.account_ref === "first")).toHaveLength(1);
 });

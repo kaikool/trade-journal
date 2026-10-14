@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { eq, like } from "drizzle-orm";
 import { db, settings } from "@/db";
-import { requireValue } from "@/server/api";
+import { requireValue, RequestError } from "@/server/api";
 import { encryptJson, decryptJson } from "@/server/crypto";
 import { getSetting, setSetting } from "@/server/settings";
 import { assertConnection } from "./oauth";
@@ -413,15 +413,109 @@ async function runModuleArchive(
     .sort((a, b) => (a.attemptedAt ?? 0) - (b.attemptedAt ?? 0));
   const queue = [...waiting, ...retry].slice(0, batchSize);
   let processed = 0;
+  const deadline = Date.now() + 35_000;
+  const checkpoint = async () => {
+    const saved = current.tasks.filter((t) => t.state === "saved").length;
+    const failed = current.tasks.filter((t) => t.state === "failed" || t.projectionError).length;
+    const projectionFailed = current.tasks.filter((item) => item.projectionError).length;
+    const remaining = current.tasks.filter(
+      (item) => item.state !== "saved" || item.projectionError,
+    ).length;
+    if (!remaining) current.finishedAt ??= new Date().toISOString();
+    const summary = {
+      complete: remaining === 0 && !current.unsupported.length,
+      saved,
+      total: current.tasks.length,
+      remaining,
+      failed,
+      projectionFailed,
+      processed,
+      pending: current.tasks.filter((item) => item.state === "pending").length,
+      updatedAt: new Date().toISOString(),
+      errors: current.tasks
+        .filter((item) => item.state === "failed" || item.projectionError)
+        .slice(0, 20)
+        .map((item) => ({
+          module: item.spec.tool,
+          operation: item.spec.operation,
+          page: item.page,
+          message: item.projectionError ?? item.error,
+        })),
+      startedAt: current.startedAt,
+      finishedAt: current.finishedAt,
+      unsupported: current.unsupported,
+      modules: Object.fromEntries(
+        current.specs.map((spec) => [
+          spec.tool,
+          {
+            saved: current.tasks.filter((t) => t.spec.tool === spec.tool && t.state === "saved")
+              .length,
+            total: current.tasks.filter((t) => t.spec.tool === spec.tool).length,
+          },
+        ]),
+      ),
+    };
+    await db.transaction(async (tx) => {
+      await assertConnection(connectionId, tx);
+      await setSetting(
+        JOB,
+        encryptJson({
+          ...current,
+          tasks: current.tasks.map(({ spec, ...item }) => ({
+            ...item,
+            specKey: `${spec.tool}.${spec.operation}`,
+          })),
+        }),
+        tx,
+      );
+      await setSetting(SUMMARY, JSON.stringify(summary), tx);
+    });
+    return summary;
+  };
+  // Persist the queue before work and each result before accepting another task.
+  let saving = Promise.resolve();
+  const persist = () => {
+    saving = saving.then(() => checkpoint()).then(() => undefined);
+    return saving;
+  };
+  await persist();
   await Promise.all(
     Array.from({ length: Math.min(3, queue.length) }, async () => {
       for (;;) {
+        if (Date.now() >= deadline) return;
         const item = queue.shift();
         if (!item) return;
         item.attemptedAt = Date.now();
         const wasSaved = item.state === "saved";
         const hadProjectionError = Boolean(item.projectionError);
         try {
+          // Projection failed after a successful source save: retry from PostgreSQL only.
+          if (wasSaved && hadProjectionError && project) {
+            const archived = await getSetting(
+              `${PREFIX}${item.spec.tool}:${item.spec.operation}:${item.accountIds[0] ?? "global"}:${item.subject}:${item.page}`,
+            );
+            requireValue(archived, "The saved source page is unavailable for import retry.");
+            const page = JSON.parse(archived);
+            requireValue(
+              page.runId === current.startedAt,
+              "The saved source page belongs to another sync.",
+            );
+            try {
+              await project({
+                tool: item.spec.tool,
+                operation: item.spec.operation,
+                subject: item.subject,
+                runId: current.startedAt,
+                response: page.data,
+              });
+              delete item.projectionError;
+              processed++;
+            } catch {
+              item.projectionError = "Native trade import failed; the source response was saved.";
+            }
+            await persist();
+            continue;
+          }
           if (item.parent && Date.now() - (item.refRetrievedAt ?? 0) >= 5 * 60_000) {
             const parent = current.tasks.find((t) => t.key === item.parent);
             requireValue(parent, "The source record for this detail is unavailable.");
@@ -480,58 +574,18 @@ async function runModuleArchive(
           item.state = "saved";
           delete item.error;
           if (!wasSaved || (hadProjectionError && !item.projectionError)) processed++;
-        } catch {
+        } catch (cause) {
           item.state = "failed";
-          item.error = "Source read failed; previously saved data was retained.";
+          item.error =
+            cause instanceof RequestError
+              ? cause.message
+              : "Source read failed; previously saved data was retained.";
         }
+        await persist();
       }
     }),
   );
-  const saved = current.tasks.filter((t) => t.state === "saved").length;
-  const failed = current.tasks.filter((t) => t.state === "failed" || t.projectionError).length;
-  const projectionFailed = current.tasks.filter((item) => item.projectionError).length;
-  const remaining = current.tasks.filter(
-    (item) => item.state !== "saved" || item.projectionError,
-  ).length;
-  if (!remaining) current.finishedAt ??= new Date().toISOString();
-  const summary = {
-    complete: remaining === 0 && !current.unsupported.length,
-    saved,
-    total: current.tasks.length,
-    remaining,
-    failed,
-    projectionFailed,
-    processed,
-    startedAt: current.startedAt,
-    finishedAt: current.finishedAt,
-    unsupported: current.unsupported,
-    modules: Object.fromEntries(
-      current.specs.map((spec) => [
-        spec.tool,
-        {
-          saved: current.tasks.filter((t) => t.spec.tool === spec.tool && t.state === "saved")
-            .length,
-          total: current.tasks.filter((t) => t.spec.tool === spec.tool).length,
-        },
-      ]),
-    ),
-  };
-  await db.transaction(async (tx) => {
-    await assertConnection(connectionId, tx);
-    await setSetting(
-      JOB,
-      encryptJson({
-        ...current,
-        tasks: current.tasks.map(({ spec, ...item }) => ({
-          ...item,
-          specKey: `${spec.tool}.${spec.operation}`,
-        })),
-      }),
-      tx,
-    );
-    await setSetting(SUMMARY, JSON.stringify(summary), tx);
-  });
-  return summary;
+  return checkpoint();
 }
 
 /** Only one resumable writer advances the queue at a time. No network call holds a DB lock. */
