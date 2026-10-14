@@ -177,3 +177,25 @@ it("keeps concurrent charts distinct and cleans up their indicators on replaceme
     renderer.register.mock.calls.map(([descriptor]) => descriptor.type).sort(),
   );
 });
+
+it("reveals reported entry and exit markers only as their replay times are reached", async () => {
+  const trade = { ...props.trade, avgExit: 102 };
+  await act(async () =>
+    root.render(
+      createElement(TooltipProvider, null, createElement(HistoricalReplay, { ...props, trade })),
+    ),
+  );
+  const spec = renderer.register.mock.calls[0]![0];
+  const emit = vi.fn();
+  const indicator = spec.create();
+  indicator.start({ emit, setStatus: vi.fn() });
+  expect(emit.mock.calls.at(-1)![0].labels.map((label: { text: string }) => label.text)).toEqual([
+    "ENTRY",
+    "EXIT",
+  ]);
+  await click("Restart replay");
+  indicator.start({ emit, setStatus: vi.fn() });
+  expect(emit.mock.calls.at(-1)![0].labels.map((label: { text: string }) => label.text)).toEqual([
+    "ENTRY",
+  ]);
+});

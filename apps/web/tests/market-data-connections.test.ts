@@ -107,6 +107,67 @@ describe("trade history endpoint", () => {
     );
     return (await db.select().from(trades))[0]!.key;
   }
+  it("loads candles for reported positions with unknown contract units while leaving monetary estimates unavailable", async () => {
+    await seed();
+    await db.delete(trades);
+    await db.delete(executions);
+    const { setSetting } = await import("../src/server/settings");
+    const { saveJournalPositions } = await import("../src/server/the5ers/journal");
+    const { queryTrades } = await import("../src/server/trades-query");
+    await setSetting("the5ers:journal-links", JSON.stringify({ source: "fixture" }));
+    await db.transaction((tx) =>
+      saveJournalPositions(
+        tx,
+        "source",
+        "USD",
+        "2026-01-03T00:00:00Z",
+        [
+          {
+            symbol: "TEST",
+            side: "Buy",
+            isClosed: true,
+            openDate: "2026-01-02T10:00:00Z",
+            closeDate: "2026-01-02T10:03:00Z",
+            entry: 100,
+            exit: 102,
+            quantity: 0.25,
+            profitAndLoss: 2,
+            fee: 0,
+            swap: 0,
+          },
+        ],
+        true,
+      ),
+    );
+    const trade = (await queryTrades()).rows[0]!;
+    expect(trade.quantityUnitsUnknown).toBe(true);
+    await saveConnection(id, "fixture-key-only");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json(
+          [0, 1, 2].map((minute) => ({
+            ts: `2026-01-02 10:0${minute}:00`,
+            open: 100,
+            high: 104,
+            low: 98,
+            close: 102,
+          })),
+        ),
+      ),
+    );
+    const before = await db.select().from(trades);
+    const response = await loadHistory(request(body), {
+      params: Promise.resolve({ key: trade.key }),
+    });
+    expect(response.status).toBe(200);
+    const result = await response.json();
+    expect(result.bars).toHaveLength(3);
+    expect(result.estimate).toMatchObject({ mae: null, mfe: null });
+    expect(result.estimate.warnings.join(" ")).toContain("contract size");
+    expect(await db.select().from(trades)).toEqual(before);
+    expect(await db.select().from(executions)).toHaveLength(0);
+  });
   it("loads candles and estimates without changing journal facts or exposing credentials", async () => {
     const key = await seed();
     await saveConnection(id, "fixture-key-only");

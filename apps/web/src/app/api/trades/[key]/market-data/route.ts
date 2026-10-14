@@ -26,10 +26,6 @@ export const POST = handler(
     const { key } = await params;
     const row = await getTradeByKey(key);
     if (!row) return bad("Trade not found", 404);
-    requireValue(
-      !row.quantityUnitsUnknown,
-      "Market excursion estimates need verified execution sizes. The5ers reported positions do not provide those units.",
-    );
     const body = await request.json();
     requireValue(body && typeof body.provider === "string", "Choose a market data provider.");
     requireValue(
@@ -107,8 +103,12 @@ export const POST = handler(
         trade,
         fills,
         history,
-        body.basisConfirmed === true && currencyMatches,
+        body.basisConfirmed === true && currencyMatches && !trade.quantityUnitsUnknown,
       );
+      if (trade.quantityUnitsUnknown)
+        estimate.warnings.unshift(
+          "Candles and replay are available. Monetary estimates need verified contract size and execution history.",
+        );
       if (!currencyMatches)
         estimate.warnings.unshift(
           `The candle quote currency (${history.quoteCurrency}) differs from this account (${accountCurrency}). Monetary estimates are unavailable; no FX conversion is applied.`,

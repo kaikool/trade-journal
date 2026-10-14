@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { chartPricePoints } from "@/lib/trade-chart-points";
 import type { Vela } from "@luxalgo/vela";
 import { Camera } from "lucide-react";
 import { fmtMoney } from "@/lib/utils";
@@ -53,7 +54,7 @@ export function TradeChart(props: {
 }) {
   const privateMode = usePrivacy();
   if (!privateMode) return <PriceChart {...props} />;
-  const data = [...props.executions]
+  const data = chartPricePoints(props.trade, props.executions)
     .sort((a, b) => a.executedAt.localeCompare(b.executedAt))
     .map((fill) => ({
       t: fill.executedAt,
@@ -73,7 +74,7 @@ export function TradeChart(props: {
         <p className="text-sm text-muted-foreground">No execution prices available.</p>
       )}
       <figcaption className="mt-2 text-xs text-muted-foreground">
-        Recorded fills as a percentage of average entry. Privacy mode keeps prices and monetary P&L
+        Recorded prices as a percentage of average entry. Privacy mode keeps prices and monetary P&L
         hidden.
       </figcaption>
     </figure>
@@ -99,7 +100,7 @@ function PriceChart({
 
   useEffect(() => {
     const host = hostRef.current;
-    if (!host || executions.length === 0) return;
+    if (!host || chartPricePoints(trade, executions).length === 0) return;
     let disposed = false;
     let cleanup: (() => void) | null = null;
     setReady(false);
@@ -110,7 +111,7 @@ function PriceChart({
       if (disposed || !hostRef.current) return;
 
       let dark = document.documentElement.classList.contains("dark");
-      const sorted = [...executions].sort(
+      const sorted = chartPricePoints(trade, executions).sort(
         (a, b) => Date.parse(a.executedAt) - Date.parse(b.executedAt),
       );
       const openMs = Date.parse(trade.openedAt);
@@ -144,7 +145,7 @@ function PriceChart({
               x: Date.parse(execution.executedAt),
               y: execution.price,
               yloc: (execution.side === "buy" ? "belowbar" : "abovebar") as "belowbar" | "abovebar",
-              text: `${execution.side === "buy" ? "▲ BUY" : "▼ SELL"} ${execution.quantity}`,
+              text: `${execution.side === "buy" ? "▲" : "▼"} ${execution.label}`,
               style: (execution.side === "buy" ? "triangleup" : "triangledown") as
                 "triangleup" | "triangledown",
               color: execution.side === "buy" ? profitColor : lossColor,
@@ -269,8 +270,8 @@ function PriceChart({
       <div ref={hostRef} style={{ height }} className="overflow-hidden rounded-lg border" />
       <figcaption className="mt-2 flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-muted-foreground">
         <span>
-          Price path from recorded fills. To view market candles, choose a data source and load
-          history in Market data &amp; replay.
+          Entry/exit price path. To view market candles, choose a data source and load history in
+          Market data &amp; replay.
         </span>
         {onSaveScreenshot && (
           <span className="flex flex-wrap items-center gap-2">

@@ -258,7 +258,7 @@ function TradeView({ tradeKey }: { tradeKey: string }) {
             </CardContent>
           </Card>
 
-          {!trade.quantityUnitsUnknown && <TradeMarketData trade={trade} executions={executions} />}
+          <TradeMarketData trade={trade} executions={executions} />
 
           {runningPnl.length > 1 && (
             <Card>

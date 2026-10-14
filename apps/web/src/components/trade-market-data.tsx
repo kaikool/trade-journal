@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { chartPricePoints, type ChartPricePoint } from "@/lib/trade-chart-points";
 import type { Vela } from "@luxalgo/vela";
 import {
   Camera,
@@ -375,6 +376,11 @@ export function HistoricalReplay({
   privacy: boolean;
   onSaveScreenshot?: (dataUrl: string) => Promise<void>;
 }) {
+  const positionPoints = useMemo(
+    () =>
+      executions.length || history.estimate.priceBasisMismatch ? [] : chartPricePoints(trade, []),
+    [trade, executions, history.estimate.priceBasisMismatch],
+  );
   const [count, setCount] = useState(history.bars.length);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState("4");
@@ -423,7 +429,12 @@ export function HistoricalReplay({
                 prices; fill labels and MAE/MFE estimates are withheld. See the data limits below.
               </p>
             )}
-            <ReplayChart history={history} nextFrame={frame} onSaveScreenshot={onSaveScreenshot} />
+            <ReplayChart
+              history={history}
+              nextFrame={frame}
+              positionPoints={positionPoints}
+              onSaveScreenshot={onSaveScreenshot}
+            />
             <div
               className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/30 p-2"
               role="group"
@@ -560,11 +571,13 @@ export function HistoricalReplay({
 }
 
 function ReplayChart({
+  positionPoints,
   history,
   nextFrame,
   onSaveScreenshot,
 }: {
   history: TradeMarketResult;
+  positionPoints: ChartPricePoint[];
   nextFrame: ReturnType<typeof replayFrame<ChartExecution>>;
   onSaveScreenshot?: (dataUrl: string) => Promise<void>;
 }) {
@@ -600,14 +613,22 @@ function ReplayChart({
         create: () => ({
           start(ctx) {
             ctx.emit({
-              labels: frame.current.fills.map((fill, index) => ({
+              labels: [
+                ...frame.current.fills.map((fill) => ({
+                  ...fill,
+                  label: `${fill.side.toUpperCase()} ${fill.quantity}`,
+                })),
+                ...positionPoints.filter(
+                  (point) => Date.parse(point.executedAt) <= frame.current.through,
+                ),
+              ].map((fill, index) => ({
                 id: `fill-${index}`,
                 paneId: "price",
                 xloc: "bar_time" as const,
                 x: Date.parse(fill.executedAt),
                 y: fill.price,
                 yloc: "price" as const,
-                text: `${fill.side.toUpperCase()} ${fill.quantity}`,
+                text: fill.label,
                 style: "label_left" as const,
                 color: fill.side === "buy" ? "#087f23" : "#bd2626",
                 textColor: "#ffffff",
@@ -681,7 +702,7 @@ function ReplayChart({
       disposed = true;
       cleanup();
     };
-  }, [history, indicatorType]);
+  }, [history, indicatorType, positionPoints]);
   useEffect(() => {
     update.current?.();
   }, [nextFrame, history]);
