@@ -194,6 +194,18 @@ export function PropFirmTracker() {
     privacy ? "••••" : code ? propMoney(amount, code) : "—";
   const name = (id: string | null) =>
     data?.accounts.find((a) => a.id === id)?.name ?? "Shared firm cost";
+  const hasPayoutReceipt = (entry: PropEntry) =>
+    (receiptsById.get(entry.id) ?? []).some(
+      (receipt) => !receipt.voided && receipt.kind === "receipt",
+    );
+  const payoutTitle = (entry: PropEntry) => {
+    const accountName = name(entry.accountId);
+    const prefix = accountName.slice(0, entry.firm.length).toLowerCase();
+    return prefix === entry.firm.toLowerCase() &&
+      /^[\s·:-]|$/.test(accountName.slice(entry.firm.length))
+      ? accountName
+      : `${entry.firm} · ${accountName}`;
+  };
   const query = search.toLowerCase().trim();
   const entries = (data?.entries ?? [])
     .filter(
@@ -966,26 +978,19 @@ export function PropFirmTracker() {
                 )}
                 {tab === "payouts" && (
                   <>
-                    <p className="text-xs text-muted-foreground">
-                      Open requests always remain visible. Completed, rejected and cancelled
-                      requests use the request-date filter. Expected amounts are after your share
-                      and withheld fees; actual amounts come only from receipts.
-                    </p>
                     {slice(listedPayouts).map((row) => (
                       <Card key={row.entry.id}>
-                        <CardContent className="space-y-4 py-5">
-                          <div className="flex flex-wrap justify-between gap-3">
-                            <div>
-                              <h3 className="font-medium">
-                                {row.entry.firm} · {name(row.entry.accountId)}
-                              </h3>
+                        <CardContent className="space-y-3 py-4">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <h3 className="break-words font-medium">{payoutTitle(row.entry)}</h3>
                               <p className="text-xs text-muted-foreground">
                                 Requested {requestDate(row.entry) ?? "date unavailable"}
                                 {row.entry.dueOn ? ` · Expected ${row.entry.dueOn}` : ""}
                               </p>
                             </div>
                             <span
-                              className={`rounded-md border px-2 py-1 text-xs ${row.overdue ? "border-destructive text-destructive" : ""}`}
+                              className={`shrink-0 rounded-md border px-2 py-1 text-xs ${row.overdue ? "border-destructive text-destructive" : ""}`}
                             >
                               {row.overdue
                                 ? "Overdue · "
@@ -995,73 +1000,98 @@ export function PropFirmTracker() {
                               {label(row.entry.status)}
                             </span>
                           </div>
-                          <div className="grid gap-3 sm:grid-cols-4">
+                          <div className="flex items-baseline justify-between gap-3">
                             <div>
-                              <p className="text-xs text-muted-foreground">Expected net</p>
-                              {money(row.expected, row.entry.currency)}
+                              <span className="mr-2 text-xs text-muted-foreground">
+                                {hasPayoutReceipt(row.entry) ? "Received" : "Expected"}
+                              </span>
+                              <span className="text-xl font-semibold tabular-nums">
+                                {money(
+                                  hasPayoutReceipt(row.entry) ? row.actual : row.expected,
+                                  row.entry.currency,
+                                )}
+                              </span>
                             </div>
-                            <div>
-                              <p className="text-xs text-muted-foreground">Actual received</p>
-                              {money(row.actual, row.entry.currency)}
-                            </div>
-                            <div>
-                              <p className="text-xs text-muted-foreground">Outstanding</p>
-                              {money(row.remaining, row.entry.currency)}
-                            </div>
-                            <div>
-                              <p className="text-xs text-muted-foreground">Actual − expected</p>
-                              {money(row.variance, row.entry.currency)}
-                            </div>
-                          </div>
-                          <div className="flex flex-wrap gap-2">
-                            <Button
-                              size="sm"
-                              disabled={
-                                readOnly || ["rejected", "cancelled"].includes(row.entry.status)
-                              }
-                              onClick={() => setModal({ kind: "receipt", payout: row.entry })}
-                            >
-                              Record receipt / reversal
-                            </Button>
-                            {entryActions(row.entry)}
+                            {hasPayoutReceipt(row.entry) && row.remaining > 0 && (
+                              <span className="text-xs text-muted-foreground">
+                                Remaining {money(row.remaining, row.entry.currency)}
+                              </span>
+                            )}
                           </div>
                           <details>
-                            <summary className="cursor-pointer text-xs">
-                              Cash movements · {(receiptsById.get(row.entry.id) ?? []).length}
+                            <summary className="cursor-pointer text-xs text-muted-foreground">
+                              Details & actions
                             </summary>
-                            <div className="mt-2 space-y-2">
-                              {(receiptsById.get(row.entry.id) ?? []).map((r) => (
-                                <div
-                                  key={r.id}
-                                  className="flex flex-wrap items-center justify-between gap-2 rounded border p-2 text-xs"
-                                >
-                                  <span>
-                                    {receiptSettlementDate(r) ?? "Payment date unavailable"} ·{" "}
-                                    {label(r.kind)} · {money(r.amountMinor, row.entry.currency)}
-                                    {r.voided ? " · Voided" : ""}
-                                  </span>
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    disabled={readOnly || row.entry.voided}
-                                    onClick={() =>
-                                      setModal({
-                                        kind: "change",
-                                        action: "receipt.void",
-                                        id: r.id,
-                                        payoutId: r.payoutId,
-                                        revision: row.entry.revision,
-                                        value: !r.voided,
-                                        name: r.voided
-                                          ? "Restore cash movement"
-                                          : "Void cash movement",
-                                      })
-                                    }
-                                  >
-                                    {r.voided ? "Restore" : "Void"}
-                                  </Button>
+                            <div className="mt-3 space-y-3">
+                              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                                <div>
+                                  <p className="text-xs text-muted-foreground">Expected net</p>
+                                  {money(row.expected, row.entry.currency)}
                                 </div>
-                              ))}
+                                <div>
+                                  <p className="text-xs text-muted-foreground">Actual received</p>
+                                  {money(row.actual, row.entry.currency)}
+                                </div>
+                                <div>
+                                  <p className="text-xs text-muted-foreground">Outstanding</p>
+                                  {money(row.remaining, row.entry.currency)}
+                                </div>
+                                <div>
+                                  <p className="text-xs text-muted-foreground">Actual − expected</p>
+                                  {money(row.variance, row.entry.currency)}
+                                </div>
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                <Button
+                                  size="sm"
+                                  disabled={
+                                    readOnly || ["rejected", "cancelled"].includes(row.entry.status)
+                                  }
+                                  onClick={() => setModal({ kind: "receipt", payout: row.entry })}
+                                >
+                                  Record receipt / reversal
+                                </Button>
+                                {entryActions(row.entry)}
+                              </div>
+                              <div>
+                                <p className="text-xs text-muted-foreground">
+                                  Cash movements · {(receiptsById.get(row.entry.id) ?? []).length}
+                                </p>
+                                <div className="mt-2 space-y-2">
+                                  {(receiptsById.get(row.entry.id) ?? []).map((r) => (
+                                    <div
+                                      key={r.id}
+                                      className="flex flex-wrap items-center justify-between gap-2 rounded border p-2 text-xs"
+                                    >
+                                      <span>
+                                        {receiptSettlementDate(r) ?? "Payment date unavailable"} ·{" "}
+                                        {label(r.kind)} · {money(r.amountMinor, row.entry.currency)}
+                                        {r.voided ? " · Voided" : ""}
+                                      </span>
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        disabled={readOnly || row.entry.voided}
+                                        onClick={() =>
+                                          setModal({
+                                            kind: "change",
+                                            action: "receipt.void",
+                                            id: r.id,
+                                            payoutId: r.payoutId,
+                                            revision: row.entry.revision,
+                                            value: !r.voided,
+                                            name: r.voided
+                                              ? "Restore cash movement"
+                                              : "Void cash movement",
+                                          })
+                                        }
+                                      >
+                                        {r.voided ? "Restore" : "Void"}
+                                      </Button>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
                             </div>
                           </details>
                         </CardContent>
