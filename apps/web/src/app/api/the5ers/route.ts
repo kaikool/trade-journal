@@ -92,7 +92,7 @@ export const POST = handler(async (request: Request) => {
         }),
       );
     case "cash.sync":
-      return ok({ data: await syncSourceCash(AbortSignal.timeout(100_000)) });
+      return ok({ data: await syncSourceCash(AbortSignal.timeout(100_000), true) });
     case "purchases.sync":
       return ok({ data: await syncSourcePurchases() });
     case "accounts":

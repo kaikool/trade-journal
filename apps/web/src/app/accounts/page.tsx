@@ -119,7 +119,9 @@ function Accounts() {
           <Card key={account.id} className={account.archivedAt ? "opacity-60" : undefined}>
             <CardHeader className="flex-row flex-wrap items-center justify-between gap-2">
               <CardTitle className="min-w-0 flex-1 text-base font-semibold normal-case tracking-normal text-foreground">
-                <span className="block break-words">{account.name}</span>
+                <span className="block break-words">
+                  <MonetaryValue>{account.name}</MonetaryValue>
+                </span>
                 <Badge variant="secondary" className="mt-1.5 mr-2">
                   {account.the5ersSourceId ? "Synced" : account.kind}
                 </Badge>
@@ -201,6 +203,29 @@ function Accounts() {
                 <summary className="cursor-pointer text-sm">Account settings</summary>
                 <div className="mt-3 grid grid-cols-1 items-end gap-3 sm:grid-cols-2">
                   <div className="min-w-0">
+                    <label className="mb-1 block text-xs text-muted-foreground">Account name</label>
+                    <MonetaryField>
+                      <Input
+                        aria-label="Account name"
+                        defaultValue={account.name}
+                        onBlur={async (event) => {
+                          const name = event.target.value.trim();
+                          if (name && name !== account.name) {
+                            await postJson(`/api/accounts/${account.id}`, { name }, "PATCH");
+                            refresh();
+                            window.dispatchEvent(new Event("journal-data-changed"));
+                          }
+                        }}
+                      />
+                    </MonetaryField>
+                    {account.the5ersSourceId && (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        The5ers only shares the last digits. Enter your full account number in this
+                        name.
+                      </p>
+                    )}
+                  </div>
+                  <div className="min-w-0">
                     <label className="mb-1 block text-xs text-muted-foreground">
                       Journal starting capital
                     </label>
@@ -218,6 +243,7 @@ function Accounts() {
                               "PATCH",
                             );
                             refresh();
+                            window.dispatchEvent(new Event("journal-data-changed"));
                           }
                         }}
                       />

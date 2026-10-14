@@ -1,5 +1,6 @@
+import { the5ersAccountName } from "@/lib/the5ers-name";
 import { asc, eq } from "drizzle-orm";
-import { accounts, db } from "@/db";
+import { accounts, trades, db } from "@/db";
 import { bad, handler, ok } from "@/server/api";
 import { encryptJson } from "@/server/crypto";
 import { newId, nowIso } from "@/server/ids";
@@ -9,28 +10,53 @@ import { validateAccountBody } from "@/server/account-validation";
 import { setSetting, deleteSetting, getSetting } from "@/server/settings";
 
 export const GET = handler(async (request: Request) => {
-  if (new URL(request.url).searchParams.get("summary") === "1") {
-    const list = await db
-      .select({
-        id: accounts.id,
-        name: accounts.name,
-        broker: accounts.broker,
-        currency: accounts.currency,
-        archivedAt: accounts.archivedAt,
-      })
-      .from(accounts)
-      .orderBy(asc(accounts.createdAt));
-    return ok({ accounts: list });
-  }
-  const rows = await db.select().from(accounts).orderBy(asc(accounts.createdAt));
+  const all = await db.select().from(accounts).orderBy(asc(accounts.createdAt));
   const links = JSON.parse((await getSetting("the5ers:journal-links")) ?? "{}") as Record<
     string,
     string
   >;
+  const selection = JSON.parse((await getSetting("the5ers:selection")) ?? "[]") as {
+    id: string;
+    journalAccountId?: string;
+  }[];
+  const selected = new Set(selection.map((a) => a.journalAccountId ?? links[a.id]));
+  const traded = new Set(
+    (await db.select({ accountId: trades.accountId }).from(trades).groupBy(trades.accountId)).map(
+      (a) => a.accountId,
+    ),
+  );
+  // Older cash imports created empty journal accounts. Keep their ledger links,
+  // but omit those automatic shells from the trading workspace.
+  const rows = all.filter(
+    (a) =>
+      !(
+        a.id.startsWith("the5ers_") &&
+        a.broker === "The5ers" &&
+        !selected.has(a.id) &&
+        !traded.has(a.id) &&
+        !a.initialBalance &&
+        !a.snapshotJson &&
+        /^The5ers(?:[ ·-]+(?:meta-trader-[\w-]+|c-trader|trader-evolution)[ ·-]+|[-])(?:…|\.\.\.)/.test(
+          a.name,
+        )
+      ),
+  );
+  if (new URL(request.url).searchParams.get("summary") === "1") {
+    return ok({
+      accounts: rows.map((a) => ({
+        id: a.id,
+        name: a.broker === "The5ers" ? the5ersAccountName(a.name) : a.name,
+        broker: a.broker,
+        currency: a.currency,
+        archivedAt: a.archivedAt,
+      })),
+    });
+  }
 
   return ok({
     accounts: rows.map(({ credentialsEnc, ...safe }) => ({
       ...safe,
+      name: safe.broker === "The5ers" ? the5ersAccountName(safe.name) : safe.name,
       the5ersSourceId: Object.entries(links).find(([, target]) => target === safe.id)?.[0],
       connected: credentialsEnc !== null,
       snapshot: safe.snapshotJson ? JSON.parse(safe.snapshotJson) : null,

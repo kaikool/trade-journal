@@ -110,7 +110,9 @@ export async function recordPayoutReceipt(
       ["funded", "instant_funded", "live"].includes(a.program) &&
       (confirmation
         ? a.id === confirmation.accountId
-        : a.journalAccountId === links[sourceAccountId] && a.currency === settlement!.currency),
+        : (a.id === `the5ers_${sourceAccountId}` ||
+            (links[sourceAccountId] && a.journalAccountId === links[sourceAccountId])) &&
+          a.currency === settlement!.currency),
   );
   if (!confirmation && candidates.length !== 1) return "pending" as const;
   requireValue(

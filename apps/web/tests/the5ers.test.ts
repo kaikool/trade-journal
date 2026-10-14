@@ -1589,6 +1589,11 @@ it("syncs cash for every account including unselected closed accounts, keeps tra
   expect(calls.some((c) => c.tool === "the5ers_positions")).toBe(false);
   const { propReceipts } = await import("../src/db");
   expect((await db.select().from(propReceipts)).map((r) => r.amountMinor)).toEqual([78000]);
+  const { accounts: nativeAccounts, propAccounts: fundingAccounts } = await import("../src/db");
+  expect(await db.select().from(nativeAccounts)).toHaveLength(1);
+  expect(
+    (await db.select().from(fundingAccounts)).find((a) => a.program === "funded")!.journalAccountId,
+  ).toBeNull();
   const before = vi.mocked(fetch).mock.calls.length;
   const overview = await sourceOverview();
   expect(overview.selection.map((a) => a.id)).toEqual([listed[0]!.id]);
@@ -1666,6 +1671,83 @@ it("imports the documented latest paid withdrawal using envelope currency and ex
   const history = overview.cashSnapshots.find((s) => s.account.program === "funded")!.sections
     .payoutHistory!.data as { pending: number };
   expect(history.pending).toBe(1);
+});
+
+it("resumes bounded financial batches without refetching saved histories and prioritizes historical funded accounts", async () => {
+  rows = Array.from({ length: 25 }, (_, index) => ({
+    ...account(`account-${index}`, 1),
+    accountType: index === 24 ? "funded" : "evaluation",
+  }));
+  await connect();
+  calls = [];
+  const first = await syncSourceCash(undefined, true);
+  expect(first).toMatchObject({ checked: 12, total: 25, remaining: 13, complete: false });
+  expect(String(calls.find((c) => c.tool === "the5ers_payout")!.args.account_ref)).toMatch(/-25$/);
+  expect(calls.some((c) => c.tool === "the5ers_purchase")).toBe(false);
+  expect(await syncSourceCash(undefined, true)).toMatchObject({
+    checked: 24,
+    remaining: 1,
+    complete: false,
+  });
+  expect(await syncSourceCash(undefined, true)).toMatchObject({
+    checked: 25,
+    remaining: 0,
+    complete: true,
+  });
+  const histories = calls.filter((c) => c.tool === "the5ers_payout" && c.operation === "history");
+  expect(histories).toHaveLength(25);
+  expect(new Set(histories.map((c) => c.args.account_ref)).size).toBe(25);
+});
+
+it("hides legacy cash-created trading shells while preserving selected accounts and user capital or names", async () => {
+  await connect();
+  const listed = await listSourceAccounts();
+  await selectSourceAccounts([listed[0]!.id], false, true);
+  const { accounts } = await import("../src/db");
+  await db.insert(accounts).values([
+    {
+      id: "the5ers_legacy",
+      name: "The5ers · c-trader · …1218",
+      broker: "The5ers",
+      kind: "import",
+      currency: "USD",
+      initialBalance: 0,
+      createdAt: "2026-01-01T00:00:00Z",
+    },
+    {
+      id: "the5ers_capital",
+      name: "The5ers · meta-trader-5 · …8490",
+      broker: "The5ers",
+      kind: "import",
+      currency: "USD",
+      initialBalance: 50000,
+      createdAt: "2026-01-01T00:00:00Z",
+    },
+    {
+      id: "the5ers_custom",
+      name: "The5ers-12345678",
+      broker: "The5ers",
+      kind: "import",
+      currency: "USD",
+      initialBalance: 0,
+      createdAt: "2026-01-01T00:00:00Z",
+    },
+  ]);
+  const { GET: getAccounts } = await import("../src/app/api/accounts/route");
+  for (const suffix of ["", "?summary=1"]) {
+    const response = await getAccounts(new Request(`https://journal.test/api/accounts${suffix}`));
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body.accounts.map((a: { id: string }) => a.id)).not.toContain("the5ers_legacy");
+    expect(body.accounts.map((a: { id: string }) => a.id)).toContain("the5ers_capital");
+    expect(body.accounts.find((a: { id: string }) => a.id === "the5ers_custom").name).toBe(
+      "The5ers-12345678",
+    );
+    expect(body.accounts.find((a: { id: string }) => a.id === "the5ers_capital").name).toBe(
+      "The5ers-…8490",
+    );
+  }
+  expect(await db.select().from(accounts)).toHaveLength(4);
 });
 
 it("keeps cash syncing when purchases fail and preserves each failed account's saved payout history", async () => {

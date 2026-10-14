@@ -1,5 +1,6 @@
+import { the5ersAccountName } from "@/lib/the5ers-name";
 import { createHash, randomUUID } from "node:crypto";
-import { and, eq, like, sql, count } from "drizzle-orm";
+import { and, or, eq, like, sql, count } from "drizzle-orm";
 import { db, settings, accounts as journalAccounts, propAccounts, propAudit, trades } from "@/db";
 import { saveJournalPositions, reconcilePurchases, positionIdentity } from "./journal";
 import { payoutKey, sourceRecords, recordPayoutReceipt } from "./payouts";
@@ -378,7 +379,7 @@ export async function selectSourceAccounts(
             .insert(journalAccounts)
             .values({
               id,
-              name: `The5ers · ${account.label}`,
+              name: the5ersAccountName(`The5ers · ${account.label}`),
               broker: "The5ers",
               kind: "import",
               currency: account.currency,
@@ -528,7 +529,7 @@ export function snapshotCurrency(snapshot: SourceSnapshot): string | undefined {
 async function saveSnapshotPropAccount(
   tx: import("@/db/postgres").JournalExecutor,
   snapshot: SourceSnapshot,
-  journalAccountId: string,
+  journalAccountId: string | null,
   currency: string,
 ) {
   const program =
@@ -543,14 +544,38 @@ async function saveSnapshotPropAccount(
     .select()
     .from(propAccounts)
     .where(
-      and(eq(propAccounts.journalAccountId, journalAccountId), eq(propAccounts.firm, "The5ers")),
+      and(
+        or(
+          eq(propAccounts.id, `the5ers_${snapshot.account.id}`),
+          journalAccountId ? eq(propAccounts.journalAccountId, journalAccountId) : sql`false`,
+        ),
+        eq(propAccounts.firm, "The5ers"),
+      ),
     );
+  if (tracked && !tracked.journalAccountId && journalAccountId && tracked.currency === currency) {
+    const updatedAt = new Date().toISOString();
+    await tx
+      .update(propAccounts)
+      .set({ journalAccountId, updatedAt })
+      .where(eq(propAccounts.id, tracked.id));
+    await tx
+      .insert(propAudit)
+      .values({
+        id: randomUUID(),
+        entityType: "account",
+        entityId: tracked.id,
+        beforeJson: JSON.stringify(tracked),
+        afterJson: JSON.stringify({ ...tracked, journalAccountId, updatedAt }),
+        reason: "Linked an existing imported funding phase to its selected trading account",
+        createdAt: updatedAt,
+      });
+  }
   if (!tracked && program && status) {
     const now = new Date().toISOString();
     const value = {
       id: `the5ers_${snapshot.account.id}`,
       firm: "The5ers",
-      name: snapshot.account.label,
+      name: the5ersAccountName(`The5ers · ${snapshot.account.label}`),
       program,
       status,
       currency,
@@ -610,7 +635,7 @@ export async function importSavedSnapshot(id: string) {
         .insert(journalAccounts)
         .values({
           id: journalAccountId,
-          name: `The5ers · ${snapshot.account.label}`,
+          name: the5ersAccountName(`The5ers · ${snapshot.account.label}`),
           broker: "The5ers",
           kind: "import",
           currency,
@@ -1276,17 +1301,37 @@ export async function syncSourcePurchases(signal?: AbortSignal) {
 }
 
 /** Cash covers the entire provider inventory, independently of trade selection. */
-export async function syncSourceCash(signal?: AbortSignal) {
+export async function syncSourceCash(signal?: AbortSignal, batch = false) {
   const { connection, client } = await sourceClient(signal);
   const inventory = await inventoryResult(client);
   const failures: { id: string; label: string }[] = [];
   let synced = 0;
+  const previous = JSON.parse((await getSetting("the5ers:cash")) ?? "{}");
+  const failed = new Set((previous.failures ?? []).map((a: { id: string }) => a.id));
+  const cached = await db.select().from(settings).where(like(settings.key, "the5ers:payouts:%"));
+  const fresh = new Set(
+    cached
+      .filter((row) => {
+        const history = JSON.parse(row.value);
+        return (
+          batch &&
+          history.importerVersion === 1 &&
+          Date.now() - Date.parse(history.retrievedAt) < 15 * 60_000
+        );
+      })
+      .map((row) => row.key.slice("the5ers:payouts:".length)),
+  );
+
   // Historical funded accounts must not wait behind dozens of evaluations.
   // Bound concurrency to avoid exhausting the shared MCP request deadline.
-  const queue = [...inventory.accounts].sort(
+  const waiting = inventory.accounts.filter((account) => !fresh.has(account.id));
+  const queue = [...waiting].sort(
     (a, b) =>
+      Number(failed.has(a.id)) - Number(failed.has(b.id)) ||
       Number(sourceProgram(b.program) === "funded") - Number(sourceProgram(a.program) === "funded"),
   );
+  if (batch) queue.splice(12);
+  const attempted = queue.length;
   await Promise.all(
     Array.from({ length: Math.min(3, queue.length) }, async () => {
       for (;;) {
@@ -1302,15 +1347,22 @@ export async function syncSourceCash(signal?: AbortSignal) {
       }
     }),
   );
+  const remaining = waiting.length - attempted + failures.length;
   let purchases: { pending?: number; synced: boolean };
   try {
-    purchases = { ...(await syncSourcePurchases(signal)), synced: true };
+    purchases =
+      !batch || remaining === 0
+        ? { ...(await syncSourcePurchases(signal)), synced: true }
+        : { synced: false };
   } catch {
     purchases = { synced: false };
   }
   const outcome = {
     accounts: inventory.accounts.map(({ ref: _ref, ...account }) => account),
-    complete: inventory.complete && !failures.length && purchases.synced,
+    complete: inventory.complete && !remaining && purchases.synced,
+    remaining,
+    checked: fresh.size + synced,
+    total: inventory.accounts.length,
     warnings: inventory.warnings,
     failures,
     synced,
@@ -1409,30 +1461,18 @@ async function fetchAndSavePayouts(
       ["funded", "instant_funded", "live"].includes(program) &&
       sourcePropStatus(account.status)
     ) {
-      const journalAccountId = links[id] ?? `the5ers_${id}`;
-      await tx
-        .insert(journalAccounts)
-        .values({
-          id: journalAccountId,
-          name: `The5ers · ${account.label}`,
-          broker: "The5ers",
-          kind: "import",
-          currency,
-          initialBalance: 0,
-          autoSync: false,
-          createdAt: new Date().toISOString(),
-        })
-        .onConflictDoNothing();
-      const [native] = await tx
-        .select()
-        .from(journalAccounts)
-        .where(eq(journalAccounts.id, journalAccountId));
-      requireValue(
-        native && (links[id] || native.broker === "The5ers") && native.currency === currency,
-        "The existing journal account has a conflicting provider or currency.",
-      );
-      links[id] = journalAccountId;
-      await setSetting("the5ers:journal-links", JSON.stringify(links), tx);
+      // Cash belongs to a prop funding phase, even when no trading account was selected.
+      const journalAccountId = links[id] ?? null;
+      if (journalAccountId) {
+        const [native] = await tx
+          .select()
+          .from(journalAccounts)
+          .where(eq(journalAccounts.id, journalAccountId));
+        requireValue(
+          native && native.currency === currency,
+          "The linked journal account has a conflicting currency.",
+        );
+      }
       await saveSnapshotPropAccount(
         tx,
         {
@@ -1460,6 +1500,7 @@ async function fetchAndSavePayouts(
     }
     const saved = {
       ...history,
+      importerVersion: 1,
       account: sourceAccount,
       rows: results,
       imported,

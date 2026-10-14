@@ -34,6 +34,9 @@ interface Overview {
     failures: { id: string; label: string }[];
     retrievedAt?: string;
     synced?: number;
+    checked?: number;
+    total?: number;
+    remaining?: number;
   } | null;
   purchases?: unknown;
 }
@@ -586,15 +589,15 @@ export function The5ersConnection() {
         {overview?.connected && (
           <>
             <p className="text-sm">
-              Connected · {overview.selection.length} selected accounts
+              Connected · {overview.selection.length} accounts selected for trades
               {!overview.canRefresh ? " · Reconnect required when access expires" : ""}
             </p>
             <details
               open={manageAccounts}
               onToggle={(event) => setManageAccounts(event.currentTarget.open)}
             >
-              <summary className="cursor-pointer text-sm font-medium">
-                Choose accounts to sync
+              <summary className="cursor-pointer rounded-md border p-3 text-sm font-medium">
+                Select trading accounts
               </summary>
               {manageAccounts && (
                 <div className="mt-3">
@@ -616,7 +619,9 @@ export function The5ersConnection() {
               )}
               {overview.cash?.complete === false && (
                 <p className="text-sm">
-                  Financial sync is incomplete. Existing ledger records are retained.
+                  {overview.cash.checked != null && overview.cash.total != null
+                    ? `${overview.cash.checked}/${overview.cash.total} account histories saved. Sync finances continues the remaining accounts.`
+                    : "Financial sync is incomplete. Existing ledger records are retained."}
                 </p>
               )}
               <div className="flex flex-wrap gap-2">
@@ -645,17 +650,33 @@ export function The5ersConnection() {
                   disabled={state.busy}
                   onClick={() =>
                     void state.run(async () => {
-                      const result = await postJson<{ data: { complete: boolean } }>(
-                        "/api/the5ers",
-                        { action: "cash.sync" },
-                      );
-                      state.refresh();
-                      window.dispatchEvent(new Event("journal-data-changed"));
-                      state.setNotice(
-                        result.data.complete
-                          ? "Financial sync completed. Open Prop firms to view the ledger."
-                          : "Financial sync is incomplete. Existing ledger records are retained.",
-                      );
+                      let previousRemaining = Infinity;
+                      for (let batch = 0; batch < 90; batch++) {
+                        const result = await postJson<{
+                          data: {
+                            complete: boolean;
+                            remaining?: number;
+                            checked?: number;
+                            total?: number;
+                          };
+                        }>("/api/the5ers", { action: "cash.sync" });
+                        state.refresh();
+                        window.dispatchEvent(new Event("journal-data-changed"));
+                        if (result.data.complete) {
+                          state.setNotice(
+                            "Financial sync completed. Open Prop firms to view the ledger.",
+                          );
+                          break;
+                        }
+                        state.setNotice(
+                          result.data.checked != null
+                            ? `${result.data.checked}/${result.data.total} account histories saved.`
+                            : "Financial sync is incomplete. Existing ledger records are retained.",
+                        );
+                        if (!result.data.remaining || result.data.remaining >= previousRemaining)
+                          break;
+                        previousRemaining = result.data.remaining;
+                      }
                     })
                   }
                 >
