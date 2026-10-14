@@ -1760,7 +1760,7 @@ it("hides legacy cash-created trading shells while preserving selected accounts 
       "The5ers-12345678",
     );
     expect(body.accounts.find((a: { id: string }) => a.id === "the5ers_capital").name).toBe(
-      "The5ers-…8490",
+      "The5ers · meta-trader-5 · …8490",
     );
   }
   expect(await db.select().from(accounts)).toHaveLength(4);
@@ -2164,4 +2164,35 @@ it("reads the actual payout and withdrawal tool schemas through the authenticate
   expect(
     (await GET(new Request("https://journal.example/api/the5ers?view=payout-contract"))).status,
   ).toBe(401);
+});
+it("updates generated account names from source metadata and preserves owner names on subsequent sync", async () => {
+  Object.assign(rows[0]!, {
+    programName: "High Stakes",
+    accountSize: 50000,
+    accountNumber: "12348086",
+  });
+  await connect();
+  const first = (await listSourceAccounts())[0]!;
+  await selectSourceAccounts([first.id], false, true);
+  await syncSourceAccount(first.id);
+  const { accounts: nativeAccounts, propAccounts: nativeProps } = await import("../src/db");
+  const { eq } = await import("drizzle-orm");
+  const id = `the5ers_${first.id}`;
+  expect((await db.select().from(nativeAccounts).where(eq(nativeAccounts.id, id)))[0]?.name).toBe(
+    "High Stakes · 50,000 · 12348086",
+  );
+  await db
+    .update(nativeAccounts)
+    .set({ name: "My summer account" })
+    .where(eq(nativeAccounts.id, id));
+  await db.update(nativeProps).set({ name: "My funding phase" }).where(eq(nativeProps.id, id));
+  await syncSourceAccount(first.id);
+  expect((await db.select().from(nativeAccounts).where(eq(nativeAccounts.id, id)))[0]?.name).toBe(
+    "My summer account",
+  );
+  expect((await db.select().from(nativeProps).where(eq(nativeProps.id, id)))[0]?.name).toBe(
+    "My funding phase",
+  );
+  for (const key of ["programName", "accountSize", "accountNumber"])
+    delete (rows[0] as unknown as Record<string, unknown>)[key];
 });

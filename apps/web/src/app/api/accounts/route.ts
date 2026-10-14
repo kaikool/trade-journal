@@ -1,4 +1,3 @@
-import { the5ersAccountName } from "@/lib/the5ers-name";
 import { asc, eq } from "drizzle-orm";
 import { accounts, trades, db } from "@/db";
 import { bad, handler, ok } from "@/server/api";
@@ -45,7 +44,7 @@ export const GET = handler(async (request: Request) => {
     return ok({
       accounts: rows.map((a) => ({
         id: a.id,
-        name: a.broker === "The5ers" ? the5ersAccountName(a.name) : a.name,
+        name: a.name,
         broker: a.broker,
         currency: a.currency,
         archivedAt: a.archivedAt,
@@ -56,7 +55,7 @@ export const GET = handler(async (request: Request) => {
   return ok({
     accounts: rows.map(({ credentialsEnc, ...safe }) => ({
       ...safe,
-      name: safe.broker === "The5ers" ? the5ersAccountName(safe.name) : safe.name,
+      name: safe.name,
       the5ersSourceId: Object.entries(links).find(([, target]) => target === safe.id)?.[0],
       the5ersSelected: selected.has(safe.id),
       connected: credentialsEnc !== null,

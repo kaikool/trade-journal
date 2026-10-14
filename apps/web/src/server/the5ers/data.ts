@@ -1,5 +1,5 @@
 import { moduleArchiveSummary, readArchivedModule, syncModuleArchive } from "./modules";
-import { the5ersAccountName } from "@/lib/the5ers-name";
+import { the5ersAccountName, the5ersDefaultName } from "@/lib/the5ers-name";
 import { createHash, randomUUID } from "node:crypto";
 import { and, or, eq, like, sql, count, inArray } from "drizzle-orm";
 import { db, settings, accounts as journalAccounts, propAccounts, propAudit, trades } from "@/db";
@@ -380,7 +380,7 @@ export async function selectSourceAccounts(
             .insert(journalAccounts)
             .values({
               id,
-              name: the5ersAccountName(`The5ers · ${account.label}`),
+              name: the5ersDefaultName(account),
               broker: "The5ers",
               kind: "import",
               currency: account.currency,
@@ -533,6 +533,37 @@ async function saveSnapshotPropAccount(
   journalAccountId: string | null,
   currency: string,
 ) {
+  const archivedRules = await getSetting(
+    `the5ers:module:the5ers_program:rules:${snapshot.account.id}:${snapshot.account.id}:1`,
+    tx,
+  );
+  const cachedSnapshot = await getSetting(`${SNAPSHOT_PREFIX}${snapshot.account.id}`, tx);
+  const savedRules = cachedSnapshot
+    ? (JSON.parse(cachedSnapshot) as SourceSnapshot).sections.rules?.data
+    : undefined;
+  const rulesForName =
+    snapshot.sections.rules?.data ?? (archivedRules ? JSON.parse(archivedRules).data : savedRules);
+  const generatedName = the5ersDefaultName(snapshot.account, rulesForName);
+  const nameKey = `the5ers:default-name:${snapshot.account.id}`;
+  const previousName = await getSetting(nameKey, tx);
+  const legacyNames = [
+    the5ersDefaultName(snapshot.account),
+    `The5ers · ${snapshot.account.label}`,
+    the5ersAccountName(`The5ers · ${snapshot.account.label}`),
+    snapshot.account.label,
+  ];
+  const mayRename = (name: string) => name === previousName || legacyNames.includes(name);
+  if (journalAccountId) {
+    const [journal] = await tx
+      .select()
+      .from(journalAccounts)
+      .where(eq(journalAccounts.id, journalAccountId));
+    if (journal?.broker === "The5ers" && mayRename(journal.name))
+      await tx
+        .update(journalAccounts)
+        .set({ name: generatedName })
+        .where(eq(journalAccounts.id, journalAccountId));
+  }
   const program =
     sourceProgram(snapshot.account.program) ??
     sourceProgram(
@@ -553,6 +584,23 @@ async function saveSnapshotPropAccount(
         eq(propAccounts.firm, "The5ers"),
       ),
     );
+  if (tracked && mayRename(tracked.name) && tracked.name !== generatedName) {
+    const updatedAt = new Date().toISOString();
+    await tx
+      .update(propAccounts)
+      .set({ name: generatedName, updatedAt })
+      .where(eq(propAccounts.id, tracked.id));
+    await tx.insert(propAudit).values({
+      id: randomUUID(),
+      entityType: "account",
+      entityId: tracked.id,
+      beforeJson: JSON.stringify(tracked),
+      afterJson: JSON.stringify({ ...tracked, name: generatedName, updatedAt }),
+      reason: "Updated default source account name",
+      createdAt: updatedAt,
+    });
+  }
+  await setSetting(nameKey, generatedName, tx);
   if (tracked && !tracked.journalAccountId && journalAccountId && tracked.currency === currency) {
     const updatedAt = new Date().toISOString();
     await tx
@@ -574,7 +622,7 @@ async function saveSnapshotPropAccount(
     const value = {
       id: `the5ers_${snapshot.account.id}`,
       firm: "The5ers",
-      name: the5ersAccountName(`The5ers · ${snapshot.account.label}`),
+      name: generatedName,
       program,
       status,
       currency,
@@ -634,7 +682,7 @@ export async function importSavedSnapshot(id: string) {
         .insert(journalAccounts)
         .values({
           id: journalAccountId,
-          name: the5ersAccountName(`The5ers · ${snapshot.account.label}`),
+          name: the5ersDefaultName(snapshot.account, snapshot.sections.rules?.data),
           broker: "The5ers",
           kind: "import",
           currency,
@@ -1682,7 +1730,7 @@ export async function syncAllSourceModules(signal?: AbortSignal) {
           .insert(journalAccounts)
           .values({
             id: journalAccountId,
-            name: the5ersAccountName(`The5ers · ${account.label}`),
+            name: the5ersDefaultName(account),
             broker: "The5ers",
             kind: "import",
             currency,
@@ -1732,6 +1780,29 @@ export async function syncAllSourceModules(signal?: AbortSignal) {
       });
     },
   );
+  if (result.complete) {
+    await db.transaction(async (tx) => {
+      await assertConnection(connection.id, tx);
+      const tracked = await tx.select().from(propAccounts).where(eq(propAccounts.firm, "The5ers"));
+      for (const account of inventory.accounts) {
+        const native = tracked.find((row) => row.id === `the5ers_${account.id}`);
+        if (!native) continue;
+        await saveSnapshotPropAccount(
+          tx,
+          {
+            account,
+            retrievedAt: new Date().toISOString(),
+            complete: false,
+            sections: {},
+            warnings: [],
+            importedExecutions: 0,
+          },
+          native.journalAccountId,
+          native.currency,
+        );
+      }
+    });
+  }
   if (!inventory.complete) {
     result.complete = false;
     result.inventoryWarnings = inventory.warnings;
