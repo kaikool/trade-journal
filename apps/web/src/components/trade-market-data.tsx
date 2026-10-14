@@ -19,7 +19,7 @@ import {
   type Resolution,
   type TradeMarketResult,
 } from "@/lib/market-data";
-import { providerInfo } from "@/lib/market-providers";
+import { providerInfo, dukascopySymbol } from "@/lib/market-providers";
 import type { MarketCsvDataset } from "@/lib/market-csv";
 import { replayFrame } from "@/lib/trade-replay";
 import { uploadChartScreenshot } from "@/lib/chart-screenshot-upload";
@@ -65,6 +65,53 @@ export function TradeMarketData({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const controller = useRef<AbortController | null>(null);
+  const automatic = useRef("");
+  useEffect(() => {
+    if (
+      saved === null ||
+      saved.history ||
+      automatic.current === trade.key ||
+      !available.some((item) => item.id === "dukascopy") ||
+      !dukascopySymbol(trade.symbol) ||
+      (trade.assetClass && !["forex", "cfd"].includes(trade.assetClass)) ||
+      !trade.closedAt ||
+      Date.parse(trade.closedAt) > Date.now()
+    )
+      return;
+    automatic.current = trade.key;
+    const request = new AbortController();
+    controller.current = request;
+    setProvider("dukascopy");
+    setSymbol(dukascopySymbol(trade.symbol)!);
+    setBusy(true);
+    void fetch(`/api/trades/${encodeURIComponent(trade.key)}/market-data`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        provider: "dukascopy",
+        symbol: dukascopySymbol(trade.symbol),
+        resolution: "1m",
+        basisConfirmed: false,
+      }),
+      signal: request.signal,
+    })
+      .then(async (response) => {
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error ?? "Candles could not be loaded.");
+        if (!request.signal.aborted) {
+          setResult(body);
+          refreshSaved();
+        }
+      })
+      .catch((cause) => {
+        if (!request.signal.aborted)
+          setError(cause instanceof Error ? cause.message : "Candles could not be loaded.");
+      })
+      .finally(() => {
+        if (!request.signal.aborted) setBusy(false);
+      });
+  }, [saved, connections, trade.key, trade.symbol, trade.closedAt]);
+
   const saveScreenshot = (dataUrl: string) =>
     uploadChartScreenshot(trade.key, trade.symbol, dataUrl);
   useEffect(() => () => controller.current?.abort(), []);

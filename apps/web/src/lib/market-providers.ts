@@ -1,3 +1,4 @@
+import { DUKASCOPY_PRICE_FACTORS } from "./dukascopy-instruments";
 import type { Resolution } from "./market-data";
 
 export interface CredentialField {
@@ -18,6 +19,15 @@ export interface ProviderInfo {
   resolutions?: Resolution[];
 }
 export const MARKET_PROVIDERS: ProviderInfo[] = [
+  {
+    id: "dukascopy",
+    name: "Dukascopy",
+    mode: "public",
+    description:
+      "Free forex and metals candles. No account or API key required; prices may differ from your broker.",
+    symbolHint: "Forex: EURUSD. Gold: XAUUSD. Bid prices; latest candles may be delayed.",
+    fields: [],
+  },
   {
     id: "london-strategic-edge",
     name: "London Strategic Edge",
@@ -99,3 +109,35 @@ export const MARKET_PROVIDERS: ProviderInfo[] = [
   },
 ];
 export const providerInfo = (id: string) => MARKET_PROVIDERS.find((item) => item.id === id);
+
+const DUKASCOPY_CURRENCIES = new Set([
+  "EUR",
+  "USD",
+  "GBP",
+  "JPY",
+  "CHF",
+  "AUD",
+  "NZD",
+  "CAD",
+  "NOK",
+  "SEK",
+  "SGD",
+  "HKD",
+  "ZAR",
+  "MXN",
+  "TRY",
+  "PLN",
+  "CNH",
+  "XAU",
+  "XAG",
+]);
+export function dukascopySymbol(value: string): string | null {
+  const symbol = value.toUpperCase().replace(/[_/ -]/g, "");
+  return Object.hasOwn(DUKASCOPY_PRICE_FACTORS, symbol) &&
+    /^[A-Z]{6}$/.test(symbol) &&
+    DUKASCOPY_CURRENCIES.has(symbol.slice(0, 3)) &&
+    DUKASCOPY_CURRENCIES.has(symbol.slice(3)) &&
+    symbol.slice(0, 3) !== symbol.slice(3)
+    ? symbol
+    : null;
+}

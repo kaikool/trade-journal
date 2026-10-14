@@ -101,10 +101,10 @@ export const POST = handler(
             (body.dataset === "crypto" ? row.assetClass === "crypto" : row.assetClass === "equity"),
           "Choose the Alpaca dataset that matches this trade's asset class.",
         );
-      if (provider.id === "oanda")
+      if (["oanda", "dukascopy"].includes(provider.id))
         requireValue(
           row.assetClass == null || ["forex", "cfd"].includes(row.assetClass),
-          "OANDA supports forex and CFD instruments.",
+          "This provider supports forex and CFD instruments.",
         );
       const trade = await rowToTrade(row);
       const fingerprint = await estimateFingerprint(trade);
