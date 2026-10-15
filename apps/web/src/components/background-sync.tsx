@@ -24,14 +24,14 @@ const SyncContext = createContext<SyncContextValue>({
 });
 
 function formatRelativeTime(timestamp: number | null): string {
-  if (!timestamp) return "Chưa đồng bộ";
+  if (!timestamp) return "Never";
   const diffSec = Math.floor((Date.now() - timestamp) / 1000);
-  if (diffSec < 60) return "vừa xong";
+  if (diffSec < 60) return "just now";
   const diffMin = Math.floor(diffSec / 60);
-  if (diffMin < 60) return `${diffMin} phút trước`;
+  if (diffMin < 60) return `${diffMin}m ago`;
   const diffHours = Math.floor(diffMin / 60);
-  if (diffHours < 24) return `${diffHours} giờ trước`;
-  return `${Math.floor(diffHours / 24)} ngày trước`;
+  if (diffHours < 24) return `${diffHours}h ago`;
+  return `${Math.floor(diffHours / 24)}d ago`;
 }
 
 export function BackgroundSyncProvider({ children }: { children: React.ReactNode }) {
@@ -58,7 +58,7 @@ export function BackgroundSyncProvider({ children }: { children: React.ReactNode
           localStorage.setItem(AUTO_SYNC_STORAGE_KEY, String(now));
         } catch {}
         setLastSync(now);
-        setLabelTime("vừa xong");
+        setLabelTime("just now");
         // Notify journal hooks to refresh views silently
         window.dispatchEvent(new Event("journal-data-changed"));
         window.dispatchEvent(new Event("journal-accounts-changed"));
@@ -160,8 +160,8 @@ export function GlobalSyncButton({
   const { syncing, labelTime, performSync } = useBackgroundSync();
 
   const tooltipText = syncing
-    ? "Đang đồng bộ dữ liệu ngầm (lệnh, payout, tài khoản mới)..."
-    : `Đồng bộ dữ liệu (Lần cuối: ${labelTime || "vừa xong"}). Tự động đồng bộ mỗi 30 phút.`;
+    ? "Syncing data in background (trades, payouts, new accounts)..."
+    : `Sync all accounts (Last: ${labelTime || "just now"}). Auto-syncs every 30m.`;
 
   return (
     <HoverHint content={tooltipText} side="bottom">
@@ -171,7 +171,7 @@ export function GlobalSyncButton({
         size={iconOnly ? "icon" : "sm"}
         disabled={syncing}
         onClick={() => void performSync({ force: true, all: true })}
-        aria-label="Đồng bộ dữ liệu"
+        aria-label="Sync all accounts"
         className={cn(
           "relative text-muted-foreground hover:text-foreground transition-all",
           iconOnly ? "h-9 w-9 shrink-0" : "gap-1.5 h-8 px-2.5 text-xs font-medium",
@@ -179,7 +179,7 @@ export function GlobalSyncButton({
         )}
       >
         <RefreshCw className={cn("h-4 w-4 shrink-0", syncing && "animate-spin text-brand")} />
-        {!iconOnly && <span className="truncate">{syncing ? "Đang đồng bộ..." : "Đồng bộ"}</span>}
+        {!iconOnly && <span className="truncate">{syncing ? "Syncing..." : "Sync"}</span>}
       </Button>
     </HoverHint>
   );

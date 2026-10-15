@@ -34,7 +34,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { postJson, useApi } from "@/lib/use-api";
-import { fmtMoney } from "@/lib/utils";
+import { cn, fmtMoney } from "@/lib/utils";
 import { MonetaryValue, MonetaryField } from "@/components/privacy";
 import { DailyAutoSyncToggle } from "@/components/daily-auto-sync-toggle";
 import { isEnabledSyncBroker } from "@/lib/supported-brokers";
@@ -317,23 +317,27 @@ function Accounts() {
                       Archived
                     </Badge>
                   ) : null}
-                  <Badge variant="secondary" className="text-xs py-0">
-                    {account.the5ersSourceId ? "Synced" : account.kind}
-                  </Badge>
-                  {account.the5ersSourceId && (
+                  {account.the5ersSourceId ? (
                     <Badge variant="outline" className="text-xs py-0">
                       The5ers
+                    </Badge>
+                  ) : account.broker && account.kind === "sync" ? (
+                    <Badge variant="outline" className="text-xs py-0">
+                      {account.broker}
+                    </Badge>
+                  ) : account.kind === "manual" ? (
+                    <Badge variant="secondary" className="text-xs py-0">
+                      Manual
+                    </Badge>
+                  ) : (
+                    <Badge variant="secondary" className="text-xs py-0">
+                      {account.kind}
                     </Badge>
                   )}
                   {account.propProgram && (
                     <Badge variant="outline" className="text-xs py-0">
                       {account.propProgram}
                     </Badge>
-                  )}
-                  {account.broker && account.broker !== "The5ers" && (
-                    <span className="text-xs font-normal text-muted-foreground">
-                      {account.broker}
-                    </span>
                   )}
                 </div>
               </CardTitle>
@@ -424,20 +428,29 @@ function Accounts() {
                     <MonetaryValue>{fmtMoney(account.snapshot.equity)}</MonetaryValue>
                   </span>
                   <span className="ml-2 text-xs text-muted-foreground">
-                    {account.snapshot.positions.length} open positions · synced{" "}
-                    {account.lastSyncAt?.slice(0, 16).replace("T", " ")}
+                    {account.snapshot.positions.length} open position
+                    {account.snapshot.positions.length === 1 ? "" : "s"}
                   </span>
                 </div>
               )}
-              {account.kind === "sync" &&
-                isEnabledSyncBroker(account.broker) &&
-                !account.archivedAt && (
-                  <DailyAutoSyncToggle
-                    accountId={account.id}
-                    enabled={account.autoSync}
-                    onSaved={refresh}
-                  />
+              <div className="flex flex-wrap items-center justify-between gap-1 text-xs text-muted-foreground">
+                <span>
+                  {account.lastSyncAt
+                    ? `Updated ${account.lastSyncAt.slice(0, 16).replace("T", " ")}`
+                    : "Not synced yet"}
+                </span>
+                {(account.kind === "sync" || account.the5ersSourceId) && !account.archivedAt && (
+                  <span className="inline-flex items-center gap-1.5 text-xs">
+                    <span
+                      className={cn(
+                        "h-1.5 w-1.5 rounded-full",
+                        account.autoSync ? "bg-emerald-500" : "bg-muted-foreground/40",
+                      )}
+                    />
+                    {account.autoSync ? "Auto-sync" : "Manual sync"}
+                  </span>
                 )}
+              </div>
               <details className="rounded-md border p-3">
                 <summary className="cursor-pointer text-sm">Account settings</summary>
                 <div className="mt-3 grid grid-cols-1 items-end gap-3 sm:grid-cols-2">
@@ -516,6 +529,17 @@ function Accounts() {
                     </div>
                   )}
                 </div>
+                {account.kind === "sync" &&
+                  isEnabledSyncBroker(account.broker) &&
+                  !account.archivedAt && (
+                    <div className="pt-2 border-t">
+                      <DailyAutoSyncToggle
+                        accountId={account.id}
+                        enabled={account.autoSync}
+                        onSaved={refresh}
+                      />
+                    </div>
+                  )}
                 <div className="flex flex-wrap gap-2">
                   <Button
                     variant="outline"
