@@ -26,7 +26,7 @@ export async function runGlobalSync(
   options: { force?: boolean; all?: boolean; deadlineMs?: number } = {},
 ): Promise<GlobalSyncResult> {
   const now = Date.now();
-  const COOLDOWN_MS = 25_000; // 25s debounce cooldown
+  const COOLDOWN_MS = 10_000; // 10s debounce cooldown
 
   if (!options.force && inFlightSync) {
     return inFlightSync;
@@ -42,7 +42,7 @@ export async function runGlobalSync(
   }
 
   const syncPromise = (async () => {
-    const deadline = Date.now() + (options.deadlineMs ?? 115_000);
+    const deadline = Date.now() + (options.deadlineMs ?? 8_500);
 
     // 1. Sync standard broker accounts
     const conditions = [
@@ -65,6 +65,10 @@ export async function runGlobalSync(
     let failedBrokers = 0;
 
     for (const acc of brokerAccounts) {
+      if (Date.now() >= deadline) {
+        failedBrokers += brokerAccounts.length - (syncedBrokers + failedBrokers);
+        break;
+      }
       try {
         await syncAccount(acc.id);
         syncedBrokers++;
@@ -81,19 +85,22 @@ export async function runGlobalSync(
     let the5ersResult: GlobalSyncResult["the5ers"];
     try {
       const the5ersConn = await connectionSummary();
-      if (the5ersConn.connected) {
+      if (the5ersConn.connected && Date.now() < deadline) {
         let newAccountsDiscovered = 0;
+        let inventoryAccounts:
+          Awaited<ReturnType<typeof ensureAllInventoryAccountsSaved>>["accounts"] | undefined;
         try {
           const invResult = await ensureAllInventoryAccountsSaved(
             AbortSignal.timeout(Math.max(1000, deadline - Date.now())),
           );
           newAccountsDiscovered = invResult.accountsCount;
+          inventoryAccounts = invResult.accounts;
         } catch (invErr) {
           console.error("[global-sync] The5ers ensure inventory failed", invErr);
         }
 
         const remainingMs = Math.max(1000, deadline - Date.now());
-        const scheduled = await syncScheduledThe5ers(Date.now() + remainingMs);
+        const scheduled = await syncScheduledThe5ers(Date.now() + remainingMs, inventoryAccounts);
         the5ersResult = {
           checked: scheduled.checked,
           synced: scheduled.synced,

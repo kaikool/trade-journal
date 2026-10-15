@@ -213,13 +213,51 @@ export const postJson = async <T = unknown>(
   body: unknown,
   method: "POST" | "PATCH" | "PUT" | "DELETE" = "POST",
 ): Promise<T> => {
-  const response = await fetch(url, {
-    method,
-    headers: { "Content-Type": "application/json" },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const data = (await response.json()) as T & { error?: string };
-  if (!response.ok) throw new Error(data.error ?? `Request failed (${response.status})`);
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (
+      msg.includes("Load failed") ||
+      msg.includes("Failed to fetch") ||
+      msg.includes("NetworkError") ||
+      msg.includes("aborted")
+    ) {
+      throw new Error("Request timed out or connection was interrupted. Please try again.");
+    }
+    throw err;
+  }
+
+  let data: (Record<string, unknown> & { error?: string }) | null = null;
+  if (typeof response.text === "function") {
+    const text = await response.text();
+    try {
+      data = text ? (JSON.parse(text) as Record<string, unknown> & { error?: string }) : null;
+    } catch {
+      // Non-JSON response (e.g. 504 Gateway Timeout HTML page)
+    }
+  } else if (typeof response.json === "function") {
+    try {
+      data = (await response.json()) as Record<string, unknown> & { error?: string };
+    } catch {
+      // Non-JSON response
+    }
+  }
+
+  if (!response.ok) {
+    const errorMsg =
+      data?.error ??
+      (response.status === 504
+        ? "Server timed out processing the request."
+        : `Request failed (${response.status})`);
+    throw new Error(errorMsg);
+  }
+
   clearApiCache();
-  return data;
+  return (data ?? {}) as T;
 };

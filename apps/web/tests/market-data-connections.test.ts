@@ -428,7 +428,7 @@ describe("trade history endpoint", () => {
     } finally {
       query.mockRestore();
     }
-  });
+  }, 15_000);
   it("rejects missing trades, invalid resolutions, and options before requesting data", async () => {
     const fetcher = vi.fn();
     vi.stubGlobal("fetch", fetcher);

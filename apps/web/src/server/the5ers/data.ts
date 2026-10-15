@@ -832,13 +832,17 @@ export async function syncSourceAccount(
   id: string,
   signal?: AbortSignal,
   automatic = false,
+  cachedAccount?: ProviderAccount,
 ): Promise<SourceSnapshot> {
   requireValue(
     (await selectedAccounts()).some((account) => account.id === id),
     "Select this The5ers account before syncing it.",
   );
   const { connection, client } = await sourceClient(signal);
-  const account = (await inventoryResult(client)).accounts.find((a) => a.id === id);
+  const account =
+    cachedAccount?.id === id
+      ? cachedAccount
+      : (await inventoryResult(client)).accounts.find((a) => a.id === id);
   requireValue(
     account,
     "The selected The5ers account identity changed or is unavailable. Refresh and select it again.",
@@ -858,27 +862,33 @@ export async function syncSourceAccount(
     ],
     importedExecutions: 0,
   };
-  for (const [name, tool, operation] of [
+
+  const sectionsToFetch = [
     ["balance", "account", "balance"],
     ["performance", "account", "statistics"],
     ["rules", "program", "rules"],
     ["consistency", "consistency", "list"],
     ["payout", "payout", "eligibility"],
-  ] as const) {
-    try {
-      snapshot.sections[name] = {
-        available: true,
-        data: publicData(await client.read(tool, operation, { account_ref: account.ref })),
-      };
-    } catch (error) {
-      snapshot.complete = false;
-      snapshot.sections[name] = {
-        available: false,
-        error:
-          error instanceof RequestError ? error.message : "This section could not be retrieved.",
-      };
-    }
-  }
+  ] as const;
+
+  await Promise.all(
+    sectionsToFetch.map(async ([name, tool, operation]) => {
+      try {
+        const res = await client.read(tool, operation, { account_ref: account.ref });
+        snapshot.sections[name] = {
+          available: true,
+          data: publicData(res),
+        };
+      } catch (error) {
+        snapshot.complete = false;
+        snapshot.sections[name] = {
+          available: false,
+          error:
+            error instanceof RequestError ? error.message : "This section could not be retrieved.",
+        };
+      }
+    }),
+  );
   let positionCache: PositionRefs | undefined;
   let journalPositions: { rows: unknown[]; currency: string; complete: boolean } | undefined;
   try {
@@ -1263,7 +1273,10 @@ export async function readSourceSection(resource: string, id?: string, positionK
   if (resource === "payoutHistory") return fetchAndSavePayouts(client, connection.id, account, id!);
   return publicData(await client.read(read.tool, read.operation, { account_ref: account.ref }));
 }
-export async function syncScheduledThe5ers(deadline = Date.now() + 240_000) {
+export async function syncScheduledThe5ers(
+  deadline = Date.now() + 240_000,
+  preloadedAccounts?: ProviderAccount[],
+) {
   const candidates = (await selectedAccounts()).filter((account) => account.autoSync);
   const native = candidates.some((a) => a.journalAccountId)
     ? await db
@@ -1276,27 +1289,40 @@ export async function syncScheduledThe5ers(deadline = Date.now() + 240_000) {
 
   if (Date.now() >= deadline)
     return { checked: eligible.length, synced: 0, failed: eligible.length };
-  let available: SourceAccount[];
-  try {
-    available = (await listSourceInventory()).accounts;
-  } catch (error) {
-    console.error("[cron] The5ers inventory unavailable", {
-      errorName: error instanceof Error ? error.name : "UnknownError",
-    });
-    return { checked: eligible.length, synced: 0, failed: eligible.length };
+  let available: ProviderAccount[];
+  if (preloadedAccounts && preloadedAccounts.length > 0) {
+    available = preloadedAccounts;
+  } else {
+    try {
+      const { client } = await sourceClient(
+        AbortSignal.timeout(Math.max(1000, deadline - Date.now())),
+      );
+      available = (await inventoryResult(client)).accounts;
+    } catch (error) {
+      console.error("[cron] The5ers inventory unavailable", {
+        errorName: error instanceof Error ? error.name : "UnknownError",
+      });
+      return { checked: eligible.length, synced: 0, failed: eligible.length };
+    }
   }
+  const accountMap = new Map(available.map((a) => [a.id, a]));
   const activeIds = new Set(available.filter((a) => isActiveSource(a.status)).map((a) => a.id));
   const selected = eligible.filter((a) => activeIds.has(a.id));
   let synced = 0,
     skipped = 0,
     failed = 0;
   for (const account of selected) {
+    if (Date.now() >= deadline) {
+      failed += selected.length - (synced + skipped + failed);
+      break;
+    }
     try {
       requireValue(Date.now() < deadline, "The5ers scheduled sync time budget was exhausted.");
       await syncSourceAccount(
         account.id,
         AbortSignal.timeout(Math.max(1, deadline - Date.now())),
         true,
+        accountMap.get(account.id),
       );
       synced++;
     } catch (error) {
@@ -1794,7 +1820,7 @@ export async function ensureAllInventoryAccountsSaved(signal?: AbortSignal) {
     await setSetting("the5ers:journal-links", JSON.stringify(links), tx);
     await setSetting(SELECTION_KEY, JSON.stringify([...selectionMap.values()]), tx);
   });
-  return { accountsCount: inventory.accounts.length };
+  return { accountsCount: inventory.accounts.length, accounts: inventory.accounts };
 }
 
 /** Complete 1-click sync of all The5ers MCP data into the database */

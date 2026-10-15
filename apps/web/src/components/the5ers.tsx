@@ -661,11 +661,23 @@ export function The5ersConnection() {
                   onClick={() =>
                     void state.run(async () => {
                       state.setNotice("Syncing The5ers accounts, trades, and payouts...");
-                      await postJson("/api/sync", { force: true, all: true });
+                      const result = await postJson<{
+                        the5ers?: {
+                          synced?: number;
+                          checked?: number;
+                          failed?: number;
+                          purchases?: { synced: boolean };
+                        };
+                      }>("/api/sync", { force: true, all: true });
                       state.refresh();
                       window.dispatchEvent(new Event("journal-data-changed"));
                       window.dispatchEvent(new Event("journal-accounts-changed"));
-                      state.setNotice("All The5ers records have been successfully synchronized.");
+                      const syncedCount = result?.the5ers?.synced ?? 0;
+                      state.setNotice(
+                        syncedCount > 0
+                          ? `Successfully synced ${syncedCount} The5ers account(s), trades, and payouts.`
+                          : "The5ers synchronization completed.",
+                      );
                     })
                   }
                 >

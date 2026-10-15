@@ -14,9 +14,42 @@ export function acquireJson<T>(url: string): { promise: Promise<T>; release: () 
     const next: PendingRequest = { controller, users: 0, promise: Promise.resolve() };
     next.promise = fetch(url, { signal: controller.signal, cache: "no-store" })
       .then(async (response) => {
-        const body = await response.json();
-        if (!response.ok) throw new Error(body.error ?? `Request failed (${response.status})`);
-        return body;
+        let body: { error?: string } | null = null;
+        if (typeof response.text === "function") {
+          const text = await response.text();
+          try {
+            body = text ? (JSON.parse(text) as { error?: string }) : null;
+          } catch {
+            // Non-JSON response
+          }
+        } else if (typeof response.json === "function") {
+          try {
+            body = (await response.json()) as { error?: string };
+          } catch {
+            // Non-JSON response
+          }
+        }
+        if (!response.ok) {
+          const errorMsg =
+            body?.error ??
+            (response.status === 504
+              ? "Server timed out processing the request."
+              : `Request failed (${response.status})`);
+          throw new Error(errorMsg);
+        }
+        return (body ?? {}) as T;
+      })
+      .catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (
+          msg.includes("Load failed") ||
+          msg.includes("Failed to fetch") ||
+          msg.includes("NetworkError") ||
+          msg.includes("aborted")
+        ) {
+          throw new Error("Request timed out or connection was interrupted. Please try again.");
+        }
+        throw err;
       })
       .finally(() => {
         if (pending.get(url) === next) pending.delete(url);
