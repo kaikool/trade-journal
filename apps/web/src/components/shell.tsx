@@ -70,6 +70,7 @@ function NavLink({
     <HoverHint content={collapsed ? label : null} side="right">
       <Link
         href={href}
+        prefetch={true}
         aria-current={active ? "page" : undefined}
         className={cn(
           "journal-sidebar-nav-link relative flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm transition-colors",

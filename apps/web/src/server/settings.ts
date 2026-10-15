@@ -24,12 +24,25 @@ export const getJournalDefaults = async (
   }
 };
 
+const settingsCache = new Map<string, { value: string | null; expires: number }>();
+const SETTINGS_CACHE_TTL = 10_000;
+
 export const getSetting = async (
   key: string,
   executor: JournalExecutor = db,
 ): Promise<string | null> => {
+  if (executor === db) {
+    const cached = settingsCache.get(key);
+    if (cached && cached.expires > Date.now()) {
+      return cached.value;
+    }
+  }
   const [row] = await executor.select().from(settings).where(eq(settings.key, key)).limit(1);
-  return row?.value ?? null;
+  const val = row?.value ?? null;
+  if (executor === db) {
+    settingsCache.set(key, { value: val, expires: Date.now() + SETTINGS_CACHE_TTL });
+  }
+  return val;
 };
 
 export const setSetting = async (
@@ -37,6 +50,7 @@ export const setSetting = async (
   value: string,
   executor: JournalExecutor = db,
 ): Promise<void> => {
+  settingsCache.delete(key);
   await executor
     .insert(settings)
     .values({ key, value })
@@ -44,6 +58,7 @@ export const setSetting = async (
 };
 
 export const deleteSetting = async (key: string, executor: JournalExecutor = db): Promise<void> => {
+  settingsCache.delete(key);
   await executor.delete(settings).where(eq(settings.key, key));
 };
 

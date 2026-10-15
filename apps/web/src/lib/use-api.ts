@@ -10,11 +10,31 @@ export interface ApiState<T> {
   refresh: () => void;
 }
 
-/** Deduplicate concurrent reads and cancel requests when their last consumer leaves. */
+interface CacheItem<T> {
+  data: T;
+  timestamp: number;
+}
+
+const apiCache = new Map<string, CacheItem<unknown>>();
+const STALE_TIME_MS = 60_000;
+
+export function clearApiCache(prefix?: string) {
+  if (!prefix) {
+    apiCache.clear();
+  } else {
+    for (const key of apiCache.keys()) {
+      if (key.startsWith(prefix)) apiCache.delete(key);
+    }
+  }
+}
+
+/** Deduplicate concurrent reads and cache completed responses for instant page transitions. */
 export const useApi = <T>(url: string | null): ApiState<T> => {
-  const [data, setData] = useState<T | null>(null);
+  const cached = url ? (apiCache.get(url) as CacheItem<T> | undefined) : undefined;
+
+  const [data, setData] = useState<T | null>(() => cached?.data ?? null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState<boolean>(Boolean(url));
+  const [loading, setLoading] = useState<boolean>(() => Boolean(url && !cached));
   const [tick, setTick] = useState(0);
   const [dataUrl, setDataUrl] = useState(url);
 
@@ -26,13 +46,29 @@ export const useApi = <T>(url: string | null): ApiState<T> => {
       setDataUrl(null);
       return;
     }
+
+    const currentCached = apiCache.get(url) as CacheItem<T> | undefined;
+    if (currentCached) {
+      setData(currentCached.data);
+      setDataUrl(url);
+      const stillFresh = Date.now() - currentCached.timestamp < STALE_TIME_MS;
+      if (stillFresh && tick === 0) {
+        setLoading(false);
+        return;
+      }
+    }
+
     let cancelled = false;
-    setLoading(true);
+    if (!currentCached) {
+      setLoading(true);
+    }
     setError(null);
+
     const request = acquireJson<T>(url);
     request.promise
       .then((body) => {
         if (cancelled) return;
+        apiCache.set(url, { data: body, timestamp: Date.now() });
         // Render fresh data as a transition so React yields to the browser mid-render
         // instead of blocking the main thread for the whole page.
         startTransition(() => {
@@ -45,11 +81,12 @@ export const useApi = <T>(url: string | null): ApiState<T> => {
       .catch((cause: unknown) => {
         if (!cancelled) {
           setError(cause instanceof Error ? cause.message : "Network error");
-          setData(null);
+          if (!currentCached) setData(null);
           setDataUrl(url);
           setLoading(false);
         }
       });
+
     return () => {
       cancelled = true;
       request.release();
@@ -58,22 +95,35 @@ export const useApi = <T>(url: string | null): ApiState<T> => {
 
   useEffect(() => {
     if (!url) return;
-    const changed = () => setTick((value) => value + 1);
+    const changed = () => {
+      clearApiCache();
+      setTick((value) => value + 1);
+    };
+    const accountsChanged = () => {
+      clearApiCache("/api/accounts");
+      setTick((value) => value + 1);
+    };
     window.addEventListener("journal-data-changed", changed);
-    if (url.startsWith("/api/accounts"))
-      window.addEventListener("journal-accounts-changed", changed);
+    window.addEventListener("journal-accounts-changed", accountsChanged);
     return () => {
       window.removeEventListener("journal-data-changed", changed);
-      window.removeEventListener("journal-accounts-changed", changed);
+      window.removeEventListener("journal-accounts-changed", accountsChanged);
     };
   }, [url]);
 
-  const refresh = useCallback(() => setTick((value) => value + 1), []);
+  const refresh = useCallback(() => {
+    if (url) apiCache.delete(url);
+    setTick((value) => value + 1);
+  }, [url]);
+
   const current = dataUrl === url;
+  const currentCached = url ? (apiCache.get(url) as CacheItem<T> | undefined) : undefined;
+  const effectiveData = current ? data : (currentCached?.data ?? null);
+
   return {
-    data: current ? data : null,
+    data: effectiveData,
     error: current ? error : null,
-    loading: Boolean(url) && (!current || loading),
+    loading: Boolean(url) && (!effectiveData || (current && loading)),
     refresh,
   };
 };
@@ -90,5 +140,6 @@ export const postJson = async <T = unknown>(
   });
   const data = (await response.json()) as T & { error?: string };
   if (!response.ok) throw new Error(data.error ?? `Request failed (${response.status})`);
+  clearApiCache();
   return data;
 };

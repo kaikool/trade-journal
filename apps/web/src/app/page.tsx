@@ -12,13 +12,21 @@ import type {
 import { dayKeyOf, relativeDrawdownCurve } from "@luxalgo/journal-core";
 import { CurrencyNotice } from "@/components/currency-notice";
 import type { CurrencyScope } from "@/lib/currencies";
+import dynamic from "next/dynamic";
 import { CalendarPnl } from "@/components/calendar-pnl";
 import { DailyBars } from "@/components/charts/daily-bars";
 import { EdgeRadar } from "@/components/charts/edge-radar";
 import { EquityArea } from "@/components/charts/equity-area";
 import { Gauge } from "@/components/charts/gauge";
 import { RelativeDrawdownBars } from "@/components/charts/relative-drawdown-bars";
-import { TimeHeatmap } from "@/components/charts/time-heatmap";
+
+const TimeHeatmap = dynamic(
+  () => import("@/components/charts/time-heatmap").then((m) => m.TimeHeatmap),
+  {
+    ssr: false,
+    loading: () => <Skeleton className="h-64 w-full" />,
+  },
+);
 import {
   ArrowUpDown,
   CalendarCheck2,
