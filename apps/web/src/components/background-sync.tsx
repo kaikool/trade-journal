@@ -178,7 +178,7 @@ export function GlobalSyncButton({
           className,
         )}
       >
-        <RefreshCw className={cn("h-4 w-4 shrink-0", syncing && "animate-spin text-brand")} />
+        <RefreshCw className={cn("h-4 w-4 shrink-0", syncing && "animate-spin text-foreground")} />
         {!iconOnly && <span className="truncate">{syncing ? "Syncing..." : "Sync"}</span>}
       </Button>
     </HoverHint>

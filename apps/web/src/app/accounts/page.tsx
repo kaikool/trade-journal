@@ -34,7 +34,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { postJson, useApi } from "@/lib/use-api";
-import { cn, fmtMoney } from "@/lib/utils";
+import { fmtMoney } from "@/lib/utils";
 import { MonetaryValue, MonetaryField } from "@/components/privacy";
 import { DailyAutoSyncToggle } from "@/components/daily-auto-sync-toggle";
 import { isEnabledSyncBroker } from "@/lib/supported-brokers";
@@ -305,7 +305,7 @@ function Accounts() {
                 </span>
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                   {account.isActive ? (
-                    <Badge className="bg-emerald-600 text-white hover:bg-emerald-700 text-xs py-0">
+                    <Badge variant="secondary" className="text-xs py-0">
                       Active
                     </Badge>
                   ) : account.propStatus ? (
@@ -408,10 +408,7 @@ function Accounts() {
                   <span className="text-xs font-medium sm:text-sm">Show in Dashboard & Trades</span>
                 </label>
                 {account.visibleInJournal ? (
-                  <Badge
-                    variant="outline"
-                    className="text-xs border-emerald-500/40 text-emerald-500 bg-emerald-500/10"
-                  >
+                  <Badge variant="secondary" className="text-xs">
                     Displayed
                   </Badge>
                 ) : (
@@ -440,15 +437,7 @@ function Accounts() {
                     : "Not synced yet"}
                 </span>
                 {(account.kind === "sync" || account.the5ersSourceId) && !account.archivedAt && (
-                  <span className="inline-flex items-center gap-1.5 text-xs">
-                    <span
-                      className={cn(
-                        "h-1.5 w-1.5 rounded-full",
-                        account.autoSync ? "bg-emerald-500" : "bg-muted-foreground/40",
-                      )}
-                    />
-                    {account.autoSync ? "Auto-sync" : "Manual sync"}
-                  </span>
+                  <span>{account.autoSync ? "Auto-sync" : "Manual sync"}</span>
                 )}
               </div>
               <details className="rounded-md border p-3">
