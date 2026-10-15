@@ -2,7 +2,6 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { sourceStatus, defaultSourceVisible } from "@/lib/the5ers-status";
-import { continueModuleSync, type ModuleSyncProgress } from "@/lib/the5ers-sync-runner";
 import { useApi, postJson } from "@/lib/use-api";
 import { Badge } from "./ui/badge";
 import {
@@ -541,7 +540,6 @@ function SourceValue({ value, depth = 0 }: { value: unknown; depth?: number }) {
 export function The5ersConnection() {
   const state = useSource("/api/the5ers?view=connection"),
     overview = state.data;
-  const privacy = usePrivacy();
   return (
     <Card>
       <CardHeader>
@@ -608,10 +606,10 @@ export function The5ersConnection() {
             <div className="space-y-3 rounded-md border p-4 bg-muted/20">
               <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <p className="text-sm font-semibold">Sync all The5ers data into Database</p>
+                  <p className="text-sm font-semibold">Synchronize The5ers data</p>
                   <p className="text-xs text-muted-foreground">
-                    Automatically sync all accounts, challenge expenses, financial payouts, and
-                    position history into the database.
+                    Sync accounts, challenge expenses, payouts, and trading positions into the
+                    database.
                   </p>
                 </div>
                 <Button
@@ -619,152 +617,33 @@ export function The5ersConnection() {
                   disabled={state.busy}
                   onClick={() =>
                     void state.run(async () => {
-                      state.setNotice("Initializing all The5ers accounts in database...");
-                      await postJson("/api/the5ers", { action: "sync.init" });
-                      window.dispatchEvent(new Event("journal-data-changed"));
-
-                      state.setNotice("Syncing expenses and purchases...");
-                      try {
-                        await postJson("/api/the5ers", { action: "purchases.sync" });
-                      } catch {}
-                      window.dispatchEvent(new Event("journal-data-changed"));
-
-                      state.setNotice("Syncing payouts and financial cash history...");
-                      let previousRemaining = Infinity;
-                      for (let batch = 0; batch < 90; batch++) {
-                        const result = await postJson<{
-                          data: {
-                            complete: boolean;
-                            remaining?: number;
-                            checked?: number;
-                            total?: number;
-                          };
-                        }>("/api/the5ers", { action: "cash.sync" });
-                        state.refresh();
-                        window.dispatchEvent(new Event("journal-data-changed"));
-                        if (result.data.complete) break;
-                        state.setNotice(
-                          result.data.checked != null
-                            ? `Financial history: ${result.data.checked}/${result.data.total} account histories saved.`
-                            : "Syncing financial history...",
-                        );
-                        if (!result.data.remaining || result.data.remaining >= previousRemaining)
-                          break;
-                        previousRemaining = result.data.remaining;
-                      }
-
-                      state.setNotice("Syncing module sections and trade history...");
-                      await continueModuleSync(
-                        async () =>
-                          (
-                            await postJson<{ data: ModuleSyncProgress }>("/api/the5ers", {
-                              action: "modules.sync",
-                            })
-                          ).data,
-                        (result) => {
-                          if (!result.busy) {
-                            state.refresh();
-                            window.dispatchEvent(new Event("journal-data-changed"));
-                          }
-                          state.setNotice(
-                            result.busy
-                              ? "Saving The5ers position history into database..."
-                              : result.complete
-                                ? "Completed! All The5ers accounts and records have been successfully saved into the database."
-                                : `Module sections saved: ${result.saved}/${result.total}. ${result.failed ?? 0} source reads failed.`,
-                          );
-                        },
-                      );
+                      state.setNotice("Syncing The5ers accounts, trades, and payouts...");
+                      await postJson("/api/sync", { force: true, all: true });
                       state.refresh();
                       window.dispatchEvent(new Event("journal-data-changed"));
+                      window.dispatchEvent(new Event("journal-accounts-changed"));
+                      state.setNotice("All The5ers records have been successfully synchronized.");
                     })
                   }
                 >
-                  Sync all data
+                  Sync now
                 </Button>
               </div>
 
-              {overview.moduleSync && (
+              {(overview.cash?.retrievedAt || overview.moduleSync?.updatedAt) && (
                 <p className="text-xs text-muted-foreground">
-                  Module sections saved: {overview.moduleSync.saved}/{overview.moduleSync.total}
-                  {overview.moduleSync.failed
-                    ? ` · ${overview.moduleSync.failed} source reads failed`
-                    : ""}
-                </p>
-              )}
-              {(overview.moduleSync?.updatedAt ?? overview.cash?.retrievedAt) && (
-                <p className="text-xs text-muted-foreground">
-                  Last attempt:{" "}
+                  Last synced:{" "}
                   {formatSourceDate(
-                    overview.moduleSync?.updatedAt ?? overview.cash?.retrievedAt,
+                    overview.cash?.retrievedAt ?? overview.moduleSync?.updatedAt,
                     overview.timeZone ?? "UTC",
                   )}
                 </p>
               )}
-              {overview.moduleSync?.errors?.[0]?.message && (
-                <p className="text-sm text-destructive">{overview.moduleSync.errors[0].message}</p>
-              )}
-              {overview.cash?.checked != null && (
+              {overview.cash?.payouts && overview.cash.payouts.recorded > 0 && (
                 <p className="text-xs text-muted-foreground">
-                  Account histories: {overview.cash.checked}/{overview.cash.total}
+                  Payout receipts recorded: {overview.cash.payouts.recorded}
                 </p>
               )}
-              {overview.cash?.payouts && (
-                <p className="text-xs text-muted-foreground">
-                  Payouts found: {overview.cash.payouts.found} · Recorded receipts:{" "}
-                  {overview.cash.payouts.recorded}
-                </p>
-              )}
-              <div className="flex flex-wrap gap-2 pt-1 border-t">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={state.busy}
-                  onClick={() =>
-                    void state.run(async () => {
-                      const result = await postJson<{
-                        data: { imported: number; matched: number; pending: number };
-                      }>("/api/the5ers", { action: "purchases.sync" });
-                      state.refresh();
-                      window.dispatchEvent(new Event("journal-data-changed"));
-                      state.setNotice(
-                        `Expenses: ${result.data.imported} imported, ${result.data.matched} already linked.`,
-                      );
-                    })
-                  }
-                >
-                  Sync expenses
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={state.busy || privacy}
-                  onClick={() =>
-                    void state.run(async () => {
-                      const response = await fetch("/api/the5ers?view=payout-contract", {
-                        cache: "no-store",
-                      });
-                      const report = await response.json();
-                      if (!response.ok)
-                        throw new Error(
-                          typeof report.error === "string"
-                            ? report.error
-                            : "Could not read the payout contract.",
-                        );
-                      const url = URL.createObjectURL(
-                        new Blob([JSON.stringify(report, null, 2)], { type: "application/json" }),
-                      );
-                      const link = document.createElement("a");
-                      link.href = url;
-                      link.download = "the5ers-connection-report.json";
-                      link.click();
-                      setTimeout(() => URL.revokeObjectURL(url), 1000);
-                    })
-                  }
-                >
-                  Download connection report
-                </Button>
-              </div>
             </div>
             <div className="flex flex-wrap gap-4 text-sm">
               <Link href="/accounts" className="underline">

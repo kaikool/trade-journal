@@ -93,7 +93,6 @@ function Accounts() {
     [accounts],
   );
   const activeCount = useMemo(() => accounts.filter((a) => isAccountActive(a)).length, [accounts]);
-  const hiddenCount = accounts.length - defaultCount;
 
   const filteredAccounts = useMemo(() => {
     return accounts.filter((account) => {
@@ -180,51 +179,8 @@ function Accounts() {
         </DialogContent>
       </Dialog>
 
-      <div className="border-b bg-card/60 px-4 py-3">
-        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-          <div>
-            <h2 className="text-sm font-semibold tracking-tight text-foreground">
-              Dashboard & Trades account visibility
-            </h2>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              Total: {accounts.length} accounts · Displayed: {visibleCount} · Active: {activeCount}
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={updatingBulk || accounts.length === 0}
-              onClick={() => void handleBulkVisibility("select-all")}
-              title="Select all accounts to display in Dashboard & Trades"
-            >
-              <CheckSquare className="h-3.5 w-3.5 mr-1" />
-              Select all
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={updatingBulk || accounts.length === 0}
-              onClick={() => void handleBulkVisibility("select-active")}
-              title="Select only active accounts"
-            >
-              <Check className="h-3.5 w-3.5 mr-1" />
-              Active only
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={updatingBulk || accounts.length === 0}
-              onClick={() => void handleBulkVisibility("deselect-all")}
-              title="Deselect all accounts"
-            >
-              <Square className="h-3.5 w-3.5 mr-1" />
-              Deselect all
-            </Button>
-          </div>
-        </div>
-
-        <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between pt-2 border-t border-border/50">
+      <div className="border-b bg-card/60 px-4 py-2.5">
+        <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-1.5 flex-wrap">
             <Button
               size="sm"
@@ -259,33 +215,54 @@ function Accounts() {
               All ({accounts.length})
             </Button>
           </div>
-          <div className="relative w-full sm:w-64">
-            <Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-muted-foreground" />
-            <Input
-              type="text"
-              placeholder="Search accounts..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="h-7.5 pl-8 text-xs"
-            />
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative w-full sm:w-48">
+              <Search className="absolute left-2.5 top-2 h-3.5 w-3.5 text-muted-foreground" />
+              <Input
+                type="text"
+                placeholder="Search..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="h-7.5 pl-8 text-xs"
+              />
+            </div>
+            <div className="flex items-center gap-1">
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7.5 text-xs px-2"
+                disabled={updatingBulk || accounts.length === 0}
+                onClick={() => void handleBulkVisibility("select-active")}
+                title="Display only active accounts"
+              >
+                <Check className="h-3.5 w-3.5 mr-1" />
+                Active only
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7.5 text-xs px-2"
+                disabled={updatingBulk || accounts.length === 0}
+                onClick={() => void handleBulkVisibility("select-all")}
+                title="Display all accounts"
+              >
+                <CheckSquare className="h-3.5 w-3.5 mr-1" />
+                All
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7.5 text-xs px-2"
+                disabled={updatingBulk || accounts.length === 0}
+                onClick={() => void handleBulkVisibility("deselect-all")}
+                title="Hide all accounts"
+              >
+                <Square className="h-3.5 w-3.5 mr-1" />
+                None
+              </Button>
+            </div>
           </div>
         </div>
-        {filterTab === "default" && hiddenCount > 0 && (
-          <div className="mt-2.5 flex items-center justify-between rounded-md bg-muted/60 px-3 py-1.5 text-xs text-muted-foreground border border-border/50">
-            <span>
-              Hiding {hiddenCount} inactive unselected account{hiddenCount > 1 ? "s" : ""} by
-              default.
-            </span>
-            <Button
-              variant="link"
-              size="sm"
-              className="h-auto p-0 text-xs text-primary"
-              onClick={() => setFilterTab("all")}
-            >
-              View all ({accounts.length})
-            </Button>
-          </div>
-        )}
       </div>
 
       <div className="grid gap-3 p-4 md:grid-cols-2">
