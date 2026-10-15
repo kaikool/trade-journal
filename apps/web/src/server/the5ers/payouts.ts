@@ -226,8 +226,11 @@ export async function recordPayoutReceipt(
         (existingReceipt.occurredOn !== receivedOn &&
           sourceFields(source).ownerconfirmedpaid !== true) ||
         existingReceipt.voided)
-    )
-      return pending("changed-receipt");
+    ) {
+      const row = sourceFields(source);
+      const hasSplitInfo = row.usershare != null || row.splitpercent != null;
+      if (!hasSplitInfo || existingReceipt.voided) return pending("changed-receipt");
+    }
     const [existingEntry] = await tx
       .select()
       .from(propEntries)
@@ -239,30 +242,33 @@ export async function recordPayoutReceipt(
         !existingEntry.voided,
       "This payout is already recorded against another account or currency, or was voided.",
     );
+    const row = sourceFields(source);
+    const hasSplitInfo = row.usershare != null || row.splitpercent != null;
     requireValue(
-      existingReceipt.amountMinor === amountMinor &&
+      (hasSplitInfo || existingReceipt.amountMinor === amountMinor) &&
         (existingReceipt.occurredOn === receivedOn ||
           sourceFields(source).ownerconfirmedpaid === true) &&
         !existingReceipt.voided,
       "This payout receipt changed or was voided locally. Review the existing transaction before recording a correction.",
     );
-    const row = sourceFields(source);
-    if (existingEntry && (row.usershare != null || row.splitpercent != null)) {
+    if (existingEntry && hasSplitInfo) {
       const splitPercentStr =
-        typeof row.splitpercent === "number"
-          ? String(row.splitpercent)
-          : String(
-              Math.round((Number(row.usershare) / Number(row.grossamount ?? row.amount)) * 10000) /
-                100,
-            );
-      const splitBps = Math.round(Number(splitPercentStr) * 100);
+        row.splitpercent != null && !isNaN(Number(row.splitpercent)) && Number(row.splitpercent) > 0
+          ? String(Number(row.splitpercent))
+          : row.usershare && row.grossamount && Number(row.grossamount) > 0
+            ? String(Math.round((Number(row.usershare) / Number(row.grossamount)) * 10000) / 100)
+            : undefined;
+      const splitBps = splitPercentStr
+        ? Math.round(Number(splitPercentStr) * 100)
+        : existingEntry.splitBps;
       const feeMinor = sourceMoney(row.fee, account.currency) ?? 0;
       const grossAmountMinor = sourceMoney(row.grossamount ?? row.amount, account.currency);
       if (
         existingEntry.splitBps !== splitBps ||
-        (grossAmountMinor && existingEntry.amountMinor !== grossAmountMinor)
+        (grossAmountMinor && existingEntry.amountMinor !== grossAmountMinor) ||
+        existingReceipt.amountMinor !== amountMinor
       ) {
-        const updatedNotes = `The5ers payout: gross ${row.grossamount ?? row.amount} ${account.currency}, trader share ${splitPercentStr}%, net settlement ${fromMinor(amountMinor, account.currency)}.`;
+        const updatedNotes = `The5ers payout: gross ${row.grossamount ?? row.amount} ${account.currency}${splitPercentStr ? `, trader share ${splitPercentStr}%` : ""}, net settlement ${fromMinor(amountMinor, account.currency)}.`;
         await tx
           .update(propEntries)
           .set({
@@ -273,6 +279,12 @@ export async function recordPayoutReceipt(
             updatedAt: new Date().toISOString(),
           })
           .where(eq(propEntries.id, existingEntry.id));
+        await tx
+          .update(propReceipts)
+          .set({
+            amountMinor,
+          })
+          .where(eq(propReceipts.id, existingReceipt.id));
       }
     }
     return "matched" as const;
@@ -304,21 +316,26 @@ export async function recordPayoutReceipt(
     .from(propEntries)
     .where(eq(propEntries.id, entryId))
     .for("update");
+  const row = sourceFields(source);
+  const hasSplitInfo = row.usershare != null || row.splitpercent != null;
+  const splitPercentStr = hasSplitInfo
+    ? row.splitpercent != null && !isNaN(Number(row.splitpercent)) && Number(row.splitpercent) > 0
+      ? String(Number(row.splitpercent))
+      : row.usershare && row.grossamount && Number(row.grossamount) > 0
+        ? String(Math.round((Number(row.usershare) / Number(row.grossamount)) * 10000) / 100)
+        : "100"
+    : "100";
+  const feeStr =
+    hasSplitInfo && row.fee != null && Number.isFinite(Number(row.fee)) && Number(row.fee) > 0
+      ? String(row.fee)
+      : "0";
+  const grossAmount = hasSplitInfo
+    ? (row.grossamount ?? row.amount ?? fromMinor(amountMinor, account.currency))
+    : fromMinor(amountMinor, account.currency);
   if (!entry) {
-    const row = sourceFields(source);
-    const splitPercentStr =
-      typeof row.splitpercent === "number"
-        ? String(row.splitpercent)
-        : row.usershare && row.grossamount && Number(row.grossamount) > 0
-          ? String(Math.round((Number(row.usershare) / Number(row.grossamount)) * 10000) / 100)
-          : "100";
-    const feeStr =
-      row.fee != null && Number.isFinite(Number(row.fee)) && Number(row.fee) > 0
-        ? String(row.fee)
-        : "0";
     const payoutNotes = confirmation
       ? "Actual money received confirmed by the journal owner."
-      : row.usershare != null
+      : hasSplitInfo
         ? `The5ers payout: gross ${row.grossamount ?? row.amount} ${account.currency}, trader share ${splitPercentStr}%, net settlement ${fromMinor(amountMinor, account.currency)}.`
         : `${requestedAt ? "" : "[request-date-unknown] "}The5ers payout: net settlement after profit split and fees, not gross trading profit.`;
     await mutatePropInTransaction(tx, {
@@ -329,7 +346,7 @@ export async function recordPayoutReceipt(
       firm: "The5ers",
       kind: "payout",
       currency: account.currency,
-      amount: String(fromMinor(amountMinor, account.currency)),
+      amount: String(grossAmount),
       splitPercent: splitPercentStr,
       fee: feeStr,
       status: "approved",
@@ -367,9 +384,9 @@ export async function recordPayoutReceipt(
     firm: "The5ers",
     kind: "payout",
     currency: account.currency,
-    amount: String(fromMinor(amountMinor, account.currency)),
-    splitPercent: String(entry.splitBps / 100),
-    fee: String(fromMinor(entry.feeMinor, account.currency)),
+    amount: String(grossAmount),
+    splitPercent: splitPercentStr,
+    fee: feeStr,
     status: "completed",
     occurredOn,
     reference: entryId,

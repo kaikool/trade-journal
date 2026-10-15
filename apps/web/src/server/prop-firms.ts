@@ -3,7 +3,7 @@ import { db, accounts, propAccounts, propEntries, propReceipts, propAudit } from
 import type { JournalExecutor } from "@/db/postgres";
 import { requireValue, RequestError } from "./api";
 import { newId, nowIso } from "./ids";
-import { getSetting } from "./settings";
+import { getSetting, setSetting } from "./settings";
 import {
   currencyDigits,
   toMinor,
@@ -450,6 +450,10 @@ export async function mutatePropInTransaction(tx: JournalExecutor, body: Record<
       target: propEntries.id,
       set: updated,
     });
+    if (id.startsWith("the5ers_payout_") && kind === "payout" && old?.accountId) {
+      const sourceId = old.accountId.replace("the5ers_", "");
+      await setSetting(`the5ers:payout-split:${sourceId}`, String(updated.splitBps / 100), tx);
+    }
     await audit(tx, "entry", id, old, updated, editReason(body, old));
     return { id };
   }

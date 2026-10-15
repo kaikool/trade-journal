@@ -268,41 +268,55 @@ export function The5ersPayouts({
                 <span className="text-xs text-muted-foreground">{s.currency}</span>
               )}
             </div>
-            {s.usershare != null && s.grossamount != null && (
-              <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4 rounded-md border bg-muted/30 p-2.5">
-                <div>
-                  <span className="text-muted-foreground block text-[11px]">Gross profit</span>
-                  <span className="font-semibold">
-                    ${Number(s.grossamount).toLocaleString("en-US", { minimumFractionDigits: 2 })}
-                  </span>
+            {(s.usershare != null || s.splitpercent != null) &&
+              (s.grossamount != null || s.amount != null) && (
+                <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4 rounded-md border bg-muted/30 p-2.5">
+                  <div>
+                    <span className="text-muted-foreground block text-[11px]">Gross profit</span>
+                    <span className="font-semibold">
+                      $
+                      {Number(s.grossamount ?? s.amount).toLocaleString("en-US", {
+                        minimumFractionDigits: 2,
+                      })}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground block text-[11px]">Profit split</span>
+                    <span className="font-semibold">
+                      {String(
+                        s.splitpercent ??
+                          Math.round(
+                            (Number(s.usershare ?? s.netamount) /
+                              Number(s.grossamount ?? s.amount)) *
+                              100,
+                          ),
+                      )}
+                      %
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground block text-[11px]">Trader share</span>
+                    <span className="font-semibold">
+                      $
+                      {Number(
+                        s.usershare ??
+                          Number(s.grossamount ?? s.amount) * (Number(s.splitpercent ?? 100) / 100),
+                      ).toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground block text-[11px]">Net received</span>
+                    <span className="font-semibold">
+                      $
+                      {Number(
+                        s.netamount ?? s.finalamount ?? s.usershare ?? s.amount,
+                      ).toLocaleString("en-US", {
+                        minimumFractionDigits: 2,
+                      })}
+                    </span>
+                  </div>
                 </div>
-                <div>
-                  <span className="text-muted-foreground block text-[11px]">Profit split</span>
-                  <span className="font-semibold">
-                    {String(
-                      s.splitpercent ??
-                        Math.round((Number(s.usershare) / Number(s.grossamount)) * 100),
-                    )}
-                    %
-                  </span>
-                </div>
-                <div>
-                  <span className="text-muted-foreground block text-[11px]">Trader share</span>
-                  <span className="font-semibold">
-                    ${Number(s.usershare).toLocaleString("en-US", { minimumFractionDigits: 2 })}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-muted-foreground block text-[11px]">Net received</span>
-                  <span className="font-semibold">
-                    $
-                    {Number(s.netamount ?? s.finalamount ?? s.amount).toLocaleString("en-US", {
-                      minimumFractionDigits: 2,
-                    })}
-                  </span>
-                </div>
-              </div>
-            )}
+              )}
             <details>
               <summary className="cursor-pointer text-sm">Payout details</summary>
               <SourceValue value={row.source} />

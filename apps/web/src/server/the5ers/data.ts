@@ -2,7 +2,15 @@ import { moduleArchiveSummary, readArchivedModule, syncModuleArchive } from "./m
 import { the5ersAccountName, the5ersDefaultName } from "@/lib/the5ers-name";
 import { createHash, randomUUID } from "node:crypto";
 import { and, or, eq, like, sql, count, inArray } from "drizzle-orm";
-import { db, settings, accounts as journalAccounts, propAccounts, propAudit, trades } from "@/db";
+import {
+  db,
+  settings,
+  accounts as journalAccounts,
+  propAccounts,
+  propEntries,
+  propAudit,
+  trades,
+} from "@/db";
 import { saveJournalPositions, reconcilePurchases, positionIdentity } from "./journal";
 import { payoutKey, sourceRecords, recordPayoutReceipt } from "./payouts";
 import {
@@ -1578,51 +1586,253 @@ async function fetchAndSavePayouts(
   ) {
     try {
       payoutExplanation = await client.read("payout", "explain", { account_ref: account.ref });
-      const explanation = sourceFields(payoutExplanation);
-      const body = sourceFields(explanation.data);
-      const latest = sourceFields(body.latestpayout);
-      const breakdown = sourceFields(latest.breakdown);
-      const currency = sourceCurrency(explanation.currency);
-      const requested = sourceInstant(latest.requestedat);
-      const matches = sources.filter((source) => {
+      const rawExp = sourceFields(payoutExplanation);
+      const expData = sourceFields(rawExp.data ?? payoutExplanation);
+      const expBody = sourceFields(expData.data ?? expData);
+      const latest = sourceFields(
+        expBody.latestpayout ??
+          expBody.latest_payout ??
+          expBody.payout ??
+          expData.latestpayout ??
+          expData.latest_payout ??
+          expData.payout ??
+          rawExp.latestpayout ??
+          rawExp.payout,
+      );
+      const breakdown = sourceFields(
+        latest.breakdown ?? expBody.breakdown ?? expData.breakdown ?? rawExp.breakdown ?? latest,
+      );
+      const userShare = sourceNumber(
+        breakdown.usershare ??
+          breakdown.user_share ??
+          breakdown.tradershare ??
+          breakdown.trader_share,
+      );
+      const commission = sourceNumber(breakdown.commission ?? breakdown.fee ?? breakdown.fees) ?? 0;
+      const finalAmount = sourceNumber(
+        breakdown.finalamount ??
+          breakdown.final_amount ??
+          breakdown.netamount ??
+          breakdown.net_amount ??
+          breakdown.paidamount,
+      );
+      const rawGross = sourceNumber(
+        latest.amount ??
+          latest.grossamount ??
+          latest.gross_amount ??
+          breakdown.grossamount ??
+          breakdown.gross_amount,
+      );
+      let splitPercent: number | undefined;
+      const rawSplit = sourceNumber(
+        breakdown.profitsplit ??
+          breakdown.profit_split ??
+          breakdown.split ??
+          breakdown.splitpercent ??
+          breakdown.split_percent,
+      );
+      if (rawSplit != null && rawSplit > 0 && rawSplit <= 100) {
+        splitPercent = rawSplit;
+      } else if (userShare && rawGross && rawGross > 0) {
+        splitPercent = Math.round((userShare / rawGross) * 10000) / 100;
+      } else if (finalAmount && rawGross && rawGross > 0) {
+        splitPercent = Math.round(((finalAmount + commission) / rawGross) * 10000) / 100;
+      }
+
+      const completedAt = latest.completedat ?? latest.completed_at;
+      const requested = sourceInstant(
+        latest.requestedat ?? latest.requested_at ?? latest.createdat,
+      );
+      const latestAmount = rawGross ?? sourceNumber(latest.amount);
+
+      let matched = sources.find((source) => {
         const row = sourceFields(source);
-        return (
-          requested &&
-          sourceInstant(row.requestedat) === requested &&
-          row.amount === latest.amount &&
-          row.currency === currency
-        );
-      });
-      const completedAt = latest.completedat ?? sourceFields(matches[0]).completedat;
-      if (
-        body.subject === "latest_payout" &&
-        sourceInstant(completedAt) &&
-        ["paid", "completed", "received", "settled"].includes(
-          String(latest.status).toLowerCase(),
-        ) &&
-        matches.length === 1 &&
-        typeof breakdown.finalamount === "number"
-      ) {
-        const userShare = sourceNumber(breakdown.usershare);
-        const commission = sourceNumber(breakdown.commission ?? breakdown.fee);
-        const grossAmount = sourceNumber(latest.amount);
-        let splitPercent: number | undefined;
-        if (typeof breakdown.profitsplit === "number") {
-          splitPercent = breakdown.profitsplit;
-        } else if (userShare && grossAmount && grossAmount > 0) {
-          splitPercent = Math.round((userShare / grossAmount) * 10000) / 100;
+        if (latestAmount != null && Math.abs(Number(row.amount) - latestAmount) < 0.01) {
+          if (requested && row.requestedat) {
+            const d1 = sourceInstant(row.requestedat)?.slice(0, 10);
+            const d2 = requested.slice(0, 10);
+            return !d1 || !d2 || d1 === d2;
+          }
+          return true;
         }
-        Object.assign(matches[0]!, {
-          netAmount: breakdown.finalamount,
-          completedAt,
-          grossAmount,
-          userShare,
+        return false;
+      });
+
+      if (!matched) {
+        const paid = sources.filter((s) =>
+          ["paid", "completed", "received", "settled"].includes(
+            String(sourceFields(s).status).toLowerCase(),
+          ),
+        );
+        if (paid.length === 1) matched = paid[0];
+      }
+
+      if (matched && (finalAmount != null || userShare != null || splitPercent != null)) {
+        const row = sourceFields(matched);
+        const gross = rawGross ?? Number(row.amount);
+        const split =
+          splitPercent ??
+          (userShare && gross ? Math.round((userShare / gross) * 10000) / 100 : undefined);
+        const net =
+          finalAmount ??
+          (split ? Math.round(gross * (split / 100) * 100) / 100 - commission : Number(row.amount));
+        Object.assign(matched, {
+          netAmount: net,
+          completedAt: completedAt ?? row.completedat,
+          grossAmount: gross,
+          userShare:
+            userShare ?? (split ? Math.round(gross * (split / 100) * 100) / 100 : undefined),
           fee: commission,
-          splitPercent,
+          splitPercent: split,
         });
       }
     } catch {
       // Retain fetched history; a missing breakdown must never become guessed cash.
+    }
+  }
+
+  // Detect program-level profit split from rules, eligibility, account source or program type
+  let accountSplit: number | undefined;
+  try {
+    const customSplit =
+      (await getSetting(`the5ers:payout-split:${id}`)) ??
+      (await getSetting(`the5ers:payout-split:the5ers_${id}`));
+    if (customSplit && Number(customSplit) > 0 && Number(customSplit) <= 100) {
+      accountSplit = Number(customSplit);
+    }
+    if (!accountSplit) {
+      const existingEntries = await db
+        .select({ splitBps: propEntries.splitBps })
+        .from(propEntries)
+        .where(
+          and(
+            inArray(propEntries.accountId, [id, `the5ers_${id}`]),
+            eq(propEntries.kind, "payout"),
+            eq(propEntries.voided, false),
+          ),
+        );
+      const known = existingEntries.find((e) => e.splitBps > 0 && e.splitBps < 10000);
+      if (known) {
+        accountSplit = known.splitBps / 100;
+      }
+    }
+    if (!accountSplit) {
+      const [dbAcc] = await db
+        .select({ name: propAccounts.name, program: propAccounts.program })
+        .from(propAccounts)
+        .where(inArray(propAccounts.id, [id, `the5ers_${id}`]));
+      if (dbAcc) {
+        const text = `${dbAcc.name} ${dbAcc.program}`.toLowerCase();
+        if (
+          text.includes("high stakes") ||
+          text.includes("highstakes") ||
+          text.includes("high_stakes")
+        )
+          accountSplit = 80;
+        else if (text.includes("bootcamp")) accountSplit = 75;
+        else if (
+          text.includes("hyper growth") ||
+          text.includes("hypergrowth") ||
+          text.includes("hyper_growth")
+        )
+          accountSplit = 75;
+        else if (text.includes("instant")) accountSplit = 50;
+      }
+    }
+    if (!accountSplit) {
+      const cachedSnapshotJson = await getSetting(`${SNAPSHOT_PREFIX}${id}`);
+      if (cachedSnapshotJson) {
+        const cachedSnap = JSON.parse(cachedSnapshotJson) as SourceSnapshot;
+        const rules = sourceFields(
+          sourceFields(cachedSnap.sections?.rules?.data).data ?? cachedSnap.sections?.rules?.data,
+        );
+        const elig = sourceFields(
+          sourceFields(cachedSnap.sections?.payout?.data).data ?? cachedSnap.sections?.payout?.data,
+        );
+        const acc = sourceFields(account.source);
+        const found = sourceNumber(
+          rules.profitsplit ??
+            rules.profit_split ??
+            rules.split ??
+            rules.splitpercent ??
+            rules.tradershare ??
+            rules.trader_share ??
+            elig.profitsplit ??
+            elig.profit_split ??
+            elig.split ??
+            elig.splitpercent ??
+            acc.profitsplit ??
+            acc.profit_split ??
+            acc.split ??
+            acc.splitpercent,
+        );
+        if (found != null && found > 0 && found <= 1) {
+          accountSplit = Math.round(found * 100);
+        } else if (found != null && found > 1 && found <= 100) {
+          accountSplit = found;
+        } else {
+          const progText =
+            `${String(rules.name ?? "")} ${String(acc.programname ?? "")} ${String(acc.name ?? "")} ${String(account.label ?? "")} ${String(account.program ?? "")}`.toLowerCase();
+          if (
+            progText.includes("high stakes") ||
+            progText.includes("highstakes") ||
+            progText.includes("high_stakes")
+          )
+            accountSplit = 80;
+          else if (progText.includes("bootcamp")) accountSplit = 75;
+          else if (
+            progText.includes("hyper growth") ||
+            progText.includes("hypergrowth") ||
+            progText.includes("hyper_growth")
+          )
+            accountSplit = 75;
+          else if (progText.includes("instant")) accountSplit = 50;
+        }
+      } else {
+        const acc = sourceFields(account.source);
+        const progText =
+          `${String(acc.programname ?? "")} ${String(acc.name ?? "")} ${String(account.label ?? "")} ${String(account.program ?? "")}`.toLowerCase();
+        if (
+          progText.includes("high stakes") ||
+          progText.includes("highstakes") ||
+          progText.includes("high_stakes")
+        )
+          accountSplit = 80;
+        else if (progText.includes("bootcamp")) accountSplit = 75;
+        else if (
+          progText.includes("hyper growth") ||
+          progText.includes("hypergrowth") ||
+          progText.includes("hyper_growth")
+        )
+          accountSplit = 75;
+        else if (progText.includes("instant")) accountSplit = 50;
+      }
+    }
+  } catch {
+    // Ignore setting read errors
+  }
+
+  // Apply accountSplit to any paid payout missing splitPercent
+  if (accountSplit && accountSplit < 100) {
+    for (const source of sources) {
+      const row = sourceFields(source);
+      if (
+        ["paid", "completed", "received", "settled"].includes(
+          String(row.status).trim().toLowerCase(),
+        ) &&
+        row.splitpercent == null
+      ) {
+        const gross = Number(row.amount);
+        if (gross > 0) {
+          const net = Math.round(gross * (accountSplit / 100) * 100) / 100;
+          Object.assign(source, {
+            grossAmount: gross,
+            userShare: net,
+            netAmount: net,
+            splitPercent: accountSplit,
+          });
+        }
+      }
     }
   }
   // The journal owner has confirmed that The5ers Paid records represent money received.
