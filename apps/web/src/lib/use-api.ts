@@ -1,6 +1,6 @@
 "use client";
 
-import { startTransition, useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { acquireJson } from "./api-request";
 
 export interface ApiState<T> {
@@ -17,24 +17,92 @@ interface CacheItem<T> {
 
 const apiCache = new Map<string, CacheItem<unknown>>();
 const STALE_TIME_MS = 60_000;
+const PERSIST_PREFIX = "journal-api-cache-v1:";
+const MAX_PERSIST_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
-export function clearApiCache(prefix?: string) {
-  if (!prefix) {
-    apiCache.clear();
-  } else {
-    for (const key of apiCache.keys()) {
-      if (key.startsWith(prefix)) apiCache.delete(key);
+function getPersisted<T>(url: string): T | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(`${PERSIST_PREFIX}${url}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as { data: T; timestamp: number };
+    if (!parsed || typeof parsed.timestamp !== "number") {
+      localStorage.removeItem(`${PERSIST_PREFIX}${url}`);
+      return null;
     }
+    if (Date.now() - parsed.timestamp > MAX_PERSIST_AGE_MS) {
+      localStorage.removeItem(`${PERSIST_PREFIX}${url}`);
+      return null;
+    }
+    return parsed.data;
+  } catch {
+    return null;
   }
 }
 
-/** Deduplicate concurrent reads and cache completed responses for instant page transitions. */
+function setPersisted<T>(url: string, data: T) {
+  if (typeof window === "undefined") return;
+  if (url.includes("/api/auth") || url.includes("/export")) return;
+  try {
+    localStorage.setItem(
+      `${PERSIST_PREFIX}${url}`,
+      JSON.stringify({ data, timestamp: Date.now() }),
+    );
+  } catch {
+    try {
+      const keysToRemove: { key: string; time: number }[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key?.startsWith(PERSIST_PREFIX)) {
+          const item = localStorage.getItem(key);
+          const time = item ? ((JSON.parse(item) as { timestamp?: number }).timestamp ?? 0) : 0;
+          keysToRemove.push({ key, time });
+        }
+      }
+      keysToRemove.sort((a, b) => a.time - b.time);
+      const toDelete = keysToRemove.slice(0, Math.ceil(keysToRemove.length / 2));
+      for (const item of toDelete) {
+        localStorage.removeItem(item.key);
+      }
+      localStorage.setItem(
+        `${PERSIST_PREFIX}${url}`,
+        JSON.stringify({ data, timestamp: Date.now() }),
+      );
+    } catch {}
+  }
+}
+
+export function clearApiCache(prefix?: string) {
+  apiCache.clear();
+  if (typeof window === "undefined") return;
+  try {
+    const target = prefix ? `${PERSIST_PREFIX}${prefix}` : PERSIST_PREFIX;
+    const keysToRemove: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key?.startsWith(target)) {
+        keysToRemove.push(key);
+      }
+    }
+    for (const key of keysToRemove) {
+      localStorage.removeItem(key);
+    }
+  } catch {}
+}
+
+/** Deduplicate concurrent reads and persist completed responses across app launches. */
 export const useApi = <T>(url: string | null): ApiState<T> => {
   const cached = url ? (apiCache.get(url) as CacheItem<T> | undefined) : undefined;
+  const persisted = !cached && url ? getPersisted<T>(url) : null;
+  const initialData = cached?.data ?? persisted ?? null;
 
-  const [data, setData] = useState<T | null>(() => cached?.data ?? null);
+  if (persisted && url && !cached) {
+    apiCache.set(url, { data: persisted, timestamp: Date.now() });
+  }
+
+  const [data, setData] = useState<T | null>(initialData);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState<boolean>(() => Boolean(url && !cached));
+  const [loading, setLoading] = useState<boolean>(() => Boolean(url && !initialData));
   const [tick, setTick] = useState(0);
   const [dataUrl, setDataUrl] = useState(url);
 
@@ -48,10 +116,18 @@ export const useApi = <T>(url: string | null): ApiState<T> => {
     }
 
     const currentCached = apiCache.get(url) as CacheItem<T> | undefined;
-    if (currentCached) {
-      setData(currentCached.data);
+    const currentPersisted = !currentCached ? getPersisted<T>(url) : null;
+    const availableData = currentCached?.data ?? currentPersisted;
+
+    if (availableData) {
+      setData(availableData);
       setDataUrl(url);
-      const stillFresh = Date.now() - currentCached.timestamp < STALE_TIME_MS;
+      if (currentPersisted && !currentCached) {
+        apiCache.set(url, { data: currentPersisted, timestamp: Date.now() });
+      }
+      const stillFresh = currentCached
+        ? Date.now() - currentCached.timestamp < STALE_TIME_MS
+        : false;
       if (stillFresh && tick === 0) {
         setLoading(false);
         return;
@@ -59,7 +135,7 @@ export const useApi = <T>(url: string | null): ApiState<T> => {
     }
 
     let cancelled = false;
-    if (!currentCached) {
+    if (!availableData) {
       setLoading(true);
     }
     setError(null);
@@ -69,19 +145,16 @@ export const useApi = <T>(url: string | null): ApiState<T> => {
       .then((body) => {
         if (cancelled) return;
         apiCache.set(url, { data: body, timestamp: Date.now() });
-        // Render fresh data as a transition so React yields to the browser mid-render
-        // instead of blocking the main thread for the whole page.
-        startTransition(() => {
-          setData(body);
-          setDataUrl(url);
-          setError(null);
-          setLoading(false);
-        });
+        setPersisted(url, body);
+        setData(body);
+        setDataUrl(url);
+        setError(null);
+        setLoading(false);
       })
       .catch((cause: unknown) => {
         if (!cancelled) {
           setError(cause instanceof Error ? cause.message : "Network error");
-          if (!currentCached) setData(null);
+          if (!availableData) setData(null);
           setDataUrl(url);
           setLoading(false);
         }
@@ -112,7 +185,14 @@ export const useApi = <T>(url: string | null): ApiState<T> => {
   }, [url]);
 
   const refresh = useCallback(() => {
-    if (url) apiCache.delete(url);
+    if (url) {
+      apiCache.delete(url);
+      if (typeof window !== "undefined") {
+        try {
+          localStorage.removeItem(`${PERSIST_PREFIX}${url}`);
+        } catch {}
+      }
+    }
     setTick((value) => value + 1);
   }, [url]);
 
