@@ -36,22 +36,25 @@ function Button({
   size,
   asChild = false,
   disableTooltip = false,
+  tooltip,
   title,
   ...props
 }: React.ComponentProps<"button"> &
-  VariantProps<typeof buttonVariants> & { asChild?: boolean; disableTooltip?: boolean }) {
+  VariantProps<typeof buttonVariants> & {
+    asChild?: boolean;
+    disableTooltip?: boolean;
+    tooltip?: React.ReactNode;
+  }) {
   const Comp = asChild ? Slot : "button";
-  const hint = disableTooltip
-    ? undefined
-    : title || (size === "icon" ? props["aria-label"] : undefined);
   const button = (
     <Comp
       aria-label={props["aria-label"] ?? (size === "icon" ? title : undefined)}
+      title={title}
       className={cn(buttonVariants({ variant, size, className }))}
       {...props}
     />
   );
-  return hint ? <HoverHint content={hint}>{button}</HoverHint> : button;
+  return tooltip && !disableTooltip ? <HoverHint content={tooltip}>{button}</HoverHint> : button;
 }
 
 export { Button, buttonVariants };

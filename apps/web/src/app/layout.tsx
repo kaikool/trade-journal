@@ -39,7 +39,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body className="min-h-screen font-sans antialiased">
         <PwaRegistration />
-        <TooltipProvider delayDuration={350} skipDelayDuration={150}>
+        <TooltipProvider delayDuration={100} skipDelayDuration={100}>
           <Suspense>
             <ThemeProvider>
               <PrivacyProvider>

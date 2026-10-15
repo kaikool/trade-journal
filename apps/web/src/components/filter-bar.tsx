@@ -60,7 +60,7 @@ export function FilterBar({ title, actions }: { title: string; actions?: React.R
     FILTER_KEYS.forEach((k) => next.delete(k));
     next.set("range", "custom");
     for (const [k, v] of Object.entries(draft)) if (v) next.set(k, v);
-    router.replace(`${pathname}?${next}`);
+    router.replace(`${pathname}?${next}`, { scroll: false });
     setOpen(false);
   };
   return (
@@ -82,7 +82,7 @@ export function FilterBar({ title, actions }: { title: string; actions?: React.R
                     next.set("range", range);
                     next.delete("from");
                     next.delete("to");
-                    router.replace(`${pathname}?${next}`);
+                    router.replace(`${pathname}?${next}`, { scroll: false });
                   }}
                 >
                   {range === "all" ? "All" : range.toUpperCase()}

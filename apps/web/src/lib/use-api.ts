@@ -118,7 +118,7 @@ export const useApi = <T>(url: string | null): ApiState<T> => {
 
   const current = dataUrl === url;
   const currentCached = url ? (apiCache.get(url) as CacheItem<T> | undefined) : undefined;
-  const effectiveData = current ? data : (currentCached?.data ?? null);
+  const effectiveData = (current ? data : null) ?? (currentCached?.data as T | null) ?? data;
 
   return {
     data: effectiveData,
