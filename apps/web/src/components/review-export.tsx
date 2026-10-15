@@ -1,15 +1,17 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { Download, ImageIcon } from "lucide-react";
+import { ImageIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { exportPdf, exportPng, type ReviewDocument } from "@/lib/export-review";
+import { exportPng, type ReviewDocument } from "@/lib/export-review";
 import { usePrivacy } from "./privacy";
+
 interface Preview {
   url: string;
   filename: string;
   type: string;
 }
+
 export function ReviewExport({
   document,
   containsFinancialData = false,
@@ -24,18 +26,18 @@ export function ReviewExport({
     [files, setFiles] = useState<Preview[]>([]),
     [open, setOpen] = useState(false);
   const urls = useRef<string[]>([]);
-  const [previewDocument, setPreviewDocument] = useState<ReviewDocument | null>(null);
   useEffect(
     () => () => {
       urls.current.forEach(URL.revokeObjectURL);
     },
     [],
   );
-  async function run(image: boolean) {
+
+  async function run() {
     setBusy(true);
     setError("");
     try {
-      const result = await (image ? exportPng : exportPdf)(document);
+      const result = await exportPng(document);
       urls.current.forEach(URL.revokeObjectURL);
       const next = result.map((f) => ({
         url: URL.createObjectURL(f.blob),
@@ -44,7 +46,6 @@ export function ReviewExport({
       }));
       urls.current = next.map((f) => f.url);
       setFiles(next);
-      setPreviewDocument(document);
       setOpen(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Export failed.");
@@ -52,6 +53,7 @@ export function ReviewExport({
       setBusy(false);
     }
   }
+
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap gap-2">
@@ -60,17 +62,7 @@ export function ReviewExport({
           size="sm"
           variant="outline"
           disabled={busy || concealed}
-          onClick={() => void run(false)}
-        >
-          <Download />
-          Export PDF
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          disabled={busy || concealed}
-          onClick={() => void run(true)}
+          onClick={() => void run()}
         >
           <ImageIcon />
           Export PNG
@@ -95,24 +87,10 @@ export function ReviewExport({
             <div key={f.url} className="space-y-3">
               <Button asChild size="sm">
                 <a href={f.url} download={f.filename}>
-                  Download {f.type === "application/pdf" ? "PDF" : "PNG"}
-                  {files.length > 1 ? ` · ${i + 1}/${files.length}` : ""}
+                  Download PNG{files.length > 1 ? ` · ${i + 1}/${files.length}` : ""}
                 </a>
               </Button>
-              {f.type === "application/pdf" ? (
-                <div className="rounded border bg-white p-6 text-slate-800">
-                  <p className="mb-4 text-xs text-slate-500">
-                    Review text · download the PDF for the paginated document.
-                  </p>
-                  <h3 className="mb-2 text-xl font-semibold">{previewDocument?.title}</h3>
-                  <p className="mb-6 text-xs text-slate-500">{previewDocument?.subtitle}</p>
-                  <div className="whitespace-pre-wrap break-words text-sm leading-relaxed">
-                    {previewDocument?.lines.join("\n")}
-                  </div>
-                </div>
-              ) : (
-                <img src={f.url} alt="Exported journal review" className="w-full rounded border" />
-              )}
+              <img src={f.url} alt="Exported journal review" className="w-full rounded border" />
             </div>
           ))}
         </DialogContent>

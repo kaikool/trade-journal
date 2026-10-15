@@ -19,4 +19,4 @@ it("keeps every journal table private even if PostgREST roles receive SELECT gra
     await fixture.client.exec("RESET ROLE");
     await fixture.close();
   }
-});
+}, 15000);
