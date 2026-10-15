@@ -139,8 +139,20 @@ describe("risk and filtering preserve the meaning of trade data", () => {
     expect(sessionOf("2026-03-09T22:00:00Z")).toBe("Off-hours");
 
     const ts = [
-      { ...sample(), key: "t1", openedAt: "2026-03-09T03:30:00Z", netPnl: 100, status: "win" as const },
-      { ...sample(), key: "t2", openedAt: "2026-03-09T14:30:00Z", netPnl: -50, status: "loss" as const },
+      {
+        ...sample(),
+        key: "t1",
+        openedAt: "2026-03-09T03:30:00Z",
+        netPnl: 100,
+        status: "win" as const,
+      },
+      {
+        ...sample(),
+        key: "t2",
+        openedAt: "2026-03-09T14:30:00Z",
+        netPnl: -50,
+        status: "loss" as const,
+      },
     ];
     const sessions = bySession(ts);
     expect(sessions).toHaveLength(2);

@@ -327,8 +327,7 @@ export async function sourceJournalData(allowedAccountIds?: string[]) {
     const accountId = links[history.sourceAccountId];
     if (!accountId || !native.some((a) => a.id === accountId && a.currency === history.currency))
       continue;
-    if (allowedAccountIds && !allowedAccountIds.includes(accountId))
-      continue;
+    if (allowedAccountIds && !allowedAccountIds.includes(accountId)) continue;
     coverage.push({
       accountId,
       complete: history.complete,

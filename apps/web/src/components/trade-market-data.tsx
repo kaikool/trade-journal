@@ -136,7 +136,8 @@ export function TradeMarketData({
       !provider ||
       !available.length ||
       saved === undefined // still loading
-    ) return;
+    )
+      return;
     // If we already have saved history, skip auto-fetch
     if (saved?.history) return;
     autoLoadedRef.current = true;
@@ -258,14 +259,14 @@ export function TradeMarketData({
                         setConfirmed(event.target.checked);
                       }}
                     />
-                    <span>
-                      Calculate and save MAE/MFE estimates ({trade.currency}).
-                    </span>
+                    <span>Calculate and save MAE/MFE estimates ({trade.currency}).</span>
                   </label>
                   <div className="mt-2 flex flex-wrap gap-2">
                     <Button
                       size="sm"
-                      disabled={busy || !symbol.trim() || !available.some((item) => item.id === provider)}
+                      disabled={
+                        busy || !symbol.trim() || !available.some((item) => item.id === provider)
+                      }
                       onClick={() => void load()}
                     >
                       {busy

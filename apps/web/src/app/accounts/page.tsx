@@ -1,7 +1,17 @@
 "use client";
 
 import { Suspense, useState, useMemo } from "react";
-import { Archive, ArchiveRestore, Check, CheckSquare, Plus, RefreshCw, Search, Square, Trash2 } from "lucide-react";
+import {
+  Archive,
+  ArchiveRestore,
+  Check,
+  CheckSquare,
+  Plus,
+  RefreshCw,
+  Search,
+  Square,
+  Trash2,
+} from "lucide-react";
 import { The5ersLinkedAccount } from "@/components/the5ers";
 import { AccountCreateForm } from "@/components/account-create-form";
 import { FilterBar } from "@/components/filter-bar";
@@ -355,7 +365,10 @@ function Accounts() {
                   <span className="text-xs font-medium sm:text-sm">Show in Dashboard & Trades</span>
                 </label>
                 {account.visibleInJournal ? (
-                  <Badge variant="outline" className="text-xs border-emerald-500/40 text-emerald-500 bg-emerald-500/10">
+                  <Badge
+                    variant="outline"
+                    className="text-xs border-emerald-500/40 text-emerald-500 bg-emerald-500/10"
+                  >
                     Displayed
                   </Badge>
                 ) : (

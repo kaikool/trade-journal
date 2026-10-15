@@ -72,11 +72,7 @@ beforeEach(async () => {
   await db.delete(trades);
   await db.delete(executions);
   await db.delete(accounts);
-  for (const name of [
-    "OANDA_API_TOKEN",
-    "OANDA_ACCOUNT_ID",
-    "OANDA_ENVIRONMENT",
-  ])
+  for (const name of ["OANDA_API_TOKEN", "OANDA_ACCOUNT_ID", "OANDA_ENVIRONMENT"])
     vi.stubEnv(name, "");
   vi.stubEnv("JOURNAL_PASSWORD", "authenticated-test-fixture");
   session.token = (await import("../src/server/auth")).sessionToken();
@@ -155,7 +151,10 @@ describe("trade history endpoint", () => {
     const trade = (await queryTrades()).rows[0]!;
     expect(trade.quantityUnitsUnknown).toBe(true);
     await saveConnection(id, oandaCredentials);
-    vi.stubGlobal("fetch", vi.fn(async () => oandaResponse([0, 1, 2])));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => oandaResponse([0, 1, 2])),
+    );
     const before = await db.select().from(trades);
     const response = await loadHistory(request(body), {
       params: Promise.resolve({ key: trade.key }),
@@ -280,7 +279,10 @@ describe("trade history endpoint", () => {
     await saveConnection(id, oandaCredentials);
     await db.insert(settings).values({ key: "multipliers", value: JSON.stringify({ EUR_USD: 1 }) });
     const before = await db.select().from(trades);
-    vi.stubGlobal("fetch", vi.fn(async () => oandaResponse([0, 1, 2])));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => oandaResponse([0, 1, 2])),
+    );
     const response = await loadHistory(request(body), { params: Promise.resolve({ key }) });
     expect(response.status).toBe(200);
     expect(response.headers.get("Cache-Control")).toBe("private, no-store");
@@ -314,11 +316,17 @@ describe("trade history endpoint", () => {
       (await (await savedHistory(request({}), { params: Promise.resolve({ key }) })).json()).saved
         .estimate.mae,
     ).toBe(20);
-    await db.update(settings).set({ value: JSON.stringify({ EUR_USD: 2 }) }).where(eq(settings.key, "multipliers"));
+    await db
+      .update(settings)
+      .set({ value: JSON.stringify({ EUR_USD: 2 }) })
+      .where(eq(settings.key, "multipliers"));
     expect(
       (await (await savedHistory(request({}), { params: Promise.resolve({ key }) })).json()).saved,
     ).toBeNull();
-    await db.update(settings).set({ value: JSON.stringify({ EUR_USD: 1 }) }).where(eq(settings.key, "multipliers"));
+    await db
+      .update(settings)
+      .set({ value: JSON.stringify({ EUR_USD: 1 }) })
+      .where(eq(settings.key, "multipliers"));
     // Account currency and execution changes invalidate derived values, even without a rebuild.
     await db.update(accounts).set({ currency: "EUR" }).where(eq(accounts.id, "fixture"));
     expect(
@@ -579,7 +587,9 @@ describe("market data credential lifecycle", () => {
   });
   it("validates input before changing credentials", async () => {
     for (const credentials of [null, "", " ", 42, { apiKey: "a\nb" }, { apiKey: "a".repeat(4097) }])
-      expect((await POST(request({ provider: "oanda", action: "save", credentials }))).status).toBe(400);
+      expect((await POST(request({ provider: "oanda", action: "save", credentials }))).status).toBe(
+        400,
+      );
     expect((await POST(request({ provider: "unknown", action: "remove" }))).status).toBe(400);
     expect((await connections()).find((c) => c.id === "oanda")?.configured).toBe(false);
   });
@@ -599,7 +609,8 @@ describe("market data credential lifecycle", () => {
     expect((await listCsv()).status).toBe(401);
     expect((await csvRequest(request({ action: "remove", id: "anything" }))).status).toBe(401);
     expect(
-      (await POST(request({ provider: "oanda", action: "save", credentials: { apiKey: "token" } }))).status,
+      (await POST(request({ provider: "oanda", action: "save", credentials: { apiKey: "token" } })))
+        .status,
     ).toBe(401);
     expect((await connections())[0]?.configured).toBe(false);
   });

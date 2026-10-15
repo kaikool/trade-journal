@@ -23,7 +23,14 @@ import { ibkrTransferTimeZone } from "@/server/ibkr-sync-timezone";
 type Params = { params: Promise<{ id: string }> };
 
 interface ActionBody {
-  action: "archive" | "unarchive" | "clear" | "sync" | "transfer" | "toggle-visibility" | "set-visibility";
+  action:
+    | "archive"
+    | "unarchive"
+    | "clear"
+    | "sync"
+    | "transfer"
+    | "toggle-visibility"
+    | "set-visibility";
   /** For "transfer": destination account id. */
   toAccountId?: string;
   /** For "set-visibility": boolean flag. */

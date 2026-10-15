@@ -95,7 +95,10 @@ export function detectProviderForSymbol(
   symbol: string,
   assetClass?: string | null,
 ): "binance" | "oanda" {
-  const s = symbol.trim().toUpperCase().replace(/[\/\-_\.]/g, "");
+  const s = symbol
+    .trim()
+    .toUpperCase()
+    .replace(/[\/\-_\.]/g, "");
   if (
     assetClass === "crypto" ||
     s.endsWith("USDT") ||

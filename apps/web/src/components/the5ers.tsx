@@ -549,9 +549,9 @@ export function The5ersConnection() {
       </CardHeader>
       <CardContent className="space-y-3">
         <p className="text-sm text-muted-foreground">
-          Read-only The5ers Hub connection. Use the sync button below to import all
-          accounts, expenses, payouts, and trade history into the database. Manage account visibility
-          in Accounts.
+          Read-only The5ers Hub connection. Use the sync button below to import all accounts,
+          expenses, payouts, and trade history into the database. Manage account visibility in
+          Accounts.
         </p>
         <Messages state={state} />
         {overview && !overview.configured && (
@@ -610,7 +610,8 @@ export function The5ersConnection() {
                 <div>
                   <p className="text-sm font-semibold">Sync all The5ers data into Database</p>
                   <p className="text-xs text-muted-foreground">
-                    Automatically sync all accounts, challenge expenses, financial payouts, and position history into the database.
+                    Automatically sync all accounts, challenge expenses, financial payouts, and
+                    position history into the database.
                   </p>
                 </div>
                 <Button

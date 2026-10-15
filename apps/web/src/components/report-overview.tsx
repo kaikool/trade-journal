@@ -13,7 +13,15 @@ import { describeFilters } from "@/lib/filter-description";
 
 interface OverviewData {
   buckets: Record<
-    "symbol" | "tag" | "mistake" | "playbook" | "weekday" | "hour" | "session" | "duration" | "direction",
+    | "symbol"
+    | "tag"
+    | "mistake"
+    | "playbook"
+    | "weekday"
+    | "hour"
+    | "session"
+    | "duration"
+    | "direction",
     BucketStats[]
   >;
   currencies: string[];
