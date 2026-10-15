@@ -148,9 +148,8 @@ it("renders program rules as compact labelled metrics without raw records", () =
 
 it("keeps financial sync controls in connection settings, without repeating source payments", () => {
   const html = renderToStaticMarkup(createElement(The5ersConnection));
-  expect(html).toContain("Sync expenses");
-  expect(html).toContain("Sync all data");
-  expect(html).toContain("Download connection report");
+  expect(html).toContain("Synchronize The5ers data");
+  expect(html).toContain("Sync now");
   expect(html).not.toContain("Closed funded account");
 });
 

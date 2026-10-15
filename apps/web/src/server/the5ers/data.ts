@@ -8,6 +8,7 @@ import { payoutKey, sourceRecords, recordPayoutReceipt } from "./payouts";
 import {
   sourceCurrency,
   sourceFields,
+  sourceNumber,
   sourceProgram,
   sourcePropStatus,
   sourceInstant,
@@ -1576,9 +1577,22 @@ async function fetchAndSavePayouts(
         matches.length === 1 &&
         typeof breakdown.finalamount === "number"
       ) {
+        const userShare = sourceNumber(breakdown.usershare);
+        const commission = sourceNumber(breakdown.commission ?? breakdown.fee);
+        const grossAmount = sourceNumber(latest.amount);
+        let splitPercent: number | undefined;
+        if (typeof breakdown.profitsplit === "number") {
+          splitPercent = breakdown.profitsplit;
+        } else if (userShare && grossAmount && grossAmount > 0) {
+          splitPercent = Math.round((userShare / grossAmount) * 10000) / 100;
+        }
         Object.assign(matches[0]!, {
           netAmount: breakdown.finalamount,
           completedAt,
+          grossAmount,
+          userShare,
+          fee: commission,
+          splitPercent,
         });
       }
     } catch {

@@ -254,105 +254,148 @@ export function The5ersPayouts({
           {error}
         </p>
       )}
-      {rows.map((row) => (
-        <div key={row.key} className="rounded-md border p-3 space-y-3">
-          <Badge variant="secondary">
-            {row.status === "pending" && !recorded.has(row.key)
-              ? "Confirm settlement"
-              : "Recorded in ledger"}
-          </Badge>
-          <details>
-            <summary className="cursor-pointer text-sm">Payout details</summary>
-            <SourceValue value={row.source} />
-          </details>
-          {row.status === "pending" && !recorded.has(row.key) && selected !== row.key && (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={busy}
-              onClick={() => {
-                setSelected(row.key);
-                setAmount("");
-                setReceivedOn("");
-                setAccountId(accounts.length === 1 ? accounts[0]!.id : "");
-                setError("");
-              }}
-            >
-              Record money received
-            </Button>
-          )}
-          {selected === row.key && (
-            <form
-              className="space-y-3"
-              onSubmit={(e) => {
-                e.preventDefault();
-                void save();
-              }}
-            >
-              <label className="block text-sm">
-                Funded prop account
-                <select
-                  required
-                  aria-label="Funded prop account"
-                  value={accountId}
-                  onChange={(e) => setAccountId(e.target.value)}
-                  className="mt-1 block w-full rounded-md border bg-background p-2"
-                >
-                  <option value="">Choose account</option>
-                  {accounts.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.name} ({a.currency})
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {!accounts.length && (
-                <p className="text-sm">
-                  Add or link a funded The5ers account in{" "}
-                  <Link href="/prop-firms" className="underline">
-                    Prop firms
-                  </Link>{" "}
-                  first.
-                </p>
+      {rows.map((row) => {
+        const s = sourceFields(row.source);
+        return (
+          <div key={row.key} className="rounded-md border p-3 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <Badge variant="secondary">
+                {row.status === "pending" && !recorded.has(row.key)
+                  ? "Confirm settlement"
+                  : "Recorded in ledger"}
+              </Badge>
+              {typeof s.currency === "string" && (
+                <span className="text-xs text-muted-foreground">{s.currency}</span>
               )}
-              <label className="block text-sm">
-                Actual amount received (after split and fees)
-                <Input
-                  required
-                  aria-label="Actual amount received"
-                  inputMode="decimal"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                />
-              </label>
-              <label className="block text-sm">
-                Date received
-                <Input
-                  required
-                  aria-label="Date received"
-                  type="date"
-                  max={ledger.data?.today}
-                  value={receivedOn}
-                  onChange={(e) => setReceivedOn(e.target.value)}
-                />
-              </label>
-              <div className="flex gap-2">
-                <Button type="submit" disabled={busy || !accounts.length}>
-                  {busy ? "Recording…" : "Confirm receipt"}
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={busy}
-                  onClick={() => setSelected(null)}
-                >
-                  Cancel
-                </Button>
+            </div>
+            {s.usershare != null && s.grossamount != null && (
+              <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4 rounded-md border bg-muted/30 p-2.5">
+                <div>
+                  <span className="text-muted-foreground block text-[11px]">Gross profit</span>
+                  <span className="font-semibold">
+                    ${Number(s.grossamount).toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground block text-[11px]">Profit split</span>
+                  <span className="font-semibold">
+                    {String(
+                      s.splitpercent ??
+                        Math.round((Number(s.usershare) / Number(s.grossamount)) * 100),
+                    )}
+                    %
+                  </span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground block text-[11px]">Trader share</span>
+                  <span className="font-semibold">
+                    ${Number(s.usershare).toLocaleString("en-US", { minimumFractionDigits: 2 })}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground block text-[11px]">Net received</span>
+                  <span className="font-semibold">
+                    $
+                    {Number(s.netamount ?? s.finalamount ?? s.amount).toLocaleString("en-US", {
+                      minimumFractionDigits: 2,
+                    })}
+                  </span>
+                </div>
               </div>
-            </form>
-          )}
-        </div>
-      ))}
+            )}
+            <details>
+              <summary className="cursor-pointer text-sm">Payout details</summary>
+              <SourceValue value={row.source} />
+            </details>
+            {row.status === "pending" && !recorded.has(row.key) && selected !== row.key && (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy}
+                onClick={() => {
+                  setSelected(row.key);
+                  setAmount("");
+                  setReceivedOn("");
+                  setAccountId(accounts.length === 1 ? accounts[0]!.id : "");
+                  setError("");
+                }}
+              >
+                Record money received
+              </Button>
+            )}
+            {selected === row.key && (
+              <form
+                className="space-y-3"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void save();
+                }}
+              >
+                <label className="block text-sm">
+                  Funded prop account
+                  <select
+                    required
+                    aria-label="Funded prop account"
+                    value={accountId}
+                    onChange={(e) => setAccountId(e.target.value)}
+                    className="mt-1 block w-full rounded-md border bg-background p-2"
+                  >
+                    <option value="">Choose account</option>
+                    {accounts.map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {a.name} ({a.currency})
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {!accounts.length && (
+                  <p className="text-sm">
+                    Add or link a funded The5ers account in{" "}
+                    <Link href="/prop-firms" className="underline">
+                      Prop firms
+                    </Link>{" "}
+                    first.
+                  </p>
+                )}
+                <label className="block text-sm">
+                  Actual amount received (after split and fees)
+                  <Input
+                    required
+                    aria-label="Actual amount received"
+                    inputMode="decimal"
+                    value={amount}
+                    onChange={(e) => setAmount(e.target.value)}
+                  />
+                </label>
+                <label className="block text-sm">
+                  Date received
+                  <Input
+                    required
+                    aria-label="Date received"
+                    type="date"
+                    max={ledger.data?.today}
+                    value={receivedOn}
+                    onChange={(e) => setReceivedOn(e.target.value)}
+                  />
+                </label>
+                <div className="flex gap-2">
+                  <Button type="submit" disabled={busy || !accounts.length}>
+                    {busy ? "Recording…" : "Confirm receipt"}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={busy}
+                    onClick={() => setSelected(null)}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </form>
+            )}
+          </div>
+        );
+      })}
       {!rows.length && <p className="text-sm">No payouts returned for this account.</p>}
     </div>
   );

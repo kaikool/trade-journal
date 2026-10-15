@@ -294,6 +294,11 @@ function Accounts() {
                       Archived
                     </Badge>
                   ) : null}
+                  {account.the5ersSourceId && (
+                    <Badge variant="secondary" className="text-xs py-0">
+                      Synced
+                    </Badge>
+                  )}
                   {account.the5ersSourceId ? (
                     <Badge variant="outline" className="text-xs py-0">
                       The5ers

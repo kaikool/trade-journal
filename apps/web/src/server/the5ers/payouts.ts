@@ -276,6 +276,22 @@ export async function recordPayoutReceipt(
     .where(eq(propEntries.id, entryId))
     .for("update");
   if (!entry) {
+    const row = sourceFields(source);
+    const splitPercentStr =
+      typeof row.splitpercent === "number"
+        ? String(row.splitpercent)
+        : row.usershare && row.grossamount && Number(row.grossamount) > 0
+          ? String(Math.round((Number(row.usershare) / Number(row.grossamount)) * 10000) / 100)
+          : "100";
+    const feeStr =
+      row.fee != null && Number.isFinite(Number(row.fee)) && Number(row.fee) > 0
+        ? String(row.fee)
+        : "0";
+    const payoutNotes = confirmation
+      ? "Actual money received confirmed by the journal owner."
+      : row.usershare != null
+        ? `The5ers payout: gross ${row.grossamount ?? row.amount} ${account.currency}, trader share ${splitPercentStr}%, net settlement ${fromMinor(amountMinor, account.currency)}.`
+        : `${requestedAt ? "" : "[request-date-unknown] "}The5ers payout: net settlement after profit split and fees, not gross trading profit.`;
     await mutatePropInTransaction(tx, {
       action: "entry.save",
       id: entryId,
@@ -285,12 +301,12 @@ export async function recordPayoutReceipt(
       kind: "payout",
       currency: account.currency,
       amount: String(fromMinor(amountMinor, account.currency)),
-      splitPercent: "100",
-      fee: "0",
+      splitPercent: splitPercentStr,
+      fee: feeStr,
       status: "approved",
       occurredOn,
       reference: entryId,
-      notes: `${requestedAt ? "" : "[request-date-unknown] "}The5ers payout: net settlement after profit split and fees, not gross trading profit.`,
+      notes: payoutNotes,
     });
     [entry] = await tx.select().from(propEntries).where(eq(propEntries.id, entryId));
   }
@@ -323,8 +339,8 @@ export async function recordPayoutReceipt(
     kind: "payout",
     currency: account.currency,
     amount: String(fromMinor(amountMinor, account.currency)),
-    splitPercent: "100",
-    fee: "0",
+    splitPercent: String(entry.splitBps / 100),
+    fee: String(fromMinor(entry.feeMinor, account.currency)),
     status: "completed",
     occurredOn,
     reference: entryId,
