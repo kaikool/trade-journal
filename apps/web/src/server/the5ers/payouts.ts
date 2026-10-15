@@ -246,6 +246,35 @@ export async function recordPayoutReceipt(
         !existingReceipt.voided,
       "This payout receipt changed or was voided locally. Review the existing transaction before recording a correction.",
     );
+    const row = sourceFields(source);
+    if (existingEntry && (row.usershare != null || row.splitpercent != null)) {
+      const splitPercentStr =
+        typeof row.splitpercent === "number"
+          ? String(row.splitpercent)
+          : String(
+              Math.round((Number(row.usershare) / Number(row.grossamount ?? row.amount)) * 10000) /
+                100,
+            );
+      const splitBps = Math.round(Number(splitPercentStr) * 100);
+      const feeMinor = sourceMoney(row.fee, account.currency) ?? 0;
+      const grossAmountMinor = sourceMoney(row.grossamount ?? row.amount, account.currency);
+      if (
+        existingEntry.splitBps !== splitBps ||
+        (grossAmountMinor && existingEntry.amountMinor !== grossAmountMinor)
+      ) {
+        const updatedNotes = `The5ers payout: gross ${row.grossamount ?? row.amount} ${account.currency}, trader share ${splitPercentStr}%, net settlement ${fromMinor(amountMinor, account.currency)}.`;
+        await tx
+          .update(propEntries)
+          .set({
+            amountMinor: grossAmountMinor ?? existingEntry.amountMinor,
+            splitBps,
+            feeMinor,
+            notes: updatedNotes,
+            updatedAt: new Date().toISOString(),
+          })
+          .where(eq(propEntries.id, existingEntry.id));
+      }
+    }
     return "matched" as const;
   }
   // Do not count a manually recorded settlement twice.

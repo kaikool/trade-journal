@@ -978,6 +978,12 @@ export function PropFirmTracker() {
                               <h3 className="break-words font-medium">{payoutTitle(row.entry)}</h3>
                               <p className="text-xs text-muted-foreground">
                                 Requested {requestDate(row.entry) ?? "date unavailable"}
+                                {row.entry.splitBps < 10000
+                                  ? ` · Split ${(row.entry.splitBps / 100).toFixed(0)}%`
+                                  : ""}
+                                {row.entry.splitBps < 10000
+                                  ? ` · Gross ${money(row.entry.amountMinor, row.entry.currency)}`
+                                  : ""}
                                 {row.entry.dueOn ? ` · Expected ${row.entry.dueOn}` : ""}
                               </p>
                             </div>
@@ -1017,6 +1023,14 @@ export function PropFirmTracker() {
                             <div className="mt-3 space-y-3">
                               <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
                                 <div>
+                                  <p className="text-xs text-muted-foreground">Gross profit</p>
+                                  {money(row.entry.amountMinor, row.entry.currency)}
+                                </div>
+                                <div>
+                                  <p className="text-xs text-muted-foreground">Profit split</p>
+                                  {(row.entry.splitBps / 100).toFixed(0)}%
+                                </div>
+                                <div>
                                   <p className="text-xs text-muted-foreground">Expected net</p>
                                   {money(row.expected, row.entry.currency)}
                                 </div>
@@ -1024,15 +1038,10 @@ export function PropFirmTracker() {
                                   <p className="text-xs text-muted-foreground">Actual received</p>
                                   {money(row.actual, row.entry.currency)}
                                 </div>
-                                <div>
-                                  <p className="text-xs text-muted-foreground">Outstanding</p>
-                                  {money(row.remaining, row.entry.currency)}
-                                </div>
-                                <div>
-                                  <p className="text-xs text-muted-foreground">Actual − expected</p>
-                                  {money(row.variance, row.entry.currency)}
-                                </div>
                               </div>
+                              {row.entry.notes && (
+                                <p className="text-xs text-muted-foreground">{row.entry.notes}</p>
+                              )}
                               <div className="flex flex-wrap gap-2">
                                 <Button
                                   size="sm"
