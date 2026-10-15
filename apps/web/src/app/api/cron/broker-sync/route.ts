@@ -3,7 +3,7 @@ import { and, asc, eq, inArray, isNull } from "drizzle-orm";
 import { accounts, db } from "@/db";
 import { syncAccount } from "@/server/sync";
 import { passwordConfigured } from "@/server/auth";
-import { syncScheduledThe5ers } from "@/server/the5ers/data";
+import { ensureAllInventoryAccountsSaved, syncScheduledThe5ers } from "@/server/the5ers/data";
 import { ENABLED_SYNC_BROKER_IDS } from "@/lib/supported-brokers";
 
 export const maxDuration = 300;
@@ -52,6 +52,14 @@ export async function GET(request: Request): Promise<Response> {
         errorName: error instanceof Error ? error.name : "UnknownError",
       });
     }
+  }
+
+  try {
+    await ensureAllInventoryAccountsSaved(
+      AbortSignal.timeout(Math.max(1000, deadline - Date.now())),
+    );
+  } catch (err) {
+    console.error("[cron] The5ers ensure inventory failed", err);
   }
 
   const the5ers = await syncScheduledThe5ers(deadline);

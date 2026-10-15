@@ -31,6 +31,7 @@ import { ThemeToggle } from "./theme";
 import { PageTransition } from "./page-transition";
 import { Button } from "./ui/button";
 import { HoverHint } from "./ui/tooltip";
+import { BackgroundSyncProvider, GlobalSyncButton } from "./background-sync";
 
 const NAV = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -178,99 +179,107 @@ export function Shell({ children }: { children: React.ReactNode }) {
     </nav>
   );
   return (
-    <div className="journal-shell min-h-dvh lg:flex">
-      <header className="journal-mobile-header sticky top-0 z-30 flex h-14 items-center gap-2 border-b bg-background/95 px-3 backdrop-blur lg:hidden">
-        <DialogPrimitive.Root open={menuOpen} onOpenChange={setMenuOpen}>
-          <DialogPrimitive.Trigger asChild>
-            <Button
-              variant="ghost"
-              size="icon"
-              disableTooltip
-              className="h-9 w-9 shrink-0"
-              aria-label="Open navigation"
-            >
-              <Menu />
-            </Button>
-          </DialogPrimitive.Trigger>
-          <DialogPrimitive.Portal>
-            <DialogPrimitive.Overlay className="journal-nav-overlay fixed inset-0 z-40 bg-black/55 backdrop-blur-sm" />
-            <DialogPrimitive.Content
-              className="journal-nav-drawer fixed inset-y-0 left-0 z-50 flex w-[min(288px,calc(100vw-40px))] flex-col border-r bg-card shadow-2xl"
-              aria-describedby={undefined}
-            >
-              <div className="flex h-14 shrink-0 items-center gap-2.5 border-b px-4">
-                <TradeJournalMark className="h-5 w-5" />
-                <DialogPrimitive.Title className="text-sm font-semibold">
-                  Trade Journal
-                </DialogPrimitive.Title>
-                <DialogPrimitive.Close asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    disableTooltip
-                    className="ml-auto h-8 w-8"
-                    aria-label="Close navigation"
-                  >
-                    <X />
-                  </Button>
-                </DialogPrimitive.Close>
-              </div>
-              {navigation()}
-              <div className="border-t p-3">
-                <PrivacyToggle />
-              </div>
-            </DialogPrimitive.Content>
-          </DialogPrimitive.Portal>
-        </DialogPrimitive.Root>
-        <Link
-          href="/"
-          className="mr-auto flex min-w-0 items-center gap-2 text-sm font-semibold tracking-tight"
-        >
-          <TradeJournalMark className="hidden h-5 w-5 shrink-0 min-[380px]:block" />
-          <span className="truncate">Trade Journal</span>
-        </Link>
-        <PrivacyToggle compact />
-        <ThemeToggle iconOnly />
-      </header>
-      <aside
-        className="journal-desktop-sidebar sticky top-0 hidden h-dvh shrink-0 flex-col border-r bg-card/50 lg:flex"
-        data-collapsed={sidebarCollapsed}
-        data-ready={sidebarReady}
-      >
-        <div className="journal-sidebar-header relative flex h-14 shrink-0 items-center border-b">
-          <Link href="/" className="journal-sidebar-home flex h-full min-w-0 items-center gap-2.5">
-            <TradeJournalMark className="h-5 w-5 shrink-0" />
-            <span className="journal-sidebar-brand-label text-sm font-semibold tracking-tight">
-              Trade Journal
-            </span>
-          </Link>
-          <Button
-            type="button"
-            variant="outline"
-            size="icon"
-            className="journal-sidebar-trigger absolute h-7 w-7 rounded-full bg-background shadow-sm"
-            onClick={toggleSidebar}
-            aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-            aria-expanded={!sidebarCollapsed}
-            aria-keyshortcuts="Meta+B Control+B"
-            title={`${sidebarCollapsed ? "Expand" : "Collapse"} sidebar (⌘B)`}
+    <BackgroundSyncProvider>
+      <div className="journal-shell min-h-dvh lg:flex">
+        <header className="journal-mobile-header sticky top-0 z-30 flex h-14 items-center gap-2 border-b bg-background/95 px-3 backdrop-blur lg:hidden">
+          <DialogPrimitive.Root open={menuOpen} onOpenChange={setMenuOpen}>
+            <DialogPrimitive.Trigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                disableTooltip
+                className="h-9 w-9 shrink-0"
+                aria-label="Open navigation"
+              >
+                <Menu />
+              </Button>
+            </DialogPrimitive.Trigger>
+            <DialogPrimitive.Portal>
+              <DialogPrimitive.Overlay className="journal-nav-overlay fixed inset-0 z-40 bg-black/55 backdrop-blur-sm" />
+              <DialogPrimitive.Content
+                className="journal-nav-drawer fixed inset-y-0 left-0 z-50 flex w-[min(288px,calc(100vw-40px))] flex-col border-r bg-card shadow-2xl"
+                aria-describedby={undefined}
+              >
+                <div className="flex h-14 shrink-0 items-center gap-2.5 border-b px-4">
+                  <TradeJournalMark className="h-5 w-5" />
+                  <DialogPrimitive.Title className="text-sm font-semibold">
+                    Trade Journal
+                  </DialogPrimitive.Title>
+                  <DialogPrimitive.Close asChild>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      disableTooltip
+                      className="ml-auto h-8 w-8"
+                      aria-label="Close navigation"
+                    >
+                      <X />
+                    </Button>
+                  </DialogPrimitive.Close>
+                </div>
+                {navigation()}
+                <div className="border-t p-3 space-y-1">
+                  <GlobalSyncButton className="w-full justify-start" />
+                  <PrivacyToggle />
+                </div>
+              </DialogPrimitive.Content>
+            </DialogPrimitive.Portal>
+          </DialogPrimitive.Root>
+          <Link
+            href="/"
+            className="mr-auto flex min-w-0 items-center gap-2 text-sm font-semibold tracking-tight"
           >
-            {sidebarCollapsed ? (
-              <PanelLeftOpen className="h-3.5 w-3.5" />
-            ) : (
-              <PanelLeftClose className="h-3.5 w-3.5" />
-            )}
-          </Button>
-        </div>
-        {navigation(sidebarCollapsed)}
-        <div className="journal-sidebar-privacy border-t p-3">
-          <div className="w-full space-y-1">
-            <ThemeToggle iconOnly={sidebarCollapsed} />
-            <PrivacyToggle iconOnly={sidebarCollapsed} />
+            <TradeJournalMark className="hidden h-5 w-5 shrink-0 min-[380px]:block" />
+            <span className="truncate">Trade Journal</span>
+          </Link>
+          <GlobalSyncButton iconOnly />
+          <PrivacyToggle compact />
+          <ThemeToggle iconOnly />
+        </header>
+        <aside
+          className="journal-desktop-sidebar sticky top-0 hidden h-dvh shrink-0 flex-col border-r bg-card/50 lg:flex"
+          data-collapsed={sidebarCollapsed}
+          data-ready={sidebarReady}
+        >
+          <div className="journal-sidebar-header relative flex h-14 shrink-0 items-center border-b">
+            <Link
+              href="/"
+              className="journal-sidebar-home flex h-full min-w-0 items-center gap-2.5"
+            >
+              <TradeJournalMark className="h-5 w-5 shrink-0" />
+              <span className="journal-sidebar-brand-label text-sm font-semibold tracking-tight">
+                Trade Journal
+              </span>
+            </Link>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              className="journal-sidebar-trigger absolute h-7 w-7 rounded-full bg-background shadow-sm"
+              onClick={toggleSidebar}
+              aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              aria-expanded={!sidebarCollapsed}
+              aria-keyshortcuts="Meta+B Control+B"
+              title={`${sidebarCollapsed ? "Expand" : "Collapse"} sidebar (⌘B)`}
+            >
+              {sidebarCollapsed ? (
+                <PanelLeftOpen className="h-3.5 w-3.5" />
+              ) : (
+                <PanelLeftClose className="h-3.5 w-3.5" />
+              )}
+            </Button>
           </div>
-        </div>
-      </aside>
-      <PageTransition>{children}</PageTransition>
-    </div>
+          {navigation(sidebarCollapsed)}
+          <div className="journal-sidebar-privacy border-t p-3">
+            <div className="w-full space-y-1">
+              <GlobalSyncButton iconOnly={sidebarCollapsed} className="w-full justify-start" />
+              <ThemeToggle iconOnly={sidebarCollapsed} />
+              <PrivacyToggle iconOnly={sidebarCollapsed} />
+            </div>
+          </div>
+        </aside>
+        <PageTransition>{children}</PageTransition>
+      </div>
+    </BackgroundSyncProvider>
   );
 }
