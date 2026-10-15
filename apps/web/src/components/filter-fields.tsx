@@ -1,4 +1,5 @@
 "use client";
+import { useState } from "react";
 import { OptionSelect } from "@/components/ui/option-select";
 import { Checkbox } from "@/components/ui/checkbox";
 
@@ -53,9 +54,16 @@ export function FilterFields({
   value: AnalysisFilters;
   onChange: (v: AnalysisFilters) => void;
 }) {
+  const [showHiddenAccounts, setShowHiddenAccounts] = useState(false);
   const { data: accounts } = useApi<{
-    accounts: { id: string; name: string; archivedAt: string | null }[];
-  }>("/api/accounts");
+    accounts: {
+      id: string;
+      name: string;
+      archivedAt: string | null;
+      visibleInJournal?: boolean;
+      isActive?: boolean;
+    }[];
+  }>("/api/accounts?summary=1");
   const { data: playbooks } = useApi<{ playbooks: { id: string; name: string }[] }>(
     "/api/playbooks",
   );
@@ -136,26 +144,53 @@ export function FilterFields({
         )}
       </div>
       <fieldset className="journal-filter-accounts rounded-lg border p-3">
-        <legend className="px-1 text-xs text-muted-foreground">
-          Accounts · none selected means all
-        </legend>
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <legend className="px-1 text-xs text-muted-foreground">
+            Accounts · none selected means all active/displayed
+          </legend>
+          {accounts?.accounts &&
+            (() => {
+              const selectedIds = new Set((value.accounts ?? "").split(",").filter(Boolean));
+              const unarchived = accounts.accounts.filter((a) => !a.archivedAt);
+              const hiddenCount = unarchived.filter(
+                (a) => !selectedIds.has(a.id) && !a.isActive && !a.visibleInJournal,
+              ).length;
+              if (hiddenCount === 0) return null;
+              return (
+                <button
+                  type="button"
+                  onClick={() => setShowHiddenAccounts(!showHiddenAccounts)}
+                  className="text-xs text-primary hover:underline cursor-pointer"
+                >
+                  {showHiddenAccounts ? "Hide inactive" : `Show ${hiddenCount} hidden`}
+                </button>
+              );
+            })()}
+        </div>
         <div className="flex flex-wrap gap-3">
-          {accounts?.accounts
-            .filter((a) => !a.archivedAt)
-            .map((a) => (
-              <label key={a.id} className="journal-filter-choice flex items-center gap-2 text-xs">
-                <Checkbox
-                  checked={(value.accounts ?? "").split(",").includes(a.id)}
-                  onCheckedChange={(checked) => {
-                    const ids = new Set((value.accounts ?? "").split(",").filter(Boolean));
-                    if (checked === true) ids.add(a.id);
-                    else ids.delete(a.id);
-                    set("accounts", [...ids].join(","));
-                  }}
-                />
-                {a.name}
-              </label>
-            ))}
+          {(() => {
+            const selectedIds = new Set((value.accounts ?? "").split(",").filter(Boolean));
+            return (accounts?.accounts ?? [])
+              .filter((a) => !a.archivedAt)
+              .filter(
+                (a) =>
+                  showHiddenAccounts || selectedIds.has(a.id) || a.isActive || a.visibleInJournal,
+              )
+              .map((a) => (
+                <label key={a.id} className="journal-filter-choice flex items-center gap-2 text-xs">
+                  <Checkbox
+                    checked={selectedIds.has(a.id)}
+                    onCheckedChange={(checked) => {
+                      const ids = new Set((value.accounts ?? "").split(",").filter(Boolean));
+                      if (checked === true) ids.add(a.id);
+                      else ids.delete(a.id);
+                      set("accounts", [...ids].join(","));
+                    }}
+                  />
+                  {a.name}
+                </label>
+              ));
+          })()}
         </div>
       </fieldset>
       <details className="journal-filter-advanced">

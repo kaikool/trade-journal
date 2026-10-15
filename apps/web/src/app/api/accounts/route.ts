@@ -63,21 +63,41 @@ export const GET = handler(async (request: Request) => {
     visibleSet = new Set(rows.filter((a) => !a.archivedAt).map((a) => a.id));
   }
 
-  if (new URL(request.url).searchParams.get("summary") === "1") {
-    return ok({
-      accounts: rows.map((a) => ({
-        id: a.id,
-        name: a.name,
-        broker: a.broker,
-        currency: a.currency,
-        archivedAt: a.archivedAt,
-        visibleInJournal: visibleSet.has(a.id),
-      })),
-    });
+  const url = new URL(request.url);
+  const isSummary = url.searchParams.get("summary") === "1";
+  const defaultOnly = url.searchParams.get("defaultOnly") === "1";
+  const visibleOnly = url.searchParams.get("visibleOnly") === "1";
+  const activeOnly = url.searchParams.get("activeOnly") === "1";
+
+  if (isSummary) {
+    const summaryAccounts = rows
+      .map((a) => {
+        const prop = propByJournalId.get(a.id) ?? propById.get(a.id);
+        const isPropActive = prop
+          ? ["active", "funded", "open"].includes(prop.status.toLowerCase())
+          : !a.archivedAt;
+        return {
+          id: a.id,
+          name: a.name,
+          broker: a.broker,
+          currency: a.currency,
+          archivedAt: a.archivedAt,
+          visibleInJournal: visibleSet.has(a.id),
+          isActive: isPropActive,
+        };
+      })
+      .filter((a) => {
+        if (visibleOnly && !a.visibleInJournal) return false;
+        if (activeOnly && !a.isActive) return false;
+        if (defaultOnly && !a.isActive && !a.visibleInJournal) return false;
+        return true;
+      });
+
+    return ok({ accounts: summaryAccounts });
   }
 
-  return ok({
-    accounts: rows.map(({ credentialsEnc, ...safe }) => {
+  const mappedAccounts = rows
+    .map(({ credentialsEnc, ...safe }) => {
       const prop = propByJournalId.get(safe.id) ?? propById.get(safe.id);
       const isPropActive = prop
         ? ["active", "funded", "open"].includes(prop.status.toLowerCase())
@@ -95,8 +115,15 @@ export const GET = handler(async (request: Request) => {
         connected: credentialsEnc !== null,
         snapshot: safe.snapshotJson ? JSON.parse(safe.snapshotJson) : null,
       };
-    }),
-  });
+    })
+    .filter((a) => {
+      if (visibleOnly && !a.visibleInJournal) return false;
+      if (activeOnly && !a.isActive) return false;
+      if (defaultOnly && !a.isActive && !a.visibleInJournal) return false;
+      return true;
+    });
+
+  return ok({ accounts: mappedAccounts });
 });
 
 export const PUT = handler(async (request: Request) => {

@@ -19,7 +19,7 @@ import { asc } from "drizzle-orm";
 import { accounts, db, playbooks } from "@/db";
 import { calendarRunningPnl } from "@/lib/calendar-insights";
 import { handler, ok } from "@/server/api";
-import { getTimeZone, getCurrencyConversion } from "@/server/settings";
+import { getTimeZone, getCurrencyConversion, getSetting } from "@/server/settings";
 import { currencyProjection } from "@/server/currency-conversion";
 import { queryTrades, type TradeFilters } from "@/server/trades-query";
 
@@ -33,12 +33,14 @@ export const GET = handler(async (request: Request) => {
     accountRows,
     conversion,
     playbookRows,
+    visibleSetting,
   ] = await Promise.all([
     getTimeZone(),
     queryTrades(filters),
     db.select().from(accounts).orderBy(asc(accounts.createdAt)),
     getCurrencyConversion(),
     db.select({ id: playbooks.id, name: playbooks.name }).from(playbooks),
+    getSetting("journal:visible-accounts"),
   ]);
   const selected = filters.accounts
     ? accountRows.filter((a) =>
@@ -47,7 +49,18 @@ export const GET = handler(async (request: Request) => {
           .map((id) => id.trim())
           .includes(a.id),
       )
-    : accountRows;
+    : (() => {
+        if (visibleSetting) {
+          try {
+            const parsed = JSON.parse(visibleSetting);
+            if (Array.isArray(parsed)) {
+              const set = new Set(parsed);
+              return accountRows.filter((a) => set.has(a.id));
+            }
+          } catch {}
+        }
+        return accountRows.filter((a) => !a.archivedAt);
+      })();
   const {
     trades,
     initialBalance,

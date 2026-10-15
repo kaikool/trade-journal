@@ -75,17 +75,32 @@ function Accounts() {
   const [creating, setCreating] = useState(false);
   const [updatingBulk, setUpdatingBulk] = useState(false);
   const [search, setSearch] = useState("");
-  const [filterTab, setFilterTab] = useState<"all" | "visible" | "active">("all");
+  const [filterTab, setFilterTab] = useState<"default" | "active" | "visible" | "all">("default");
 
   const accounts = data?.accounts ?? [];
 
-  const visibleCount = useMemo(() => accounts.filter((a) => a.visibleInJournal).length, [accounts]);
-  const activeCount = useMemo(() => accounts.filter((a) => a.isActive).length, [accounts]);
+  const isAccountActive = (a: AccountRow) =>
+    a.isActive !== undefined ? a.isActive : !a.archivedAt;
+  const isAccountVisible = (a: AccountRow) =>
+    a.visibleInJournal !== undefined ? a.visibleInJournal : !a.archivedAt;
+
+  const defaultCount = useMemo(
+    () => accounts.filter((a) => isAccountActive(a) || isAccountVisible(a)).length,
+    [accounts],
+  );
+  const visibleCount = useMemo(
+    () => accounts.filter((a) => isAccountVisible(a)).length,
+    [accounts],
+  );
+  const activeCount = useMemo(() => accounts.filter((a) => isAccountActive(a)).length, [accounts]);
+  const hiddenCount = accounts.length - defaultCount;
 
   const filteredAccounts = useMemo(() => {
     return accounts.filter((account) => {
-      if (filterTab === "visible" && !account.visibleInJournal) return false;
-      if (filterTab === "active" && !account.isActive) return false;
+      if (filterTab === "default" && !isAccountActive(account) && !isAccountVisible(account))
+        return false;
+      if (filterTab === "visible" && !isAccountVisible(account)) return false;
+      if (filterTab === "active" && !isAccountActive(account)) return false;
       if (search.trim()) {
         const query = search.toLowerCase();
         return (
@@ -210,14 +225,22 @@ function Accounts() {
         </div>
 
         <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between pt-2 border-t border-border/50">
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1.5 flex-wrap">
             <Button
               size="sm"
-              variant={filterTab === "all" ? "secondary" : "ghost"}
+              variant={filterTab === "default" ? "secondary" : "ghost"}
               className="h-7 text-xs"
-              onClick={() => setFilterTab("all")}
+              onClick={() => setFilterTab("default")}
             >
-              All ({accounts.length})
+              Default ({defaultCount})
+            </Button>
+            <Button
+              size="sm"
+              variant={filterTab === "active" ? "secondary" : "ghost"}
+              className="h-7 text-xs"
+              onClick={() => setFilterTab("active")}
+            >
+              Active ({activeCount})
             </Button>
             <Button
               size="sm"
@@ -229,11 +252,11 @@ function Accounts() {
             </Button>
             <Button
               size="sm"
-              variant={filterTab === "active" ? "secondary" : "ghost"}
+              variant={filterTab === "all" ? "secondary" : "ghost"}
               className="h-7 text-xs"
-              onClick={() => setFilterTab("active")}
+              onClick={() => setFilterTab("all")}
             >
-              Active ({activeCount})
+              All ({accounts.length})
             </Button>
           </div>
           <div className="relative w-full sm:w-64">
@@ -247,6 +270,22 @@ function Accounts() {
             />
           </div>
         </div>
+        {filterTab === "default" && hiddenCount > 0 && (
+          <div className="mt-2.5 flex items-center justify-between rounded-md bg-muted/60 px-3 py-1.5 text-xs text-muted-foreground border border-border/50">
+            <span>
+              Hiding {hiddenCount} inactive unselected account{hiddenCount > 1 ? "s" : ""} by
+              default.
+            </span>
+            <Button
+              variant="link"
+              size="sm"
+              className="h-auto p-0 text-xs text-primary"
+              onClick={() => setFilterTab("all")}
+            >
+              View all ({accounts.length})
+            </Button>
+          </div>
+        )}
       </div>
 
       <div className="grid gap-3 p-4 md:grid-cols-2">

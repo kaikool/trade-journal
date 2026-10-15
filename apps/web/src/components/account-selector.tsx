@@ -11,6 +11,8 @@ interface AccountOption {
   name: string;
   broker: string;
   archivedAt: string | null;
+  visibleInJournal?: boolean;
+  isActive?: boolean;
 }
 
 /** Quick account switching; the full Filters panel still supports multiple accounts. */
@@ -22,7 +24,13 @@ export function AccountSelector() {
   const [loadingDemo, setLoadingDemo] = useState(false);
   const [demoError, setDemoError] = useState("");
   const selected = params.get("accounts")?.split(",").filter(Boolean) ?? [];
-  const accounts = data?.accounts.filter((a) => !a.archivedAt || selected.includes(a.id)) ?? [];
+  const accounts =
+    data?.accounts.filter(
+      (a) =>
+        a.broker === "demo" ||
+        selected.includes(a.id) ||
+        (!a.archivedAt && (a.visibleInJournal ?? true)),
+    ) ?? [];
   const demo = accounts.find((a) => a.broker === "demo");
   const value = selected.length > 1 ? "multiple" : (selected[0] ?? "all");
   const label =

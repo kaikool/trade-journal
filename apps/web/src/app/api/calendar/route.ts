@@ -1,7 +1,7 @@
 import { calendarMonthFromDays, dailyStats, dayKeyOf, readFilters } from "@luxalgo/journal-core";
 import { accounts, db } from "@/db";
 import { handler, ok, requireValue } from "@/server/api";
-import { getTimeZone, getCurrencyConversion } from "@/server/settings";
+import { getTimeZone, getCurrencyConversion, getSetting } from "@/server/settings";
 import { currencyProjection } from "@/server/currency-conversion";
 import { queryTrades } from "@/server/trades-query";
 import { calendarInsights, calendarRunningPnl, calendarScope } from "@/lib/calendar-insights";
@@ -23,15 +23,23 @@ export const GET = handler(async (request: Request) => {
     "Choose a valid calendar month.",
   );
   const scope = calendarScope(readFilters(params), year, month);
-  const [{ trades: originalTrades }, allAccounts, conversion] = await Promise.all([
+  const [{ trades: originalTrades }, allAccounts, conversion, visibleSetting] = await Promise.all([
     queryTrades(scope),
     db.select().from(accounts),
     getCurrencyConversion(),
+    getSetting("journal:visible-accounts"),
   ]);
   const selectedIds = scope.accounts?.split(",").map((id) => id.trim());
-  const accountRows = allAccounts.filter(
-    (account) => !selectedIds || selectedIds.includes(account.id),
-  );
+  const accountRows = allAccounts.filter((account) => {
+    if (selectedIds) return selectedIds.includes(account.id);
+    if (visibleSetting) {
+      try {
+        const parsed = JSON.parse(visibleSetting);
+        if (Array.isArray(parsed)) return parsed.includes(account.id);
+      } catch {}
+    }
+    return !account.archivedAt;
+  });
   const { trades, scope: currencyScope } = currencyProjection(
     originalTrades,
     accountRows,
